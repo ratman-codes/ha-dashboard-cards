@@ -26,9 +26,15 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   config — the source is location-clean by design. Used as
   `type: custom:flat-weather-card` (see notes for the YAML shape).
   HA resource id: `9bb445a4ae6a4bdb984fa563e4897e2d`.
+- `flat-sensor-stack-card.js` — v1.2. Collapsible stack of compact 24h sensor
+  history graphs (desk temperature / CO2 / humidity): hover-scrub with a floating
+  value+time pill, label-pill expand toggle, per-row more-info, CO2 threshold
+  colors, history over the websocket recorder API. Used as
+  `type: custom:flat-sensor-stack-card` (all config is baked-in defaults).
+  HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
-  entity inventory, and final specs for all three cards.
+  entity inventory, and final specs for all four cards.
 - `notes/flat-treadmill-card-notes.md` — deep notes for the treadmill card: tap map,
   HA helper/meter inventory with entry IDs, net-calorie math with regression anchors,
   Egofit/FTMS device quirk census, version history.
