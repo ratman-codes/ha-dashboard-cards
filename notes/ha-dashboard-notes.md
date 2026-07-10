@@ -1,77 +1,78 @@
-# Home Assistant Dashboard Notes
+# Home Assistant Dashboard Notes (sanitized public copy)
 
-## Standing rule (user-set, 2026-07-09)
-**Do NOT make changes to Home Assistant (dashboards, config, DB, anything) unless the user explicitly asks.** Read-only inspection is fine. Always propose YAML first; user usually pastes it themselves. HACS installs / resource writes OK only with explicit go-ahead.
+> This is the sanitized archive copy for the backup repo. Real operational values
+> (dashboard url_path, HA LAN address, PWS station id, location-bearing entity ids,
+> tap-through URLs) live in the private project notes and in the dashboard YAML
+> inside HA itself. Placeholders below mark where they go.
 
-## Custom-card build checklist (READ THIS before building any bespoke card for this user)
-Distilled from ~25 iterations on flat-thermostat-card. A new card should satisfy ALL of these before handoff:
+## Standing rule (owner-set, 2026-07-09)
+**Do NOT make changes to Home Assistant (dashboards, config, DB, anything) unless the owner explicitly asks.** Read-only inspection is fine. Always propose YAML first; owner usually pastes it themselves. HACS installs / resource writes OK only with explicit go-ahead.
 
-1. **Hosting:** zero external dependencies. Ship as a data-URL module in the dashboard resource registry via `ha_config_set_dashboard_resource` (one resource per card; save the resource_id in these notes). **Label the URL with a name parameter so the Resources page is readable: `data:text/javascript;name=<card-name>;base64,...`** (RFC 2397 media-type param; verified Chrome imports it fine). NEVER the ha-mcp `content=` mode (Cloudflare relay) or any CDN. `node --check` before encoding.
-2. **Self-documenting header:** the JS must open with a comment block: card name/version, what it is, and HOW-TO (this is base64 in a data: URL; decode to read; edit → re-encode → replace resource URL in Settings > Dashboards > Resources; stored in .storage/lovelace_resources, included in HA backups; the card YAML that uses it).
-3. **ASCII-safe source:** no literal `°` or other non-ASCII in strings — `&deg;` in innerHTML, `°` escapes in JS. (Comments with non-ASCII are fine; strings are not.)
-4. **Hardcode accent hexes** — user's theme primary is GREEN and leaks through theme vars. Measured HA state colors: heat #ff6f22, cool #2196f3, heat_cool #ffc107, off #9e9e9e.
-5. **Match native visual language** (measure, don't guess — walk shadowRoots with getBoundingClientRect/computed styles on the live dashboard (HA LAN address withheld from this archive - see project notes) via Claude-in-Chrome): track rgba(70,70,70,.3); faded fill = accent opacity .5; active/bright = accent opacity 1 with round caps that extend ±8px past endpoints (and render even at zero length as a cap around the handle); white handle ~0.7× track height, no shadow; mode/button strip 42px, 20px icons.
-6. **ha-icon centering:** ha-icon needs `display:flex; align-items:center; justify-content:center; line-height:0` or the svg sags ~1.3px.
-7. **Animations:** transitions die if you flip `display:none→block` every render — show elements idempotently (only touch style.display when it actually changes) and hide unused ones at the end. Add the transition-suppressing `dragging` class on pointermove, never pointerdown, so taps still animate. .35s cubic-bezier(.4,0,.2,1) matches native.
-8. **Optimistic UI:** hold user-set values ~8s past commit (`_optUntil`) so stale hass pushes don't snap controls back.
-9. **No redundant text:** state/status shown once (status text under the big number), not repeated on the track.
-10. **more-info access:** big-number/status block fires `hass-more-info` CustomEvent (bubbles+composed) and shows cursor:pointer.
-11. **Availability honesty:** key card availability off the entity that reflects real device state (the treadmill uses its status sensor, NOT the number entity, which sits 'unknown' after integration reloads). Never coerce unavailable values to 0 in displays — show '--'. Check what happens to helper/meter entities during device dropouts (utility meters needed `always_available: true`).
-12. **Verify in the user's browser before claiming done** — reload the dashboard, assert computed styles/geometry via injected JS, and revert any test styles. The user WILL check pixel-level claims.
-13. **Archive:** after user sign-off, write the source to a project doc (like `claude/flat-thermostat-card.js`) and record resource_id + update procedure here.
+## Standing rule (owner-set, 2026-07-10): no personal details in implementations or documentation
+Do not embed personal details (address, street/area names, real names beyond the "Ratman" handle, LAN IPs, dashboard url_paths, PWS station ids, coordinate-bearing entity ids, or anything that identifies the home/identity) in code, headers, entity naming, docs, or archives unless genuinely necessary — and when necessary, flag it explicitly at the time. Prefer generic wording and pointers in anything that could leave the private project.
+
+## Standing rule (owner-set, 2026-07-10): track everything built, delete nothing without express permission
+Every helper/automation/entity built must be inventoried (label in HA + manifest doc) so teardown is exact. Nothing gets deleted without explicit sign-off.
+
+## Standing rule (owner-set, 2026-07-10): always offer a sanitized copy for the repo
+Whenever archiving to the GitHub backup repo, a freshly sanitized version of any notes/docs must be offered alongside the code — never let the repo copy silently go stale or, worse, receive an unsanitized paste.
+
+## Custom-card build checklist (READ THIS before building any bespoke card)
+1. **Hosting:** zero external dependencies. Ship as a data-URL module in the dashboard resource registry (`data:text/javascript;name=<card-name>;base64,...`). NEVER relay/CDN hosting. `node --check` before encoding.
+2. **Self-documenting header:** card name/version, what it is, and maintenance HOW-TO (decode, edit, re-encode, replace resource URL; stored in .storage/lovelace_resources; in HA backups automatically).
+3. **ASCII-safe source:** no literal degree sign or other non-ASCII in strings — `&deg;` in innerHTML, unicode escapes in JS strings.
+4. **Hardcode accent hexes** — the theme primary is GREEN and leaks through theme vars. Measured HA state colors: heat #ff6f22, cool #2196f3, heat_cool #ffc107, off #9e9e9e.
+5. **Match native visual language** (measure computed styles on the live dashboard, don't guess): track rgba(70,70,70,.3); faded fill = accent opacity .5; bright = accent opacity 1 with round caps extending ±8px; white handle ~0.7× track height; mode strip 42px, 20px icons.
+6. **ha-icon centering:** needs `display:flex; align-items:center; justify-content:center; line-height:0` or the svg sags ~1.3px.
+7. **Animations:** show elements idempotently (never flip display:none→block every render); transition-suppressing class on pointermove, not pointerdown. .35s cubic-bezier(.4,0,.2,1) matches native.
+8. **Optimistic UI:** hold user-set values ~8s past commit so stale hass pushes don't snap controls back.
+9. **No redundant text:** state shown once.
+10. **more-info access:** big-number/status block fires `hass-more-info` (bubbles+composed), cursor:pointer.
+11. **Availability honesty:** key availability off the entity reflecting real device state; show '--', never coerce unavailable to 0; check helper/meter behavior during dropouts (`always_available: true` where needed).
+12. **Verify in the owner's browser before claiming done** — including PERSISTENCE: a dashboard save can be silently clobbered by a stale edit session open in another tab/app (observed 2026-07-10). Re-read the server config after a couple of minutes.
+13. **Archive after sign-off:** source to the private project doc, resource_id + update procedure recorded, deployed blob verified byte-identical (crypto.subtle is unavailable on the http:// LAN origin — use Math.imul-based FNV-1a).
 
 ## Environment
-- Main dashboard: storage mode (url_path withheld from this archive). HA core-2026.7.1, HAOS **in a KVM VM on the user's unraid server**, at its LAN address (withheld from this archive - see project notes).
-- **User strongly prefers zero external dependencies** — no CDN/relay-hosted resources. Self-contained data: URLs or local files only. User also rejected /config/www file hosting (doesn't want manual file management) — data: URLs with name= labels + self-documenting headers are the chosen pattern. HACS-repo hosting considered 2026-07-10 and deliberately declined (slower iteration loop; cards are single-user); a GitHub repo exists as a pure backup archive only.
-- HACS lovelace cards: Mushroom, expander-card, card-mod, auto-entities, Timer Bar Card, Firemote, Grid Remote, simple-thermostat v4.0.27 (Wheemer fork; now unused after custom card replaced it).
-- User's theme has a green primary color — never rely on theme vars for accent colors; hardcode hexes.
+- Main dashboard: storage mode, url_path in private notes. HA core-2026.7.1, HAOS in a KVM VM on the owner's unraid server, reachable on the LAN (address in private notes).
+- **Owner strongly prefers zero external dependencies** — data: URL resources only; /config/www rejected (no manual file management); HACS-repo hosting considered and declined (cards are single-user). This GitHub repo is a pure backup archive, NOT the deployment.
+- HACS lovelace cards: Mushroom, expander-card, card-mod, auto-entities, Timer Bar Card, Firemote, Grid Remote, simple-thermostat (unused since the custom card).
+- HACS integrations: weather.com (jaydeethree/Home-Assistant-weatherdotcom) — hourly forecast source, same IBM/TWC engine as Weather Underground; API key is the public web key per its README.
+- Theme has a green primary — never rely on theme vars for accents.
 
 ## Debug lessons
-- Don't iterate CSS blind: HA reachable via Claude-in-Chrome at its LAN address (withheld from this archive - see project notes) — inject test styles into shadowRoots, measure getBoundingClientRect live. Measure the native component's SVG/computed styles instead of guessing colors.
-- svg inside `ha-icon` is inline-laid-out and sags ~1.3px from line-height; fix = ha-icon display:flex + line-height:0.
-- Literal `°`/non-ASCII in resource JS can mojibake (`Â°`) depending on serving charset — use `&deg;` in innerHTML and `°` escapes in JS strings.
-- Native tile/thermostat feature metrics: 42px strip, 20px icons, active heat_cool = mustard #ffc107; native cool fill anchors from setpoint to MAX (right), heat from MIN to setpoint (left).
-- **Native dial measured values (ha-control-circular-slider, HA 2026.7):** track = stroke rgb(70,70,70) opacity .3; faded/colored arc = accent at opacity .5; bright/active arc = accent opacity 1, stroke-linecap round, rendered even at zero length (→ always a bright cap around the handle); heat accent = `--state-climate-heat-color` = **#ff6f22** (deep-orange), cool #2196f3, heat_cool amber #ffc107; current-temp dot = rgb(225,225,225) opacity .5 (grey), darkened when on the bright fill.
-- `display:none→block` resets CSS transitions — show elements idempotently; only add a transition-suppressing class on real pointermove, not pointerdown.
-- Native sensor-card anatomy: header icon at `.header .icon` (hidden via card_mod on "Desk Temp — 24h"); at compact heights the graph `.footer` is absolutely positioned over the WHOLE card and paints ON TOP of the text (it follows in the DOM). Fix = `position: relative; z-index: 1` on `.header, .info` so text paints above the line.
-- **Text stroke over busy backgrounds:** `-webkit-text-stroke: 4px <bg-color>` + `paint-order: stroke fill` gives a clean OUTER stroke (stroke renders behind the fill, letterforms untouched) — works on HTML text in Chromium and beats the 8-direction hard text-shadow hack (lumpy) and blurred halos (foggy). Applied to Desk Temp value/title.
-- data: URLs accept extra media-type params: `data:text/javascript;name=<label>;base64,...` — Chrome imports modules from these fine (tested live 2026-07-10). Use for human-readable labels on the Resources page.
+- Iterate CSS against the live dashboard (inject test styles into shadowRoots, measure getBoundingClientRect); measure native components instead of guessing.
+- svg inside `ha-icon` sags ~1.3px from line-height; fix = flex + line-height:0.
+- Literal non-ASCII in resource JS can mojibake depending on serving charset.
+- Native dial measured values (HA 2026.7): track rgb(70,70,70) @ .3; faded arc accent @ .5; bright arc accent @ 1 with round caps rendered even at zero length; heat #ff6f22, cool #2196f3, heat_cool #ffc107; current-temp dot rgb(225,225,225) @ .5, darkened on bright fill.
+- `display:none→block` resets CSS transitions.
+- Native sensor-card: compact-height graph `.footer` paints OVER the text; fix = `position:relative; z-index:1` on `.header, .info`.
+- Text stroke over busy backgrounds: `-webkit-text-stroke: 4px <bg>` + `paint-order: stroke fill` = clean outer stroke.
+- data: URLs accept `;name=<label>` media-type params — Chrome imports modules from them fine; labels the Resources page.
+- **Custom cards can subscribe to forecast pushes:** `hass.connection.subscribeMessage(cb, {type: 'weather/subscribe_forecast', forecast_type: 'hourly'|'daily'|'twice_daily', entity_id})` — initial forecast arrives immediately, updates push after. Unsubscribe in disconnectedCallback, re-subscribe on reconnect. NWS exposes twice_daily+hourly only (NO daily); today's high = the `is_daytime: true` period.
+- View-transition InvalidStateError console exceptions on dashboard load are benign HA 2026.7 noise; a fresh sections view can take seconds to paint (blank ≠ broken).
 
 ## House style for dropdowns (expander-card)
-Modeled by "Party Mode" / "Lighting Brightness and Temp Status" (views[0].sections[0]):
 - expander-card: `padding: 0px`, `title-card-padding: 0px`, `title-card-button-overlay: true`
 - title-card = mushroom-template-card, horizontal, fill_container; card_mod strips margin/shadow/border; primary 14px/500, secondary 12px, `--icon-size: 26px`, `--spacing: 6px`
-- children in `grid` (columns 1, square false), `#root { grid-gap: 0px }`; every inner card card_mod-stripped
-- expander card_mod: `button.header` absolute full-width h60 z1; `.ico` opacity 0 (whole header toggles)
-- title icon_color: colored when active, 'disabled' when off
+- children in `grid` (columns 1, square false), `#root { grid-gap: 0px }`; inner cards card_mod-stripped
+- expander card_mod: `button.header` absolute full-width z1; `.ico` opacity 0 (whole header toggles)
 
-## Key entities
-- `climate.hall_nest_thermostat` (heat, cool, heat_cool, off; fan separate → `script.circulate_air_toggle` tile). Nest range 50–90°F, step 1°F, min deadband gap ~2°F. NOTE: Nest/Google re-applies its own stored heat setpoint (73°F) 1–5s after entering heat mode — device-side, not HA.
-- Winix: `sensor.kitchen_dining_winix_living_room_air_qvalue`, `fan.winix_air_purifiers` (group of 4), `sensor.kitchen_dining_winix_living_room_filter_life`
-- Treadmill (Egofit M2 via FTMS): see `claude/flat-treadmill-card-notes.md` for the full entity/helper inventory, device quirk census, and net-calorie math.
+## House style for press feedback (established with flat-weather-card v1.1)
+No hover highlights on large clickable regions. Press-state feedback instead: pressed section dips to `scale(.985)` with wash `rgba(70,70,70,.22)`, `transition .12s ease`; class on pointerdown, removed on pointerup/cancel/leave. Small repeated elements (day cells) may keep a subtle `:hover`. Affordance glyphs considered and not adopted.
 
-## Winix dropdown — FINAL (applied)
-Expander in house style; title = mushroom-template-card "Winix Air Qvalue", secondary = `{{ states('sensor...air_qvalue') }} qv` only, icon mdi:air-purifier cyan when fan on. Children in gap-0 grid:
-- mushroom-fan-card: icon_animation, show_percentage_control, tap AND icon_tap = more-info (shows all 4 purifiers), `.actions { flex:none; width: calc(50% - 6px) }`
-- tile + bar-gauge inline for filter life, `hui-card-features { width: calc(50% - 6px); flex:none }`; card_mod Jinja: v ≤ 30% → `--tile-color`/`--feature-color: hsl(v*1.5, 90%, 55%) !important` (amber→red)
+## Thermostat — flat-thermostat-card v2.2 (signed off 2026-07-09)
+Slim flat replica of the native HA thermostat dial. Source: `flat-thermostat-card.js` in this repo. Card YAML: `type: custom:flat-thermostat-card` + `entity: <climate entity>`. Full layout/behavior spec and version history in the private notes; visual constants in the checklist above are the load-bearing ones.
 
-## Desk Temp sensor card — FINAL (applied 2026-07-10)
-Native `sensor` card, `sensor.living_room_desk_meter_pro_co2_b98a_temperature`, graph line 24h, columns full. card_mod: hide `.header .icon`; `.header, .info { position: relative; z-index: 1 }` (text above graph line); `-webkit-text-stroke: 4px var(--card-background-color)` + `paint-order: stroke fill` on `.info, .header .name` for a clean outer stroke where the line passes behind the digits.
+## Treadmill — flat-treadmill-card v2.11 (signed off 2026-07-09)
+Walking-pad control/stats card (FTMS). Source: `flat-treadmill-card.js`; design/entity/quirk notes: `notes/flat-treadmill-card-notes.md` in this repo.
 
-## Thermostat — FINAL: custom flat-thermostat-card v2.2 (user signed off 2026-07-09; native dial card can be removed)
-Bespoke vanilla-JS custom card replicating the native HA thermostat dial in flat/horizontal form. **Full source: project doc `claude/flat-thermostat-card.js`** (authoritative; also `/home/claude/work/flat-thermostat-card.js` in the build session).
+## Weather — flat-weather-card v1.1 (signed off 2026-07-10)
+Merged weather card replacing two native weather-forecast cards: station current conditions (header), optional forecast-vs-actual chip, 12h hourly temperature curve (SVG polyline, 2px accent stroke, labels at first/peak/last, hour ticks every 3), 5-day strip. Source: `flat-weather-card.js` in this repo — deliberately location-clean: ALL entity ids and tap-through URLs are card YAML config, never code.
+- Card YAML shape (real values in the dashboard + private notes): `station_entity` = the local PWS weather entity (current conditions), `hourly_entity` = the weather.com entity (curve), `daily_entity` = the PWS entity (5-day, TWC daily), `name`, `station_url`/`hourly_url`/`daily_url` (tap-throughs to the station's Weather Underground history/hourly/10-day pages), `chip_forecast_entity`/`chip_actual_entity` (forecast-lab helpers; chip auto-hides when absent), `chip_path` (lab dashboard), `accent`, `hours`, `days`.
+- Tap map: click header → station history page; curve → WU hourly; day cell → WU 10-day; chip → lab dashboard (pushState + location-changed); long-press (550ms) → hass-more-info for that section's entity. URL keys optional; falls back to more-info.
+- Data via `weather/subscribe_forecast` (hourly + daily on separate entities). Daily entries deduped by date, null-temperature entries skipped (WU nulls today's high in the evening → header H/L shows '--').
+- Availability: '--' for missing temps, dimmed header + 'Unavailable' when the station entity is out, 'forecast unavailable' on subscription failure.
+- v1.0 initial (mockup-approved) → v1.1 press feedback. Deployed blob byte-verified against this source at sign-off.
 
-- **Card YAML in use:** `type: custom:flat-thermostat-card` + `entity: climate.hall_nest_thermostat` (that's all).
-- **Hosting:** HA dashboard resource `a1bc4b7a12124ab38ded7859b5ed12bc`, type module, URL = **`data:text/javascript;name=flat-thermostat-card;base64,...`** — code lives entirely inside HA's .storage resource registry, zero external dependencies; source opens with a self-documenting HOW-TO header. To update: edit source, `node --check`, base64-encode, `ha_config_set_dashboard_resource(resource_id=..., resource_type="module", url="data:text/javascript;name=flat-thermostat-card;base64,...")`, user hard-refreshes.
-- **Layout:** ~125px card. Main row: temp block flex 0 0 25% (centered over power button column, opens native more-info on click), current temp 32px centered on digits (°F absolutely positioned outside centering), hvac_action text under it, action-colored radial glow behind the digits (`.cur::before`, 104×84px, opacity .14) when heating/cooling; 16px track flex:1; mode strip = native recipe (42px, 20px flex ha-icons, active solid colors).
-- **Track visuals (all values measured from native dial):** track rgba(70,70,70,.3), radius 8; faded fill = accent at opacity .5 (heat #ff6f22 left-anchored min→setpoint, cool #2196f3 right-anchored setpoint→max, heat_cool both + dark deadband); **bright work-zone segment** = accent opacity 1 between current temp and setpoint, extended ±8px with 8px radius so round caps surround handle & dot; when no work zone, a 16px bright cap is still always drawn centered on each handle (native zero-length round-cap behavior). White handle 11px on 16px track (no shadow) so fill ring shows around it. Current-temp dot 7px #a6a6a6, switches to rgba(0,0,0,.5) overlay when sitting on the bright fill. Setpoint labels above (#ff9c4a heat / #64b5f6 cool, ° in absolute span).
-- **Behavior:** drag or tap-track (nearest handle), snap to entity step, min/max from entity attrs, 2° gap enforced, optimistic UI w/ 8s hold, commits climate.set_temperature on release, modes via set_hvac_mode, unavailable dims card, click on temp/status block fires `hass-more-info`. Animations: .35s cubic-bezier left/width transitions; `dragging` class (added on pointermove only) disables them during drag. Off mode: bar empty, no extra "Off" label (status text under temp covers it).
-- Config options: entity (req), modes, min_temp, max_temp, step, gap, icon_<mode>.
-- **Version history:** v1.0 initial → v1.2 mojibake + cool-fill direction + data:URL hosting → v1.8 round caps/animations/glow-on-digits → v1.9 handle inset + dark dot → v2.0 native-measured colors + always-on caps → v2.1 more-info click → v2.2 redundant off-label removed, then self-documenting header + `;name=` URL label added. Each verified in-browser before handoff.
-
-## Treadmill — FINAL: custom flat-treadmill-card v2.11 (signed off & archived 2026-07-09)
-Built in a sibling chat; audited and archived from this one. **Full source: project doc `claude/flat-treadmill-card.js`. Full design/entity/quirk notes: project doc `claude/flat-treadmill-card-notes.md`** (hosting + resource id `698b5e9479724e12a978aec4cb7b17dc`, tap map, amber color scheme, all HA-side helpers/meters with entry IDs, net-calorie math with regression anchors, Egofit/FTMS device facts, accepted cosmetics, version history, deferred owner-validation items).
-Sign-off verification (this chat, 2026-07-09): deployed resource byte-identical to archived source; `node --check` pass; zero non-ASCII; card rendered live (Idle, 0.0 mph, progress 2.8/8.0 mi correct through an earlier BT drop thanks to always_available meters + the v2.10/2.11 availability fixes).
-
-## Backup archive
-GitHub repo (owner-pushed via GitHub Desktop, pure backup — NOT the deployment and NOT wired to HACS): contains both card sources, this notes file, and the treadmill notes. The live deployment remains the data: URL resources inside HA.
+## Forecast Lab (running since 2026-07-09)
+Six-way daily forecast-accuracy experiment (WU/TWC, Google, Met.no, OpenWeatherMap, NWS, Open-Meteo) scored nightly at 23:58 against the actual high measured at the nearby PWS: 6am snapshot automation stores each source's predicted high in input_number helpers; a tracker automation follows the station's running max; nightly scoring accumulates |forecast − actual| and day counts per source; template sensors expose running average error. All experiment entities labeled `forecast_scoreboard` in HA; full inventory + teardown order in the private project manifest. Context: OpenWeatherMap was found forecasting ~15°F hot on coastal marine-layer days (confirmed against its own site — model issue, not config), prompting the bake-off and the switch of the hourly card source to weather.com (same TWC engine as WU, so the cards always agree).

@@ -19,9 +19,16 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
   (all entity ids are baked-in defaults). HA resource id: `698b5e9479724e12a978aec4cb7b17dc`.
+- `flat-weather-card.js` — v1.1. Merged weather card: station current conditions
+  header, forecast-vs-actual chip (auto-hides without its helper entities), 12h
+  hourly temperature curve, 5-day strip, press feedback, tap-throughs to the
+  station's Weather Underground pages. All entity ids and URLs are card YAML
+  config — the source is location-clean by design. Used as
+  `type: custom:flat-weather-card` (see notes for the YAML shape).
+  HA resource id: `9bb445a4ae6a4bdb984fa563e4897e2d`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
-  entity inventory, and final specs for both cards.
+  entity inventory, and final specs for all three cards.
 - `notes/flat-treadmill-card-notes.md` — deep notes for the treadmill card: tap map,
   HA helper/meter inventory with entry IDs, net-calorie math with regression anchors,
   Egofit/FTMS device quirk census, version history.
