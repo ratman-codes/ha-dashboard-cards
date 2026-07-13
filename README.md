@@ -38,6 +38,16 @@ backup, and has zero runtime dependencies on the internet or on this repo.
 - `notes/flat-treadmill-card-notes.md` — deep notes for the treadmill card: tap map,
   HA helper/meter inventory with entry IDs, net-calorie math with regression anchors,
   Egofit/FTMS device quirk census, version history.
+- `flat-vacuum-card.js` — v2.4. Collapsible Roborock Q Revo controller: status
+  header with contextual actions (two-tap-arm manual start, pre-run warning
+  countdown with Start/Abort chips, live map dialog, dock-activity states),
+  accordion groups for auto-clean scheduling, maintenance counters with
+  illustrated guide dialogs (images served from HA's /config/www, not this
+  repo), device config, and run history with trigger attribution. Companion
+  HA automations + full inventory in notes/vacuum-system-notes.md. Used as
+  `type: custom:flat-vacuum-card` (all entity ids are baked-in defaults).
+  HA resource id: `<PASTE-ID-HERE>`.
+
 
 ## How to read / modify a deployed card
 Each source file opens with a "HOW THIS WORKS / HOW TO MAINTAIN IT" header. Short
