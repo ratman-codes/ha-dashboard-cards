@@ -1,4 +1,4 @@
-/* card-manager-card v1.1 - admin manager for the data-URL custom-card resources.
+/* card-manager-card v1.2 - admin manager for the data-URL custom-card resources.
    What: lists every Lovelace dashboard resource. data-URL resources carrying a
    ";name=" label get full management: decoded self-documenting header preview,
    version, decoded size, FNV-1a hash, blob download, and a guarded update flow:
@@ -23,20 +23,25 @@
    hard-refresh the frontend.
    Card YAML (on an admin-only dashboard/view):
      type: custom:card-manager-card
-     pin: "1234"          # optional - locks the whole card until entered
-     relock_minutes: 5    # optional - idle re-lock delay (default 5)
+     pin: "1234"          # optional - gates Update mode (Inspect stays open)
+     relock_minutes: 5    # optional - idle re-lock to Inspect (default 5)
    Requires an admin user (the lovelace/resources websocket API is admin-only).
    The frontend caches data: URL modules - hard-refresh after any write.
    Built 2026-07-18 by Claude for Ratman. v1.0 initial release.
    v1.1: Inspect mode is always visible; the PIN now gates only Update mode
    (prompted when the Update tab is tapped, cancelable, idle re-lock drops
-   back to Inspect). */
+   back to Inspect).
+   v1.2: "Add new card" flow in Update mode - paste a brand-new card's data:
+   URL, same validations, plus a duplicate-label hard block (a label that
+   already exists means you meant to UPDATE, not add); creates via
+   lovelace/resources/create, then re-verifies and shows the new resource_id
+   for the inventory notes. No backup step (nothing is overwritten). */
 
 (function () {
   'use strict';
 
   var CM_NAME = 'card-manager-card';
-  var CM_VER = '1.1';
+  var CM_VER = '1.2';
   var SWATCHES = ['#ff6f22', '#ffc107', '#64b5f6', '#4caf50', '#26c6da', '#ab47bc', '#ef5350', '#8d6e63'];
 
   /* ---------- helpers ---------- */
@@ -242,6 +247,7 @@
         '</div></div>' +
         '<div class="banner" id="banner"><div class="dot"></div><span id="bannerText"></span></div>' +
         '<div class="rows" id="rows"><div class="loading">Reading resource registry&hellip;</div></div>' +
+        '<div id="createhost"></div>' +
         '<div class="sect" id="othersSect">' +
         '<div class="sect-head" data-act="toggle-others"><span id="othersLabel">Other resources</span><div class="line"></div><span>&#9656;</span></div>' +
         '<div class="others" id="othersList"></div>' +
@@ -326,7 +332,11 @@
       var admin = this._hass && this._hass.user && this._hass.user.is_admin !== false;
       sub.textContent = this._items.length + ' managed cards - all blobs decoded OK';
       var self = this;
-      rowsEl.innerHTML = this._items.map(function (it, i) { return self._rowHTML(it, i); }).join('');
+      rowsEl.innerHTML = this._items.map(function (it, i) { return self._rowHTML(it, i); }).join('') +
+        (this._mode === 'update' ?
+          '<div class="btnrow" style="padding:6px 8px 2px">' +
+          '<button class="btn primary" data-act="open-create">Add new card&hellip;</button>' +
+          '<span class="btn-note">brand-new resource - existing cards update via their row</span></div>' : '');
       var others = root.getElementById('othersList');
       root.getElementById('othersLabel').textContent =
         'Other resources - HACS-managed, read-only (' + this._others.length + ')';
@@ -405,6 +415,13 @@
           }
           break;
         case 'open-flow': if (it) this._openFlow(it); break;
+        case 'open-create': this._openCreate(); break;
+        case 'validate-new': this._validateNew(); break;
+        case 'cancel-create':
+          this._pendingNew = null;
+          this.shadowRoot.getElementById('createhost').innerHTML = '';
+          break;
+        case 'confirm-create': this._confirmCreate(); break;
         case 'validate': if (it) this._validate(it); break;
         case 'cancel-flow':
           if (it) { this._flowHost(it).innerHTML = ''; this._pending = null; }
@@ -427,7 +444,10 @@
       this.shadowRoot.getElementById('mInspect').classList.toggle('on', m === 'inspect');
       this.shadowRoot.getElementById('mUpdate').classList.toggle('on', m === 'update');
       this._pending = null;
+      this._pendingNew = null;
       this._flowResult = null;
+      if (this.shadowRoot.getElementById('createhost'))
+        this.shadowRoot.getElementById('createhost').innerHTML = '';
       this._setBanner();
       this._renderRows();
     }
@@ -587,6 +607,105 @@
         host.innerHTML = '<div class="stepnote err">&#10007; Write failed: ' + esc((e && (e.message || e.code)) || 'websocket error') +
           '. Nothing verified - the registry may be unchanged. Your backup download has the previous blob.</div>';
         self._toast('Write failed.');
+      });
+    }
+
+    /* ----- create flow (new resources) ----- */
+
+    _openCreate() {
+      this._pendingNew = null;
+      this.shadowRoot.getElementById('createhost').innerHTML =
+        '<div class="updflow" style="margin:2px 16px 12px"><h4>Add new card resource</h4>' +
+        '<div class="stepnote">For a BRAND-NEW card only. Updating an existing card happens on its row - a duplicate label is blocked here.</div>' +
+        '<textarea class="paste" id="paste-new" placeholder="Paste the full data:text/javascript;name=<new-card>;base64,... URL here"></textarea>' +
+        '<div class="btnrow" style="margin-top:8px">' +
+        '<button class="btn" data-act="validate-new">Validate</button>' +
+        '<button class="btn" data-act="cancel-create">Cancel</button>' +
+        '</div><div id="val-new"></div></div>';
+    }
+
+    _validateNew() {
+      var host = this.shadowRoot.getElementById('val-new');
+      var raw = (this.shadowRoot.getElementById('paste-new').value || '').trim();
+      this._pendingNew = null;
+      if (!raw) { host.innerHTML = '<div class="stepnote err">Nothing pasted.</div>'; return; }
+      var checks = [];
+      function li(st, txt) { checks.push('<li><span class="st ' + st + '">' + (st === 'ok' ? '&#10003;' : st === 'err' ? '&#10007;' : st === 'warn' ? '!' : '&middot;') + '</span> ' + txt + '</li>'); }
+      function blocked() {
+        host.innerHTML = '<ul class="checks">' + checks.join('') + '</ul>' +
+          '<div class="stepnote err">Create blocked - nothing was sent to HA.</div>';
+      }
+      var meta = parseDataUrl(raw);
+      if (!meta) {
+        li('err', 'Not a valid <span style="font-family:monospace">data:text/javascript;name=&hellip;;base64,&hellip;</span> URL.');
+        blocked(); return;
+      }
+      if (meta.badB64) { li('err', 'base64 payload does not decode.'); blocked(); return; }
+      li('ok', 'data: URL parses; base64 decodes cleanly (' + meta.bytes.length.toLocaleString() + ' bytes)');
+      var existing = this._items.find(function (x) { return x.label === meta.label; });
+      if (existing) {
+        li('err', '<b>label already exists:</b> <span style="font-family:monospace">' + esc(meta.label) + '</span> is resource ' + esc(String(existing.id).slice(0, 8)) + '&hellip; - if this is a new version, use that row&apos;s Update flow instead');
+        blocked(); return;
+      }
+      li('ok', 'label <span style="font-family:monospace">' + esc(meta.label) + '</span> is new (no duplicate)');
+      if (meta.hdrName !== meta.label) {
+        li('err', 'header self-identifies as <span style="font-family:monospace">' + esc(meta.hdrName || 'nothing') + '</span> - expected ' + esc(meta.label));
+        blocked(); return;
+      }
+      li('ok', 'header self-identifies as ' + esc(meta.label) + (meta.ver ? ' v' + esc(meta.ver) : ''));
+      if (meta.nonAscii > 0) li('warn', meta.nonAscii + ' non-ASCII byte(s) in source (house rule: strings must be ASCII-safe; comments may pass)');
+      else li('ok', 'ASCII-safe (no bytes &gt; 127)');
+
+      this._pendingNew = { meta: meta };
+      host.innerHTML =
+        '<ul class="checks">' + checks.join('') + '</ul>' +
+        '<div class="diff">' +
+        '<div class="old">(nothing)</div><div class="arr">&rarr;</div>' +
+        '<div class="new">' + esc(meta.label) + ' ' + (meta.ver ? 'v' + esc(meta.ver) : '') + ' &middot; ' + fmtKB(meta.bytes.length) + '</div>' +
+        '<div class="old mono">-</div><div class="arr">&rarr;</div><div class="new mono">' + esc(meta.hash) + '</div>' +
+        '</div>' +
+        '<div class="stepnote"><span class="n">1</span> Create: lovelace/resources/create (type module). Nothing existing is touched - no backup step.</div>' +
+        '<div class="stepnote"><span class="n">2</span> Verify: re-read registry, find the new entry, re-decode, compare hash.</div>' +
+        '<div class="stepnote"><span class="n">3</span> The new resource_id appears below - record it in the inventory notes.</div>' +
+        '<div class="btnrow" style="margin-top:10px">' +
+        '<button class="btn primary" data-act="confirm-create">Create ' + esc(meta.label) + '</button>' +
+        '<button class="btn" data-act="cancel-create">Cancel</button>' +
+        '</div>';
+    }
+
+    _confirmCreate() {
+      var self = this;
+      var host = this.shadowRoot.getElementById('val-new');
+      if (!this._pendingNew) { this._toast('Stale flow - re-validate first.'); return; }
+      var meta = this._pendingNew.meta;
+      this._ws({
+        type: 'lovelace/resources/create',
+        res_type: 'module',
+        url: meta.url
+      }).then(function () {
+        return self._ws({ type: 'lovelace/resources' });
+      }).then(function (list) {
+        var live = (list || []).find(function (r) {
+          var m = (r.url || '').indexOf('data:') === 0 ? parseDataUrl(r.url) : null;
+          return m && !m.badB64 && m.label === meta.label;
+        });
+        var liveMeta = live ? parseDataUrl(live.url) : null;
+        var ok = liveMeta && liveMeta.hash === meta.hash;
+        if (ok) {
+          host.innerHTML = '<div class="stepnote ok">&#10003; ' + esc(meta.label) +
+            (meta.ver ? ' v' + esc(meta.ver) : '') + ' created and verified (FNV-1a ' + esc(meta.hash) +
+            ').<br>New resource_id: <span style="font-family:monospace">' + esc(live.id) + '</span> - record it in the notes.' +
+            '<br>Hard-refresh, then add the card to a dashboard with its <span style="font-family:monospace">type: custom:' + esc(meta.label) + '</span> YAML.</div>';
+          self._toast('Created ' + meta.label + ' (' + String(live.id).slice(0, 8) + '\u2026).');
+        } else {
+          host.innerHTML = '<div class="stepnote err">&#10007; Post-create verification FAILED - could not find a matching entry in the registry. Check Settings &gt; Dashboards &gt; Resources before retrying (a half-created entry may exist).</div>';
+          self._toast('Verification failed - see panel.');
+        }
+        self._pendingNew = null;
+        self._refresh();
+      }).catch(function (e) {
+        host.innerHTML = '<div class="stepnote err">&#10007; Create failed: ' + esc((e && (e.message || e.code)) || 'websocket error') + '. The registry may be unchanged.</div>';
+        self._toast('Create failed.');
       });
     }
 

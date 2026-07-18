@@ -35,7 +35,17 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   clean flow, full cleaning profiles (Away/Default popup editors), maintenance
   counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `card-manager-card.js` — v1.1. The admin card that manages all of the above:
+- `flat-cat-card.js` — v1.1. Consolidated cats card (PetKit litter box + two
+  feeders + per-cat rows): headerless tap-to-expand layout, litter level bar with
+  Clean/More controls and a guarded two-step maintenance mode (Dump litter is
+  hold-to-confirm), feeder rows with dispensed-vs-planned grams and portion-chip
+  manual feeds (single or both feeders) with a 5s undo window, always-visible
+  last-eat camera snapshots (tap for live), amber alert strip (litter low, bin
+  full, hopper empty, offline, frequent-use health flag), pulsing
+  occupied-right-now dot. All entities via YAML config (cat list + entity
+  prefixes). Used as `type: custom:flat-cat-card` (see notes for the YAML shape).
+  HA resource id: `6de3dc9ee5524b81a702ecbabae6e156`.
+- `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
   workflow with a guarded flow — paste is validated against the target card's
@@ -44,7 +54,9 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   API, and the registry is re-verified after. Wrong-card pastes are hard-blocked.
   Lives on a separate admin-only dashboard; an optional YAML-configured PIN gates
   Update mode (Inspect stays open); updating the manager itself additionally
-  requires typing the card name. Used as `type: custom:card-manager-card`.
+  requires typing the card name. Brand-new cards are added through the same UI
+  (create via the websocket API, with a duplicate-label hard block).
+  Used as `type: custom:card-manager-card`.
   HA resource id: `19e69a73342741468a1d86c736b4f612`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
