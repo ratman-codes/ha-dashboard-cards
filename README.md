@@ -27,9 +27,28 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   config — the source is location-clean by design. Used as
   `type: custom:flat-weather-card` (see notes for the YAML shape).
   HA resource id: `9bb445a4ae6a4bdb984fa563e4897e2d`.
+- `flat-sensor-stack-card.js` — v1.2. Collapsible stack of compact sensor history
+  graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
+  label toggles the rest. Used as `type: custom:flat-sensor-stack-card`.
+  HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
+- `flat-vacuum-card.js` — v2.6. Roborock control card: status header, room-pick
+  clean flow, full cleaning profiles (Away/Default popup editors), maintenance
+  counters. Used as `type: custom:flat-vacuum-card` (see
+  `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
+- `card-manager-card.js` — v1.1. The admin card that manages all of the above:
+  lists every dashboard resource, decodes each data-URL card's header
+  (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
+  workflow with a guarded flow — paste is validated against the target card's
+  `;name=` label and header, backup of the outgoing blob is force-downloaded,
+  the write goes by resource ID over the `lovelace/resources/update` websocket
+  API, and the registry is re-verified after. Wrong-card pastes are hard-blocked.
+  Lives on a separate admin-only dashboard; an optional YAML-configured PIN gates
+  Update mode (Inspect stays open); updating the manager itself additionally
+  requires typing the card name. Used as `type: custom:card-manager-card`.
+  HA resource id: `19e69a73342741468a1d86c736b4f612`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
-  entity inventory, and final specs for all three cards.
+  entity inventory, and final specs for the cards.
 - `notes/flat-treadmill-card-notes.md` — deep notes for the treadmill card: tap map,
   HA helper/meter inventory with entry IDs, net-calorie math with regression anchors,
   Egofit/FTMS device quirk census, version history.
