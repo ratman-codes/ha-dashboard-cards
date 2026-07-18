@@ -1,4 +1,30 @@
-/* flat-vacuum-card v2.4 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.6 - custom Lovelace card for the main dashboard.
+   v2.6: FULL CLEANING PROFILES - the Auto-clean suction rows became
+   Away profile / Default profile rows: summary chip "max - high - deep >",
+   tapping the row opens a popup editor with segmented pickers for
+   Suction / Mop intensity / Mop mode (helpers: vacuum_suction_away/
+   _default, vacuum_mop_intensity_away/_default, vacuum_mop_mode_away/
+   _default; custom/custom_water_flow deliberately excluded - profiles
+   are deterministic). HA side: the auto-clean away branch applies all
+   three; automation "Vacuum: Profile Restore Default" restores all
+   three at run end - the Default profile is the single source of truth
+   for normal cleaning, and any pre-run tweak reverts afterward.
+   v2.6 rev: HISTORY SETTINGS - the run-trigger record appends the profile
+   applied ("A:suction|mopi|mopm" away branch / "D:..." default); History
+   rows show it as a tiny second line (cyan = away profile, dim grey =
+   default, absent = pre-feature or app-started run). Card-armed manual
+   starts write their own record with the LIVE settings ("manual <iso>
+   M:fan|mopi|mopm") - only app-started runs stay unannotated (the card
+   cannot see those coming). Group height flexes.
+   v2.5: STICKY-DEFAULT SUCTION PROFILES - two dropdown rows in Auto-clean
+   (Away suction / Default suction, input_select.vacuum_suction_away /
+   _default). Semantics: auto-cleans starting while everyone is out run at
+   the away profile; a separate restore automation snaps suction back to
+   the default whenever ANY run ends (auto, manual, app). The Config
+   Suction row remains the LIVE value (reverts after runs - tooltip
+   notes it). HA side: auto-clean automation sets fan speed pre-press
+   when all-away at fire time; a small restore automation fires on
+   last_clean_end change or status charging-for-5min.
    v2.4: HISTORY GROUP (fourth accordion) - last 4 full cleans (day, start
    time, trigger, duration, area) + a 14-day strip (teal square = a day with
    a clean, today brightest). Data: the card's FIRST websocket history fetch
@@ -7,6 +33,16 @@
    writes "<trigger.id> <ISO timestamp>" to input_text.vacuum_run_trigger
    right before pressing full_cleaning; a run whose begin is within 10 min
    of a record = away (leave/window_open) or backstop; no record = manual.
+   v2.4 rev: pause + dock controls stay available during dock-activity
+   phases (washing/emptying is still mid-run - pausing there is legitimate;
+   the dock button acts as end-run; display and controls now agree).
+   v2.4 rev2: ISSUE ROWS - conditional amber rows at the top of the
+   Maintenance group, one per active problem, mirroring the header tokens
+   with detail: "Robot: <error> - blocks auto-cleans", "Dock: <error> -
+   warn-only, cleans still run", "Water low - mop may be limited"; tap =
+   the sensor's more-info. Group summary leads with the issue ("dock issue
+   - 2 overdue") and the group ambers for issues even with no overdue
+   counters. Group height flexes with active issue count.
    Also in the v2.3->v2.4 span: Suction dropdown (vacuum.set_fan_speed,
    fan_speed_list - the dropdown factory now takes opts/cur/set specs),
    Mop drying status row, Battery row at the bottom of Config (charging
@@ -165,6 +201,12 @@ class FlatVacuumCard extends HTMLElement {
       clean_begin_sensor: 'sensor.roborock_q_revo_last_clean_begin',
       clean_area_sensor: 'sensor.roborock_q_revo_cleaning_area',
       run_trigger_entity: 'input_text.vacuum_run_trigger',
+      suction_away_entity: 'input_select.vacuum_suction_away',
+      suction_default_entity: 'input_select.vacuum_suction_default',
+      mop_intensity_away_entity: 'input_select.vacuum_mop_intensity_away',
+      mop_intensity_default_entity: 'input_select.vacuum_mop_intensity_default',
+      mop_mode_away_entity: 'input_select.vacuum_mop_mode_away',
+      mop_mode_default_entity: 'input_select.vacuum_mop_mode_default',
       history_days: 14,
     }, config);
     this._open = false;
@@ -354,6 +396,13 @@ class FlatVacuumCard extends HTMLElement {
         .hday { width: 52px; font-size: 12.5px; color: #ccc; flex: none; }
         .hmid { font-size: 11.5px; color: var(--secondary-text-color); white-space: nowrap;
           overflow: hidden; text-overflow: ellipsis; }
+        .hrun { padding: 4px 14px 4px 28px; }
+        .hrun + .hrun { border-top: 1px solid rgba(255,255,255,.04); }
+        .hl1 { display: flex; align-items: center; gap: 9px; min-height: 21px; }
+        .hl1 .rt { margin-left: auto; }
+        .hprof { font-size: 10.5px; line-height: 1.15; color: rgba(158,158,158,.5);
+          padding-left: 61px; }
+        .hprof.away { color: ${ACCENT_TEXT}; opacity: .7; }
         .hstrip { display: flex; gap: 4px; align-items: center; justify-content: flex-end;
           padding: 6px 14px 8px 28px; border-top: 1px solid rgba(255,255,255,.04); }
         .hstrip .lb { font-size: 10.5px; color: rgba(158,158,158,.55); margin-right: auto; }
@@ -361,6 +410,23 @@ class FlatVacuumCard extends HTMLElement {
           flex: none; }
         .hsq.on { background: #00838f; }
         .hsq.today { background: ${ACCENT_TEXT}; }
+        .irow { background: rgba(255,193,7,.05); }
+        .irow .il { color: ${AMBER}; flex: 1; min-width: 0; overflow: hidden;
+          text-overflow: ellipsis; }
+        .ihint { font-size: 11.5px; color: rgba(158,158,158,.7); white-space: nowrap; flex: none; }
+        .pvdlg { background: #1c1c1c; border: 1px solid rgba(255,255,255,.1); border-radius: 14px;
+          padding: 18px; width: 320px; max-width: calc(100vw - 40px); box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+        .pvsub { font-size: 11px; color: #8a8a8a; margin: 2px 0 12px 0; line-height: 1.4; }
+        .pvlbl { font-size: 10px; color: var(--secondary-text-color); letter-spacing: .4px; margin: 12px 0 5px 0; }
+        .pvlbl .note { color: #666; letter-spacing: 0; }
+        .pvseg { display: flex; border-radius: 8px; overflow: hidden; background: rgba(255,255,255,.04); }
+        .pvseg div { flex: 1; padding: 7px 0; text-align: center; font-size: 11px;
+          color: var(--secondary-text-color); cursor: pointer; white-space: nowrap; }
+        .pvseg div.sel { background: #00838f; color: #fff; }
+        .pvbtns { display: flex; gap: 8px; margin-top: 16px; }
+        .pvbtn { flex: 1; padding: 9px 0; text-align: center; border-radius: 9px; font-size: 12px; cursor: pointer; }
+        .pvbtn.cancel { background: rgba(255,255,255,.06); color: var(--secondary-text-color); }
+        .pvbtn.save { background: #00838f; color: #fff; }
         .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
           align-items: center; justify-content: center; z-index: 9999; }
         .overlay.open { display: flex; }
@@ -478,6 +544,18 @@ class FlatVacuumCard extends HTMLElement {
                 <input class="vin" id="ntin" style="display:none">
               </span>
             </div>
+            <div class="srow act" id="rsucta">
+              <ha-icon class="sic" icon="mdi:weather-tornado"></ha-icon>
+              <span class="slbl">Away profile</span>
+              <ha-icon class="info" id="i_sucta" icon="mdi:information-outline"></ha-icon>
+              <span class="rt"><span class="chip" id="c_sucta">--</span></span>
+            </div>
+            <div class="srow act" id="rsuctd">
+              <ha-icon class="sic" icon="mdi:weather-dust"></ha-icon>
+              <span class="slbl">Default profile</span>
+              <ha-icon class="info" id="i_suctd" icon="mdi:information-outline"></ha-icon>
+              <span class="rt"><span class="chip" id="c_suctd">--</span></span>
+            </div>
             <div class="srow act" id="raway">
               <ha-icon class="sic" id="aico" icon="mdi:home-account"></ha-icon>
               <span class="slbl">Presence</span>
@@ -493,7 +571,22 @@ class FlatVacuumCard extends HTMLElement {
             <ha-icon class="chev" id="ch_maint" icon="mdi:chevron-down"></ha-icon>
             <span class="rt gsum" id="msum">--</span>
           </div>
-          <div class="gbody" id="b_maint">${maintRows}
+          <div class="gbody" id="b_maint">
+            <div class="srow act irow" id="iss_vac" style="display:none">
+              <ha-icon class="sic" icon="mdi:alert" style="color:${AMBER}"></ha-icon>
+              <span class="slbl il" id="iss_vac_t">--</span>
+              <span class="rt ihint">blocks auto-cleans</span>
+            </div>
+            <div class="srow act irow" id="iss_dock" style="display:none">
+              <ha-icon class="sic" icon="mdi:alert" style="color:${AMBER}"></ha-icon>
+              <span class="slbl il" id="iss_dock_t">--</span>
+              <span class="rt ihint">warn-only</span>
+            </div>
+            <div class="srow act irow" id="iss_water" style="display:none">
+              <ha-icon class="sic" icon="mdi:water-alert" style="color:${AMBER}"></ha-icon>
+              <span class="slbl il">Water low</span>
+              <span class="rt ihint">mop limited</span>
+            </div>${maintRows}
             <div class="mcap">
               <span>hours = cleaning runtime, not clock time &middot; ~1&ndash;1.5h per clean</span>
               <span>reset counters: Roborock app &rarr; robot &rarr; &#8226;&#8226;&#8226; &rarr; Maintenance</span>
@@ -508,6 +601,12 @@ class FlatVacuumCard extends HTMLElement {
             <span class="rt gsum" id="csum">--</span>
           </div>
           <div class="gbody" id="b_conf">
+            <div class="srow" id="rfan">
+              <ha-icon class="sic" icon="mdi:weather-dust"></ha-icon>
+              <span class="slbl">Suction</span>
+              <ha-icon class="info" id="i_fan" icon="mdi:information-outline"></ha-icon>
+              <span class="rt"><span class="chip" id="c_fan">--</span></span>
+            </div>
             <div class="srow" id="rmopi">
               <ha-icon class="sic" icon="mdi:water"></ha-icon>
               <span class="slbl">Mop intensity</span>
@@ -519,12 +618,6 @@ class FlatVacuumCard extends HTMLElement {
               <span class="slbl">Mop mode</span>
               <ha-icon class="info" id="i_mopm" icon="mdi:information-outline"></ha-icon>
               <span class="rt"><span class="chip" id="c_mopm">--</span></span>
-            </div>
-            <div class="srow" id="rfan">
-              <ha-icon class="sic" icon="mdi:weather-dust"></ha-icon>
-              <span class="slbl">Suction</span>
-              <ha-icon class="info" id="i_fan" icon="mdi:information-outline"></ha-icon>
-              <span class="rt"><span class="chip" id="c_fan">--</span></span>
             </div>
             <div class="srow" id="rempty">
               <ha-icon class="sic" icon="mdi:delete-empty-outline"></ha-icon>
@@ -595,14 +688,32 @@ class FlatVacuumCard extends HTMLElement {
           <div class="dbtn" id="dcloseb">Close</div>
         </div>
       </div>
+      <div class="overlay" id="pvovl">
+        <div class="pvdlg">
+          <div class="dhead"><span id="pvttl">--</span><span class="dclose" id="pvclose">&#10005;</span></div>
+          <div class="pvsub" id="pvsub"></div>
+          <div class="pvlbl">SUCTION</div>
+          <div class="pvseg" id="pv_suct"></div>
+          <div class="pvlbl">MOP INTENSITY <span class="note">(water to the pads)</span></div>
+          <div class="pvseg" id="pv_mopi"></div>
+          <div class="pvlbl">MOP MODE <span class="note">(route)</span></div>
+          <div class="pvseg" id="pv_mopm"></div>
+          <div class="pvbtns">
+            <div class="pvbtn cancel" id="pvcancel">Cancel</div>
+            <div class="pvbtn save" id="pvsave">Save</div>
+          </div>
+        </div>
+      </div>
     `;
     this._el = {};
     const ids = ['hdr','hico','hsub','hctl','hmap','hplay','harm','hstart','habort','hpause','hpico','hdock',
       'body','g_auto','auico','ch_auto','asw','b_auto',
       'rdays','dminus','dval','dplus','rwin','cws','cwe','rback','cbk',
       'rdelay','track_delay','dlval','dlin','rnotif','nseg','rwarn','track_notify','ntval','ntin',
+      'rsucta','c_sucta','i_sucta','rsuctd','c_suctd','i_suctd',
+      'pvovl','pvttl','pvsub','pvclose','pv_suct','pv_mopi','pv_mopm','pvcancel','pvsave',
       'raway','aico','atxt',
-      'g_maint','mico','ch_maint','msum','b_maint',
+      'g_maint','mico','ch_maint','msum','b_maint','iss_vac','iss_vac_t','iss_dock','iss_dock_t','iss_water',
       'g_conf','ch_conf','csum','b_conf',
       'rmopi','c_mopi','rmopm','c_mopm','rempty','c_empty',
       'rvol','track_vol','volval','rdnd','c_dndb','c_dnde','dndsw','rlock','locksw','rbatt','battic','battxt',
@@ -631,10 +742,10 @@ class FlatVacuumCard extends HTMLElement {
     this._grp = this._grp === name ? null : name;
     if (this._closeMenu) this._closeMenu();
     if (this._grp === 'hist') this._fetchHist();
-    const map = { auto: [this._el.b_auto, this._el.ch_auto, 260],
-                  maint: [this._el.b_maint, this._el.ch_maint, 330],
+    const map = { auto: [this._el.b_auto, this._el.ch_auto, 332],
+                  maint: [this._el.b_maint, this._el.ch_maint, 330 + (this._issueCt || 0) * 36],
                   conf: [this._el.b_conf, this._el.ch_conf, 335],
-                  hist: [this._el.b_hist, this._el.ch_hist, 185] };
+                  hist: [this._el.b_hist, this._el.ch_hist, this._histH || 170] };
     Object.keys(map).forEach(k => {
       const [b, ch, h] = map[k];
       const open = this._grp === k;
@@ -658,7 +769,7 @@ class FlatVacuumCard extends HTMLElement {
     el.hdr.addEventListener('click', () => {
       if (this._lp) { this._lp = false; return; }
       this._open = !this._open;
-      el.body.style.maxHeight = this._open ? '510px' : '0px';
+      el.body.style.maxHeight = this._open ? '620px' : '0px';
     });
     /* header controls: keep presses off the header */
     el.hctl.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -680,8 +791,17 @@ class FlatVacuumCard extends HTMLElement {
       const s = this._st(c.vacuum);
       const st = s ? s.state : '';
       const a = this._st(c.automation);
-      if ((st === 'docked' || st === 'idle') && !(a && (a.attributes.current || 0) > 0))
+      if ((st === 'docked' || st === 'idle') && !(a && (a.attributes.current || 0) > 0)) {
+        /* record the LIVE settings this manual run will use (M: prefix),
+           mirroring the automation's A:/D: records */
+        const fan = (s && s.attributes.fan_speed) || '';
+        const mi = (this._st(c.mop_intensity_entity) || {}).state || '';
+        const mm = (this._st(c.mop_mode_entity) || {}).state || '';
+        if (fan && mi && mm)
+          this._svc('input_text', 'set_value', { entity_id: c.run_trigger_entity,
+            value: 'manual ' + new Date().toISOString() + ' M:' + fan + '|' + mi + '|' + mm });
         this._svc('button', 'press', { entity_id: c.clean_button });
+      }
       disarm();
     });
     el.habort.addEventListener('click', (e) => {
@@ -846,6 +966,63 @@ class FlatVacuumCard extends HTMLElement {
       cur: () => ((this._st(c.vacuum) || {}).attributes || {}).fan_speed,
       set: (o) => this._svc('vacuum', 'set_fan_speed', { entity_id: c.vacuum, fan_speed: o }),
     });
+    /* profile editor popup (away / default) */
+    const PRETTY = { max_plus: 'max+', deep_plus: 'deep+' };
+    const pv = (s) => PRETTY[s] || s;
+    const PV_SETTINGS = [
+      { key: 'suction', node: el.pv_suct, away: c.suction_away_entity, def: c.suction_default_entity },
+      { key: 'mopi', node: el.pv_mopi, away: c.mop_intensity_away_entity, def: c.mop_intensity_default_entity },
+      { key: 'mopm', node: el.pv_mopm, away: c.mop_mode_away_entity, def: c.mop_mode_default_entity },
+    ];
+    const renderProfDlg = () => {
+      const st = this._profDlg;
+      if (!st) return;
+      PV_SETTINGS.forEach((s) => {
+        const ent = st.kind === 'away' ? s.away : s.def;
+        const opts = (((this._st(ent) || {}).attributes || {}).options) || [];
+        s.node.innerHTML = '';
+        opts.forEach((o) => {
+          const d = document.createElement('div');
+          d.textContent = pv(o);
+          if (o === st.vals[s.key]) d.classList.add('sel');
+          d.addEventListener('click', () => { st.vals[s.key] = o; renderProfDlg(); });
+          s.node.appendChild(d);
+        });
+      });
+    };
+    this._openProfile = (kind) => {
+      const vals = {};
+      PV_SETTINGS.forEach((s) => {
+        const ent = kind === 'away' ? s.away : s.def;
+        const st = this._st(ent);
+        vals[s.key] = st ? st.state : null;
+      });
+      this._profDlg = { kind, vals };
+      el.pvttl.textContent = kind === 'away' ? 'Away profile' : 'Default profile';
+      el.pvsub.textContent = kind === 'away'
+        ? 'Used when an auto-clean starts and everyone is out. Reverts to Default when the run ends.'
+        : 'What every run reverts to when it ends - the robot\u2019s normal way of cleaning.';
+      renderProfDlg();
+      el.pvovl.classList.add('open');
+    };
+    const closeProfile = () => { el.pvovl.classList.remove('open'); this._profDlg = null; };
+    el.pvclose.addEventListener('click', closeProfile);
+    el.pvcancel.addEventListener('click', closeProfile);
+    el.pvovl.addEventListener('click', (e) => { if (e.target === el.pvovl) closeProfile(); });
+    el.pvsave.addEventListener('click', () => {
+      const st = this._profDlg;
+      if (!st) return;
+      PV_SETTINGS.forEach((s) => {
+        const ent = st.kind === 'away' ? s.away : s.def;
+        if (st.vals[s.key] != null)
+          this._svc('input_select', 'select_option', { entity_id: ent, option: st.vals[s.key] });
+      });
+      closeProfile();
+    });
+    this._press(el.rsucta);
+    el.rsucta.addEventListener('click', () => this._openProfile('away'));
+    this._press(el.rsuctd);
+    el.rsuctd.addEventListener('click', () => this._openProfile('default'));
     /* drying row -> more-info */
     this._press(el.rdry);
     el.rdry.addEventListener('click', () => this._moreInfo(c.drying_entity));
@@ -912,6 +1089,13 @@ class FlatVacuumCard extends HTMLElement {
     el.dclose.addEventListener('click', closeGuide);
     el.dcloseb.addEventListener('click', closeGuide);
     el.overlay.addEventListener('click', (e) => { if (e.target === el.overlay) closeGuide(); });
+    /* issue rows -> error sensor more-info */
+    this._press(el.iss_vac);
+    el.iss_vac.addEventListener('click', () => this._moreInfo(c.error_sensor));
+    this._press(el.iss_dock);
+    el.iss_dock.addEventListener('click', () => this._moreInfo(c.dock_error_sensor));
+    this._press(el.iss_water);
+    el.iss_water.addEventListener('click', () => this._moreInfo(c.water_sensor));
     /* maintenance rows: guide button always opens the guide; row click = sensor
        history when a counter exists, else the guide */
     c.maint.forEach(([id, , , entity]) => {
@@ -946,7 +1130,9 @@ class FlatVacuumCard extends HTMLElement {
       i_empty: 'Read-only for now: the Roborock integration rejects changes to this setting. Change it in the Roborock app instead.',
       i_mopi: 'How wet the spinning pads run (water fed to the mops). Off = vacuum only with dry pads; low to high = increasing dampness. The custom options defer to per-room settings from the app.',
       i_mopm: 'The mopping route: standard = one normal pass; deep / deep+ = slower, tighter overlapping passes that scrub harder; fast = quicker sparse pass; custom = per-room app settings.',
-      i_fan: 'Vacuum suction power: quiet to max+ trades noise and battery for pick-up strength. Off = mop only. Custom defers to per-room app settings. Auto-cleans run while everyone is out, so cranking it costs you nothing audible.',
+      i_fan: 'Vacuum suction power: quiet to max+ trades noise and battery for pick-up strength. Off = mop only. Custom defers to per-room app settings. NOTE: this is the LIVE value - it reverts to the Default suction profile after every run ends.',
+      i_sucta: 'The full cleaning profile for auto-cleans that start while everyone is out: suction + mop water + mop route. Tap the row to edit. Temporary - the run ends, the Default profile returns. Crank it, nobody is home.',
+      i_suctd: 'The sticky Default profile - the robot\u2019s normal way of cleaning, restored automatically whenever any run ends (auto, manual, or app-started). Tap the row to edit. Away runs and one-off tweaks are always per-run visitors.',
       i_dry: "After mopping, the dock blow-dries the pads for a few hours to prevent odor and mildew. Read-only status; the drying duration is set in the Roborock app.",
       i_hist: 'Recent full cleans: when, what triggered them (away / backstop / manual), how long, how much floor. Squares = the last 14 days, teal = a day with a clean.',
     };
@@ -1163,14 +1349,18 @@ class FlatVacuumCard extends HTMLElement {
         if (!isNaN(v) && v > 0 && a.t <= endT + 120e3 && (beginT == null || a.t >= beginT))
           area = v;
       });
-      let trig = 'manual';
+      let trig = 'manual', prof = null;
       if (beginT != null) trigs.forEach((tr) => {
-        const word = String(tr.s).split(' ')[0];
-        if (Math.abs(tr.t - beginT) < 600e3 && tr.t <= beginT + 60e3)
-          trig = word === 'backstop' ? 'backstop'
-            : (word === 'leave' || word === 'window_open') ? 'away' : trig;
+        const parts = String(tr.s).split(' ');
+        const word = parts[0];
+        if (Math.abs(tr.t - beginT) < 600e3 && tr.t <= beginT + 60e3) {
+          const t2 = word === 'backstop' ? 'backstop'
+            : (word === 'leave' || word === 'window_open') ? 'away'
+            : word === 'manual' ? 'manual' : null;
+          if (t2) { trig = t2; if (parts[2]) prof = parts[2]; }
+        }
       });
-      runs.push({ endT, beginT, area, trig });
+      runs.push({ endT, beginT, area, trig, prof });
     });
     runs.sort((a, b) => b.endT - a.endT);
     return runs;
@@ -1182,7 +1372,7 @@ class FlatVacuumCard extends HTMLElement {
     const runs = this._runs;
     if (runs == null) {
       el.hsum.textContent = '--';
-      el.hlist.innerHTML = '<div class="srow"><span class="hmid">history unavailable</span></div>';
+      el.hlist.innerHTML = '<div class="hrun"><div class="hl1"><span class="hmid">history unavailable</span></div></div>';
       return;
     }
     const week = runs.filter((r) => Date.now() - r.endT < 7 * 86400e3).length;
@@ -1204,14 +1394,24 @@ class FlatVacuumCard extends HTMLElement {
       const m = Math.round((r.endT - r.beginT) / 60e3);
       return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
     };
+    const PRETTY_H = { max_plus: 'max+', deep_plus: 'deep+' };
     el.hlist.innerHTML = runs.slice(0, 4).map((r) => {
       const right = [dur(r), r.area != null ? Math.round(r.area) + ' m\u00b2' : '']
         .filter(Boolean).join(' \u00b7 ');
       const mid = (r.beginT != null ? t12(r.beginT) : t12(r.endT)) + ' \u00b7 ' + r.trig;
-      return '<div class="srow"><span class="hday">' + dayLbl(r.endT) +
+      let profLine = '';
+      if (r.prof && r.prof.length > 2) {
+        const away = r.prof.slice(0, 2) === 'A:';
+        const body = r.prof.slice(2).split('|').map((p) => PRETTY_H[p] || p).join(' \u00b7 ');
+        profLine = '<div class="hprof' + (away ? ' away' : '') + '">' + body + '</div>';
+      }
+      return '<div class="hrun"><div class="hl1"><span class="hday">' + dayLbl(r.endT) +
         '</span><span class="hmid">' + mid +
-        '</span><span class="rt stat">' + right + '</span></div>';
-    }).join('') || '<div class="srow"><span class="hmid">no runs in the last 14 days</span></div>';
+        '</span><span class="rt stat">' + right + '</span></div>' + profLine + '</div>';
+    }).join('') || '<div class="hrun"><div class="hl1"><span class="hmid">no runs in the last 14 days</span></div></div>';
+    const profCt = runs.slice(0, 4).filter((r) => r.prof && r.prof.length > 2).length;
+    this._histH = 170 + profCt * 12;
+    if (this._grp === 'hist') el.b_hist.style.maxHeight = this._histH + 'px';
     const cleaned = new Set(runs.map((r) => {
       const d = new Date(r.endT); d.setHours(0, 0, 0, 0); return d.getTime();
     }));
@@ -1319,8 +1519,8 @@ class FlatVacuumCard extends HTMLElement {
     show(el.harm, idleish && !warning && !dockAct && !unavailable && armed);
     show(el.hstart, warning);
     show(el.habort, warning);
-    show(el.hpause, running);
-    show(el.hdock, running);
+    show(el.hpause, running || !!dockAct);
+    show(el.hdock, running || !!dockAct);
     el.hpico.setAttribute('icon', vstate === 'paused' ? 'mdi:play' : 'mdi:pause');
 
     /* map dialog: keep title + image fresh while open */
@@ -1361,6 +1561,19 @@ class FlatVacuumCard extends HTMLElement {
     el.aico.style.color = away ? AMBER : '';
 
     /* maintenance group */
+    /* maintenance group: issue rows first, then counters */
+    const pretty = (s) => String(s).replace(/_/g, ' ');
+    const vacErrState = (this._st(c.error_sensor) || {}).state;
+    const dockErrState = (this._st(c.dock_error_sensor) || {}).state;
+    show(el.iss_vac, errVac);
+    if (errVac) el.iss_vac_t.textContent = 'Robot: ' + pretty(vacErrState);
+    show(el.iss_dock, errDock);
+    if (errDock) el.iss_dock_t.textContent = 'Dock: ' + pretty(dockErrState);
+    show(el.iss_water, water);
+    const issueCt = (errVac ? 1 : 0) + (errDock ? 1 : 0) + (water ? 1 : 0);
+    this._issueCt = issueCt;
+    if (this._grp === 'maint')
+      el.b_maint.style.maxHeight = (330 + issueCt * 36) + 'px';
     let overdue = 0, unknownCt = 0, counterRows = 0;
     c.maint.forEach(([id, , , entity]) => {
       const vEl = el[id + '_v'];
@@ -1389,17 +1602,29 @@ class FlatVacuumCard extends HTMLElement {
         iEl.style.color = '';
       }
     });
-    el.g_maint.classList.toggle('warn', overdue > 0);
-    el.mico.style.color = overdue > 0 ? AMBER : '';
-    el.msum.textContent = overdue > 0 ? overdue + ' overdue'
-      : unknownCt === counterRows ? '--' : 'all ok';
-    el.msum.style.color = overdue > 0 ? AMBER : '';
+    el.g_maint.classList.toggle('warn', overdue > 0 || issueCt > 0);
+    el.mico.style.color = overdue > 0 || issueCt > 0 ? AMBER : '';
+    const issueTxt = errVac ? 'robot issue' : errDock ? 'dock issue' : water ? 'water low' : null;
+    el.msum.textContent = [issueTxt, overdue > 0 ? overdue + ' overdue' : null]
+      .filter(Boolean).join(' \u00b7 ')
+      || (unknownCt === counterRows ? '--' : 'all ok');
+    el.msum.style.color = overdue > 0 || issueCt > 0 ? AMBER : '';
 
     /* config group */
     const selTxt = (key, entity) => {
       const s = this._st(entity);
       return this._optv(key, s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null) || '--';
     };
+    const PRETTY_R = { max_plus: 'max+', deep_plus: 'deep+' };
+    const pvr = (id) => {
+      const s = this._st(id);
+      const v = s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null;
+      return v ? (PRETTY_R[v] || v) : '--';
+    };
+    el.c_sucta.textContent = pvr(c.suction_away_entity) + ' \u00b7 ' + pvr(c.mop_intensity_away_entity)
+      + ' \u00b7 ' + pvr(c.mop_mode_away_entity) + ' \u203a';
+    el.c_suctd.textContent = pvr(c.suction_default_entity) + ' \u00b7 ' + pvr(c.mop_intensity_default_entity)
+      + ' \u00b7 ' + pvr(c.mop_mode_default_entity) + ' \u203a';
     el.c_mopi.textContent = selTxt('mopi', c.mop_intensity_entity) + ' \u25be';
     el.c_mopm.textContent = selTxt('mopm', c.mop_mode_entity) + ' \u25be';
     const va = (this._st(c.vacuum) || {}).attributes || {};
@@ -1441,8 +1666,11 @@ class FlatVacuumCard extends HTMLElement {
       el.battxt.style.color = '';
       el.battic.style.color = '';
     }
-    el.csum.textContent = 'mop ' + selTxt('mopi', c.mop_intensity_entity) +
-      ' \u00b7 ' + selTxt('mopm', c.mop_mode_entity);
+    const PRETTY_C = { max_plus: 'max+', deep_plus: 'deep+' };
+    const fanNow = this._optv('fan', va.fan_speed);
+    el.csum.textContent = (fanNow ? (PRETTY_C[fanNow] || fanNow) : '--') +
+      ' \u00b7 ' + (PRETTY_C[selTxt('mopi', c.mop_intensity_entity)] || selTxt('mopi', c.mop_intensity_entity)) +
+      ' \u00b7 ' + (PRETTY_C[selTxt('mopm', c.mop_mode_entity)] || selTxt('mopm', c.mop_mode_entity));
   }
 }
 

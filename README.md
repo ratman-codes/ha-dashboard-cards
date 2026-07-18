@@ -19,35 +19,20 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
   (all entity ids are baked-in defaults). HA resource id: `698b5e9479724e12a978aec4cb7b17dc`.
-- `flat-weather-card.js` — v1.1. Merged weather card: station current conditions
-  header, forecast-vs-actual chip (auto-hides without its helper entities), 12h
-  hourly temperature curve, 5-day strip, press feedback, tap-throughs to the
+- `flat-weather-card.js` — v1.2. Merged weather card: station current conditions
+  header (incl. optional threshold-colored dew-point line for ventilation
+  decisions), forecast-vs-actual chip (auto-hides without its helper entities),
+  12h hourly temperature curve, 5-day strip, press feedback, tap-throughs to the
   station's Weather Underground pages. All entity ids and URLs are card YAML
   config — the source is location-clean by design. Used as
   `type: custom:flat-weather-card` (see notes for the YAML shape).
   HA resource id: `9bb445a4ae6a4bdb984fa563e4897e2d`.
-- `flat-sensor-stack-card.js` — v1.2. Collapsible stack of compact 24h sensor
-  history graphs (desk temperature / CO2 / humidity): hover-scrub with a floating
-  value+time pill, label-pill expand toggle, per-row more-info, CO2 threshold
-  colors, history over the websocket recorder API. Used as
-  `type: custom:flat-sensor-stack-card` (all config is baked-in defaults).
-  HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
-  entity inventory, and final specs for all four cards.
+  entity inventory, and final specs for all three cards.
 - `notes/flat-treadmill-card-notes.md` — deep notes for the treadmill card: tap map,
   HA helper/meter inventory with entry IDs, net-calorie math with regression anchors,
   Egofit/FTMS device quirk census, version history.
-- `flat-vacuum-card.js` — v2.4. Collapsible Roborock Q Revo controller: status
-  header with contextual actions (two-tap-arm manual start, pre-run warning
-  countdown with Start/Abort chips, live map dialog, dock-activity states),
-  accordion groups for auto-clean scheduling, maintenance counters with
-  illustrated guide dialogs (images served from HA's /config/www, not this
-  repo), device config, and run history with trigger attribution. Companion
-  HA automations + full inventory in notes/vacuum-system-notes.md. Used as
-  `type: custom:flat-vacuum-card` (all entity ids are baked-in defaults).
-  HA resource id: `<PASTE-ID-HERE>`.
-
 
 ## How to read / modify a deployed card
 Each source file opens with a "HOW THIS WORKS / HOW TO MAINTAIN IT" header. Short

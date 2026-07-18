@@ -1,4 +1,10 @@
-/* flat-weather-card v1.1 - custom Lovelace card for the main dashboard.
+/* flat-weather-card v1.2 - custom Lovelace card for the main dashboard.
+   v1.2: dew point in the header - the humidity line becomes "Dew NN deg - RH%"
+   when dew_entity is configured, with the dew value color-coded by the
+   owner's window-flush thresholds: plain grey under 60F (crisp air),
+   amber #ffc107 at 60-65F (noticeable), orange #ff9c4a at 65F+ (sticky,
+   do not import). Falls back to the plain humidity line when the sensor
+   is absent or unavailable.
    v1.1: press feedback - pressed section (header/chip/curve/day cell) dips
    to 98.5% scale with a faint wash for the duration of the press; no hover
    highlights on large areas by design (owner-approved trial 2026-07-10).
@@ -34,6 +40,7 @@
        chip_forecast_entity: input_number...     # optional scoreboard chip
        chip_actual_entity:   input_number...
        chip_path: /your-lab-dashboard            # chip tap -> HA path
+       dew_entity: sensor.YOUR_DEW_SENSOR        # optional: colored dew line
        accent: "#ffc107"                         # curve color (optional)
        hours: 12   # curve span    days: 5       # strip length (optional)
    - Long-press anywhere on the card = native HA more-info for the section
@@ -255,7 +262,19 @@ class FlatWeatherCard extends HTMLElement {
     el.cico.style.color = COND_COLOR[condKey] || GREY_TEXT;
     const label = this._config.name ? ' \u00b7 ' + this._config.name : '';
     el.cond.textContent = bad ? 'Unavailable' : ((COND_TEXT[condKey] || condKey || '') + label);
-    el.hum.textContent = (a.humidity != null && !bad) ? 'Humidity ' + Math.round(a.humidity) + '%' : '';
+    const rhTxt = (a.humidity != null && !bad) ? Math.round(a.humidity) + '%' : '';
+    const dewS = this._config.dew_entity ? this._st(this._config.dew_entity) : null;
+    const dew = (dewS && !this._bad(dewS)) ? parseFloat(dewS.state) : NaN;
+    if (!isNaN(dew)) {
+      /* flush thresholds: <60 plain grey, 60-65 amber, 65+ orange (owner strategy) */
+      const dc = dew >= 65 ? '#ff9c4a' : dew >= 60 ? '#ffc107' : '';
+      const html = '<span' + (dc ? ' style="color:' + dc + '"' : '') + '>Dew ' + Math.round(dew) +
+        '&deg;</span>' + (rhTxt ? ' &middot; ' + rhTxt : '');
+      if (this._humHtml !== html) { this._humHtml = html; el.hum.innerHTML = html; }
+    } else {
+      const txt = rhTxt ? 'Humidity ' + rhTxt : '';
+      if (this._humHtml !== txt) { this._humHtml = txt; el.hum.textContent = txt; }
+    }
     el.wind.textContent = (a.wind_speed != null && !bad)
       ? 'Wind ' + Math.round(a.wind_speed) + ' mph ' + COMPASS[Math.round(((a.wind_bearing || 0) % 360) / 45) % 8] : '';
     /* today's hi/lo from the daily source */

@@ -31,12 +31,11 @@ Whenever archiving to the GitHub backup repo, a freshly sanitized version of any
 11. **Availability honesty:** key availability off the entity reflecting real device state; show '--', never coerce unavailable to 0; check helper/meter behavior during dropouts (`always_available: true` where needed).
 12. **Verify in the owner's browser before claiming done** — including PERSISTENCE: a dashboard save can be silently clobbered by a stale edit session open in another tab/app (observed 2026-07-10). Re-read the server config after a couple of minutes.
 13. **Archive after sign-off:** source to the private project doc, resource_id + update procedure recorded, deployed blob verified byte-identical (crypto.subtle is unavailable on the http:// LAN origin — use Math.imul-based FNV-1a).
-14. **One-shot build pattern (proven with flat-sensor-stack-card):** a new card can be fully developed and verified without touching HA config — paste the class into the live dashboard page via the browser console/automation, mount a floating fixed-position test instance inside home-assistant's shadowRoot (so hass-more-info reaches the dialog handler), drive it with the real `hass` object, exercise data fetch/hover/toggle/click with real mouse events, remove the mount, and only then push the resource.
 
 ## Environment
 - Main dashboard: storage mode, url_path in private notes. HA core-2026.7.1, HAOS in a KVM VM on the owner's unraid server, reachable on the LAN (address in private notes).
 - **Owner strongly prefers zero external dependencies** — data: URL resources only; /config/www rejected (no manual file management); HACS-repo hosting considered and declined (cards are single-user). This GitHub repo is a pure backup archive, NOT the deployment.
-- HACS lovelace cards: Mushroom, expander-card, card-mod, auto-entities, Timer Bar Card, Firemote, Grid Remote, simple-thermostat (unused since the custom card), mini-graph-card (tried for the desk stack 2026-07-10, rejected on looks, now unused).
+- HACS lovelace cards: Mushroom, expander-card, card-mod, auto-entities, Timer Bar Card, Firemote, Grid Remote, simple-thermostat (unused since the custom card).
 - HACS integrations: weather.com (jaydeethree/Home-Assistant-weatherdotcom) — hourly forecast source, same IBM/TWC engine as Weather Underground; API key is the public web key per its README.
 - Theme has a green primary — never rely on theme vars for accents.
 
@@ -47,12 +46,10 @@ Whenever archiving to the GitHub backup repo, a freshly sanitized version of any
 - Native dial measured values (HA 2026.7): track rgb(70,70,70) @ .3; faded arc accent @ .5; bright arc accent @ 1 with round caps rendered even at zero length; heat #ff6f22, cool #2196f3, heat_cool #ffc107; current-temp dot rgb(225,225,225) @ .5, darkened on bright fill.
 - `display:none→block` resets CSS transitions.
 - Native sensor-card: compact-height graph `.footer` paints OVER the text; fix = `position:relative; z-index:1` on `.header, .info`.
-- Text stroke over busy backgrounds: `-webkit-text-stroke: <n>px <bg>` + `paint-order: stroke fill` = clean outer stroke (owner settled on 2px). Chromium-only for HTML text — Firefox draws the stroke over the glyphs.
+- Text stroke over busy backgrounds: `-webkit-text-stroke: 4px <bg>` + `paint-order: stroke fill` = clean outer stroke.
 - data: URLs accept `;name=<label>` media-type params — Chrome imports modules from them fine; labels the Resources page.
 - **Custom cards can subscribe to forecast pushes:** `hass.connection.subscribeMessage(cb, {type: 'weather/subscribe_forecast', forecast_type: 'hourly'|'daily'|'twice_daily', entity_id})` — initial forecast arrives immediately, updates push after. Unsubscribe in disconnectedCallback, re-subscribe on reconnect. NWS exposes twice_daily+hourly only (NO daily); today's high = the `is_daytime: true` period.
 - View-transition InvalidStateError console exceptions on dashboard load are benign HA 2026.7 noise; a fresh sections view can take seconds to paint (blank ≠ broken).
-- **Custom cards can fetch recorder history:** `hass.callWS({type: 'history/history_during_period', start_time, end_time, entity_ids, include_start_time_state: true, minimal_response: true, no_attributes: true})` returns `{entity_id: [{s: state, lu: epoch-seconds}, ...]}` — bucket to hourly averages for native-sensor-card-like curves; REST `history/period/<iso>` is the fallback.
-- card_mod cascade traps: card_mod styles can lose to a card's own adoptedStyleSheets for conflicting properties (needs !important); `height` on a flex-basis-0 flex item is ignored (use `min-height`); hui-entity-card's ha-card is a space-between flex column, so pulling the footer out of flow shoves the value down (fix: flex-start); graphs re-render against stale geometry on YAML hot-swap — hard refresh before judging.
 
 ## House style for dropdowns (expander-card)
 - expander-card: `padding: 0px`, `title-card-padding: 0px`, `title-card-button-overlay: true`
@@ -69,22 +66,13 @@ Slim flat replica of the native HA thermostat dial. Source: `flat-thermostat-car
 ## Treadmill — flat-treadmill-card v2.11 (signed off 2026-07-09)
 Walking-pad control/stats card (FTMS). Source: `flat-treadmill-card.js`; design/entity/quirk notes: `notes/flat-treadmill-card-notes.md` in this repo.
 
-## Weather — flat-weather-card v1.1 (signed off 2026-07-10)
+## Weather — flat-weather-card v1.2 (v1.1 signed off 2026-07-10; v1.2 dew-point line 2026-07-17)
 Merged weather card replacing two native weather-forecast cards: station current conditions (header), optional forecast-vs-actual chip, 12h hourly temperature curve (SVG polyline, 2px accent stroke, labels at first/peak/last, hour ticks every 3), 5-day strip. Source: `flat-weather-card.js` in this repo — deliberately location-clean: ALL entity ids and tap-through URLs are card YAML config, never code.
 - Card YAML shape (real values in the dashboard + private notes): `station_entity` = the local PWS weather entity (current conditions), `hourly_entity` = the weather.com entity (curve), `daily_entity` = the PWS entity (5-day, TWC daily), `name`, `station_url`/`hourly_url`/`daily_url` (tap-throughs to the station's Weather Underground history/hourly/10-day pages), `chip_forecast_entity`/`chip_actual_entity` (forecast-lab helpers; chip auto-hides when absent), `chip_path` (lab dashboard), `accent`, `hours`, `days`.
 - Tap map: click header → station history page; curve → WU hourly; day cell → WU 10-day; chip → lab dashboard (pushState + location-changed); long-press (550ms) → hass-more-info for that section's entity. URL keys optional; falls back to more-info.
 - Data via `weather/subscribe_forecast` (hourly + daily on separate entities). Daily entries deduped by date, null-temperature entries skipped (WU nulls today's high in the evening → header H/L shows '--').
 - Availability: '--' for missing temps, dimmed header + 'Unavailable' when the station entity is out, 'forecast unavailable' on subscription failure.
-- v1.0 initial (mockup-approved) → v1.1 press feedback. Deployed blob byte-verified against this source at sign-off.
-
-## Desk sensors — flat-sensor-stack-card v1.2 (signed off 2026-07-10)
-Collapsible stack of compact 24h sensor history rows (temperature / CO2 / humidity from a desk air-quality meter). Source: `flat-sensor-stack-card.js` in this repo. Card YAML: `type: custom:flat-sensor-stack-card` (entity ids/names/colors/thresholds are baked-in defaults; configurable via `hours` + `rows: [{entity, name, color, decimals, thresholds}]`; row 0 = always-visible title row).
-- Rows are 116px: reading top-left (28px/400 + unit, 2px bg text-stroke), label top-right (16px/500); 99px graph svg bottom-anchored (smooth quadratic-midpoint curve, 2px round-cap stroke + 10%-opacity fill, values mapped with 26px top headroom); title label is a hover-pill toggle (no chevron), children slide open via max-height transition.
-- Hover scrub: nearest hourly point gets a white dot + floating value/time pill (clamped to row edges); live reading stays put. Click anywhere else on a row = more-info. Press-dip feedback per house style.
-- Colors: temp #ff9800, humidity #2196f3, CO2 whole-line threshold by current value (<800 green, <1200 amber, else red).
-- History via the websocket recorder API (see Debug lessons), hourly buckets, last point pinned to live state, 5-min refetch.
-- All text/graph metrics matched by measurement against a native sensor card mounted via `loadCardHelpers` (not eyeballed).
-- v1.0 one-shot build (injection-tested live before the resource existed) → v1.1 native-matched metrics → v1.2 more headroom + floating hover pill. Deployed blob byte-verified against this source at sign-off.
+- v1.0 initial (mockup-approved) → v1.1 press feedback → v1.2 dew-point line: the humidity line becomes "Dew NN deg · RH%" when the optional `dew_entity` key points at a dew-point sensor (the local PWS measures one directly), color-coded by the owner's window-flush thresholds — plain under 60F (crisp), amber 60–65F, orange 65F+ (sticky, don't ventilate); falls back to humidity-only when the sensor is absent. Each version's deployed blob byte-verified against this source at sign-off.
 
 ## Forecast Lab (running since 2026-07-09)
 Six-way daily forecast-accuracy experiment (WU/TWC, Google, Met.no, OpenWeatherMap, NWS, Open-Meteo) scored nightly at 23:58 against the actual high measured at the nearby PWS: 6am snapshot automation stores each source's predicted high in input_number helpers; a tracker automation follows the station's running max; nightly scoring accumulates |forecast − actual| and day counts per source; template sensors expose running average error. All experiment entities labeled `forecast_scoreboard` in HA; full inventory + teardown order in the private project manifest. Context: OpenWeatherMap was found forecasting ~15°F hot on coastal marine-layer days (confirmed against its own site — model issue, not config), prompting the bake-off and the switch of the hourly card source to weather.com (same TWC engine as WU, so the cards always agree).
