@@ -1,4 +1,4 @@
-/* flat-cat-card v1.1
+/* flat-cat-card v1.2
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -61,10 +61,16 @@
  *   default_portion: 10
  *   feed_both: true          # optional, default true; false removes the Both row
  *   camera_mode: snapshot    # snapshot (default) | live (experimental)
+ *   camera_image: eat        # eat (default) | visit | feed - which event
+ *                            # snapshot the tiles show; also settable
+ *                            # per-feeder on a feeder entry. Labels follow:
+ *                            # eat="last eat", visit="last seen", feed="last feed"
  *   avatars: auto            # auto (photo if available) | initials
  *
  * v1.1: header example genericized to placeholder names (no functional
  * change from v1.0).
+ * v1.2: camera_image option (eat | visit | feed) selects which event
+ * snapshot the camera tiles display, globally or per feeder.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -136,11 +142,18 @@
         pause: 'button.' + lp + '_action_pause',
         cont: 'button.' + lp + '_action_continue'
       };
+      const CAM_IMAGES = {
+        eat: ['last_eat_event', 'last eat'],
+        visit: ['last_visit_event', 'last seen'],
+        feed: ['last_feed_event', 'last feed']
+      };
       this._fdrs = config.feeders.map((f) => {
         const p = f.prefix;
+        const cam = CAM_IMAGES[f.camera_image || config.camera_image] || CAM_IMAGES.eat;
         return {
           label: f.label || p,
           owner: f.owner || '',
+          camWord: cam[1],
           feed: 'text.' + p + '_manual_feed',
           cancel: 'button.' + p + '_cancel_manual_feed',
           eaten: 'sensor.' + p + '_times_eaten',
@@ -149,7 +162,7 @@
           bowl: 'sensor.' + p + '_food_bowl_fill',
           devStatus: 'sensor.' + p + '_device_status',
           hopper: 'binary_sensor.' + p + '_food_level',
-          image: 'image.' + p + '_last_eat_event',
+          image: 'image.' + p + '_' + cam[0],
           camera: 'camera.' + p
         };
       });
@@ -831,7 +844,7 @@
         }
         const when = ist ? this._fmtWhen(ist.state) : '--';
         $['cam' + i + 'lb'].textContent =
-          (f.owner ? f.owner + "'s" : f.label) + ' \u00b7 last eat \u00b7 ' + when;
+          (f.owner ? f.owner + "'s" : f.label) + ' \u00b7 ' + f.camWord + ' \u00b7 ' + when;
       });
       if (this._feedBoth) {
         $.bothchips.querySelectorAll('.pchip').forEach((b) => {
