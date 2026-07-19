@@ -58,6 +58,16 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   (create via the websocket API, with a duplicate-label hard block).
   Used as `type: custom:card-manager-card`.
   HA resource id: `19e69a73342741468a1d86c736b4f612`.
+- `flat-party-card.js` — v1.3. Whole-house party-color control card living inside
+  the main dashboard's Party Mode dropdown: color swatches + inline hue/sat
+  sliders, motion chips (Static/Pulse/Cycle/Chase) driving a server-side HA
+  "engine" script, per-fixture Govee native-effect override rows whose chip
+  lists are edited in a popup catalog editor (live search + selected count;
+  saves persist via the admin `input_select/update` WS API), party brightness,
+  per-room freeze pills, and reset. Pure control surface: all animation runs in
+  HA scripts/automations, so it keeps going with every dashboard closed. Used
+  as `type: custom:flat-party-card` (all entity ids are baked-in defaults,
+  YAML-overridable). HA resource id: `0a36883149024a919d3846c38894d2ec`.
 - `notes/ha-dashboard-notes.md` — the dashboard's working notes: build checklist for
   new cards, measured native-HA visual constants, debug lessons, house styles,
   entity inventory, and final specs for the cards.
