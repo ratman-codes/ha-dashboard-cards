@@ -11,8 +11,11 @@ itself: the entire JS file is base64-encoded into the resource URL
 backup, and has zero runtime dependencies on the internet or on this repo.
 
 ## Contents
-- `flat-thermostat-card.js` — v2.2. Slim flat replica of the native HA thermostat
-  dial: dual/single-handle temperature track, native-measured colors, mode strip.
+- `flat-thermostat-card.js` — v2.3. Slim flat replica of the native HA thermostat
+  dial: dual/single-handle temperature track, native-measured colors, mode strip,
+  detached eco (leaf) toggle beside the strip (Nest eco preset overlays the hvac
+  mode; while on, the track shows the entity-reported eco setpoints in green,
+  read-only).
   Used as `type: custom:flat-thermostat-card` with `entity: climate.hall_nest_thermostat`.
   HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the

@@ -66,8 +66,8 @@ Whenever archiving to the GitHub backup repo, a freshly sanitized version of any
 ## House style for press feedback (established with flat-weather-card v1.1)
 No hover highlights on large clickable regions. Press-state feedback instead: pressed section dips to `scale(.985)` with wash `rgba(70,70,70,.22)`, `transition .12s ease`; class on pointerdown, removed on pointerup/cancel/leave. Small repeated elements (day cells) may keep a subtle `:hover`. Affordance glyphs considered and not adopted.
 
-## Thermostat — flat-thermostat-card v2.2 (signed off 2026-07-09)
-Slim flat replica of the native HA thermostat dial. Source: `flat-thermostat-card.js` in this repo. Card YAML: `type: custom:flat-thermostat-card` + `entity: <climate entity>`. Full layout/behavior spec and version history in the private notes; visual constants in the checklist above are the load-bearing ones.
+## Thermostat — flat-thermostat-card v2.3 (eco toggle added 2026-07-20; v2.2 signed off 2026-07-09)
+Slim flat replica of the native HA thermostat dial. Source: `flat-thermostat-card.js` in this repo. Card YAML: `type: custom:flat-thermostat-card` + `entity: <climate entity>`. v2.3 adds the eco preset (Nest `none|eco`) as a detached leaf button beside the mode strip — a separate rounded-rect, NOT a fifth strip slot, because eco overlays the active hvac mode rather than replacing it. While eco is on: leaf and idle status go green, and the track renders the entity-reported eco setpoints green and read-only (handles hidden, drag disabled — the thermostat rejects setpoint changes in eco). The button self-hides on entities without an eco preset. Full layout/behavior spec and version history in the private notes; visual constants in the checklist above are the load-bearing ones.
 
 ## Treadmill — flat-treadmill-card v2.11 (signed off 2026-07-09)
 Walking-pad control/stats card (FTMS). Source: `flat-treadmill-card.js`; design/entity/quirk notes: `notes/flat-treadmill-card-notes.md` in this repo.

@@ -1,8 +1,10 @@
-/* flat-thermostat-card v2.2 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.3 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
-   temperature track right, native-style mode strip below.
-   Built 2026-07-09 by Claude for Ratman (with the design spec archived in the
-   "NAS / Smart Home" Claude project, doc claude/ha-dashboard-notes.md).
+   temperature track right, native-style mode strip below, detached eco
+   (leaf) toggle beside the strip.
+   Built 2026-07-09, eco added 2026-07-20, by Claude for Ratman (design spec
+   archived in the "NAS / Smart Home" Claude project, doc
+   claude/ha-dashboard-notes.md).
 
    HOW THIS WORKS / HOW TO MAINTAIN IT (read me first, future person):
    - This entire card is plain JavaScript encoded as base64 and stored as a
@@ -16,11 +18,21 @@
      Settings > Dashboards > Resources replace this resource's URL with
      data:text/javascript;base64,<new blob>. Hard-refresh the browser.
    - Used from the dashboard as:  type: custom:flat-thermostat-card
-                                  entity: climate.hall_nest_thermostat */
+                                  entity: climate.hall_nest_thermostat
+
+   ECO (v2.3): Nest exposes eco as preset_mode none|eco. The leaf button is a
+   separate rounded-rect NEXT TO the mode strip (not in it - eco overlays the
+   hvac mode, it is not mutually exclusive with it). While eco is on:
+   - leaf button goes Nest-green, status text shows green "Eco" when idle
+   - the entity itself reports the ECO setpoints in temperature /
+     target_temp_low/high (verified live 2026-07-20: cool 76 -> eco -> 80),
+     so the track just renders what the entity says - in green, read-only
+     (handles hidden, drag disabled: Nest rejects setpoint changes in eco).
+   - button hides itself if the entity has no "eco" in preset_modes. */
 
 const ICONS = { off: 'mdi:power', cool: 'mdi:snowflake', heat: 'mdi:fire', heat_cool: 'mdi:sun-snowflake-variant' };
-const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107' };
-const LABEL_COLORS = { heat: '#ff9c4a', cool: '#64b5f6' };
+const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107', eco: '#4caf50' };
+const LABEL_COLORS = { heat: '#ff9c4a', cool: '#64b5f6', eco: '#81c784' };
 const ACTION_TEXT = { cooling: 'Cooling', heating: 'Heating', idle: 'Idle', off: 'Off', fan: 'Fan', drying: 'Drying', preheating: 'Preheating' };
 
 class FlatThermostatCard extends HTMLElement {
@@ -34,6 +46,8 @@ class FlatThermostatCard extends HTMLElement {
     this._optUntil = 0;
     this._optMode = null;
     this._optModeUntil = 0;
+    this._optEco = null;
+    this._optEcoUntil = 0;
     if (!this.shadowRoot) this._createDom();
     this._modesBuilt = false;
   }
@@ -64,6 +78,7 @@ class FlatThermostatCard extends HTMLElement {
         .st { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
         .bar-wrap { position: relative; flex: 1; padding: 0 10px; }
         .bar { position: relative; height: 16px; border-radius: 8px; background: rgba(70,70,70,.3); touch-action: none; cursor: pointer; }
+        .bar.ecolock { cursor: default; }
         .fill { position: absolute; top: 0; bottom: 0; pointer-events: none; display: none;
           transition: left .35s cubic-bezier(.4,0,.2,1), width .35s cubic-bezier(.4,0,.2,1); }
         .fill.heatf { left: 0; background: ${COLORS.heat}; opacity: .5; border-radius: 8px 0 0 8px; }
@@ -86,14 +101,24 @@ class FlatThermostatCard extends HTMLElement {
         .bar.dragging .fill, .bar.dragging .handle, .bar.dragging .blabel, .bar.dragging .curdot { transition: none; }
         .offlabel { position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
           color: var(--secondary-text-color); font-size: 13px; display: none; }
-        .modes { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); height: 42px;
-          border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden; margin-top: 8px; }
+        .bottom { display: flex; gap: 8px; margin-top: 8px; }
+        .modes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); height: 42px;
+          border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden; }
         .mode { display: flex; align-items: center; justify-content: center; border-radius: 12px;
           cursor: pointer; transition: background .15s; }
         .mode:hover { background: rgba(255,255,255,.07); }
         .mode ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
           align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
         .mode.active ha-icon { color: #fff; }
+        .ecobtn { flex: 0 0 46px; height: 42px; border-radius: 12px; background: rgba(255,255,255,.04);
+          display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .15s; }
+        .ecobtn:hover { background: rgba(255,255,255,.07); }
+        .ecobtn ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
+          align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
+        .ecobtn.on { background: ${COLORS.eco}; }
+        .ecobtn.on:hover { background: ${COLORS.eco}; }
+        .ecobtn.on ha-icon { color: #fff; }
+        .ecobtn.gone { display: none; }
         .unavailable { opacity: .4; pointer-events: none; }
       </style>
       <ha-card>
@@ -118,15 +143,19 @@ class FlatThermostatCard extends HTMLElement {
             </div>
           </div>
         </div>
-        <div class="modes" id="modes"></div>
+        <div class="bottom">
+          <div class="modes" id="modes"></div>
+          <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon></div>
+        </div>
       </ha-card>
     `;
     this._el = {};
-    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','curval','unit','state']
+    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','curval','unit','state']
       .forEach(id => this._el[id] = root.getElementById(id));
     this._el.bfheat.style.background = COLORS.heat;
     this._el.bfcool.style.background = COLORS.cool;
     this._bindDrag();
+    this._el.ecobtn.addEventListener('click', () => this._toggleEco());
     // clicking the current temp / status area opens the native more-info dialog
     this._el.curblock.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('hass-more-info', {
@@ -162,6 +191,13 @@ class FlatThermostatCard extends HTMLElement {
     return s.state;
   }
 
+  _ecoSupported() { return (this._attrs().preset_modes || []).includes('eco'); }
+
+  _ecoOn() {
+    if (Date.now() < this._optEcoUntil) return this._optEco;
+    return this._attrs().preset_mode === 'eco';
+  }
+
   /* ---------- rendering ---------- */
   _render() {
     const s = this._stateObj();
@@ -175,13 +211,22 @@ class FlatThermostatCard extends HTMLElement {
     el.unit.textContent = (this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature) || '\u00b0F';
 
     const mode = this._mode();
-    const action = unavailable ? 'Unavailable'
-      : (mode === 'off' ? 'Off' : (ACTION_TEXT[a.hvac_action] || (a.hvac_action ? a.hvac_action : '')));
-    el.state.textContent = action;
+    const eco = this._ecoOn();
     const act = a.hvac_action;
+    // status text: eco replaces "Idle" only - active heating/cooling still wins
+    let action;
+    if (unavailable) action = 'Unavailable';
+    else if (mode === 'off') action = 'Off';
+    else if (eco && act !== 'cooling' && act !== 'heating') action = 'Eco';
+    else action = ACTION_TEXT[act] || (act ? act : '');
+    el.state.textContent = action;
     const glow = act === 'cooling' ? COLORS.cool : act === 'heating' ? COLORS.heat : 'transparent';
     el.curblock.style.setProperty('--glow', glow);
-    el.state.style.color = act === 'cooling' ? LABEL_COLORS.cool : act === 'heating' ? LABEL_COLORS.heat : '';
+    el.state.style.color = act === 'cooling' ? LABEL_COLORS.cool : act === 'heating' ? LABEL_COLORS.heat : (action === 'Eco' ? LABEL_COLORS.eco : '');
+
+    el.ecobtn.classList.toggle('gone', !this._ecoSupported());
+    el.ecobtn.classList.toggle('on', eco);
+    el.bar.classList.toggle('ecolock', eco);
 
     this._buildModes();
     this._updateModes(mode);
@@ -217,9 +262,14 @@ class FlatThermostatCard extends HTMLElement {
     const el = this._el;
     const a = this._attrs();
     const v = this._vals();
+    const eco = this._ecoOn();
     const ALL = ['fheat','fcool','fsingle','bfheat','bfcool','hlow','hhigh','blow','bhigh','curdot','offlbl'];
     const used = new Set();
     const show = (k) => { if (el[k].style.display !== 'block') el[k].style.display = 'block'; used.add(k); };
+
+    // eco recolors the faded fills green; setpoints are the entity-reported eco temps
+    el.fheat.style.background = eco ? COLORS.eco : COLORS.heat;
+    el.fcool.style.background = eco ? COLORS.eco : COLORS.cool;
 
     const cur = a.current_temperature;
     const curC = cur != null ? Math.min(this._max(), Math.max(this._min(), cur)) : null;
@@ -231,12 +281,19 @@ class FlatThermostatCard extends HTMLElement {
     const label = (k, val, kind) => {
       show(k);
       el[k].style.left = this._pct(val) + '%';
-      el[k].style.color = LABEL_COLORS[kind];
+      el[k].style.color = eco ? LABEL_COLORS.eco : LABEL_COLORS[kind];
       el[k].innerHTML = this._fmt(val) + '<span class="deg">&deg;</span>';
+    };
+    const handle = (k, val) => {
+      if (eco) return; // read-only in eco: no handles
+      show(k);
+      el[k].style.left = this._pct(val) + '%';
     };
     // bright segment: extends 8px past each endpoint so round caps surround handle & dot (native line-cap look).
     // from === to draws a 16px cap centered on the handle - native always renders this (zero-length round-cap stroke).
+    // suppressed entirely in eco (no handle, no work-zone emphasis on a read-only track).
     const bright = (k, from, to) => {
+      if (eco) return false;
       if (from == null || to == null || to < from) return false;
       show(k);
       el[k].style.left = 'calc(' + this._pct(from) + '% - 8px)';
@@ -252,21 +309,21 @@ class FlatThermostatCard extends HTMLElement {
       else bright('bfheat', v.low, v.low);
       if (curC != null && curC > v.high) { bright('bfcool', v.high, curC); dotOnBright = true; }
       else bright('bfcool', v.high, v.high);
-      show('hlow'); el.hlow.style.left = this._pct(v.low) + '%';
-      show('hhigh'); el.hhigh.style.left = this._pct(v.high) + '%';
+      handle('hlow', v.low);
+      handle('hhigh', v.high);
       label('blow', v.low, 'heat');
       label('bhigh', v.high, 'cool');
     } else if (mode === 'heat' && v.single != null) {
       show('fheat'); el.fheat.style.width = this._pct(v.single) + '%';
       if (curC != null && curC < v.single) { bright('bfheat', curC, v.single); dotOnBright = true; }
       else bright('bfheat', v.single, v.single);
-      show('hlow'); el.hlow.style.left = this._pct(v.single) + '%';
+      handle('hlow', v.single);
       label('blow', v.single, 'heat');
     } else if (mode === 'cool' && v.single != null) {
       show('fcool'); el.fcool.style.width = (100 - this._pct(v.single)) + '%';
       if (curC != null && curC > v.single) { bright('bfcool', v.single, curC); dotOnBright = true; }
       else bright('bfcool', v.single, v.single);
-      show('hlow'); el.hlow.style.left = this._pct(v.single) + '%';
+      handle('hlow', v.single);
       label('blow', v.single, 'cool');
     }
     // off mode: bar stays empty - the status text under the temp already says "Off" (offlbl removed in v2.2)
@@ -293,7 +350,7 @@ class FlatThermostatCard extends HTMLElement {
     const el = this._el;
     const down = (e) => {
       const mode = this._mode();
-      if (mode === 'off' || !this._stateObj()) return;
+      if (mode === 'off' || this._ecoOn() || !this._stateObj()) return; // eco: Nest rejects setpoint changes
       const v = this._vals();
       const gap = this._config.gap;
       this._opt = { low: v.low, high: v.high, single: v.single };
@@ -358,6 +415,15 @@ class FlatThermostatCard extends HTMLElement {
     this._updateBar(m);
     this._hass.callService('climate', 'set_hvac_mode', { entity_id: this._config.entity, hvac_mode: m });
   }
+
+  _toggleEco() {
+    if (!this._hass || !this._ecoSupported()) return;
+    const on = this._ecoOn();
+    this._optEco = !on;
+    this._optEcoUntil = Date.now() + 8000;
+    this._render();
+    this._hass.callService('climate', 'set_preset_mode', { entity_id: this._config.entity, preset_mode: on ? 'none' : 'eco' });
+  }
 }
 
 customElements.define('flat-thermostat-card', FlatThermostatCard);
@@ -365,5 +431,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-thermostat-card',
   name: 'Flat Thermostat Card',
-  description: 'Slim flat thermostat with dual-handle temperature track and native-style mode strip',
+  description: 'Slim flat thermostat with dual-handle temperature track, native-style mode strip, and eco toggle',
 });
