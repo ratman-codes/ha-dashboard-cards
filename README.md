@@ -11,11 +11,8 @@ itself: the entire JS file is base64-encoded into the resource URL
 backup, and has zero runtime dependencies on the internet or on this repo.
 
 ## Contents
-- `flat-thermostat-card.js` — v2.3. Slim flat replica of the native HA thermostat
-  dial: dual/single-handle temperature track, native-measured colors, mode strip,
-  detached eco (leaf) toggle beside the strip (Nest eco preset overlays the hvac
-  mode; while on, the track shows the entity-reported eco setpoints in green,
-  read-only).
+- `flat-thermostat-card.js` — v2.2. Slim flat replica of the native HA thermostat
+  dial: dual/single-handle temperature track, native-measured colors, mode strip.
   Used as `type: custom:flat-thermostat-card` with `entity: climate.hall_nest_thermostat`.
   HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
@@ -38,7 +35,7 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   clean flow, full cleaning profiles (Away/Default popup editors), maintenance
   counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `flat-cat-card.js` — v1.2. Camera tiles configurable (camera_image: eat | visit | feed). Consolidated cats card (PetKit litter box + two
+- `flat-cat-card.js` — v1.6. Adds per-cat litter history panels (tap a cat row: visits-per-day bars, recent-visit log with duration + scale weight, 10-day weight trend — fetched live from the recorder, no helper entities) and configurable camera tiles (camera_image: eat | visit | feed). Consolidated cats card (PetKit litter box + two
   feeders + per-cat rows): headerless tap-to-expand layout, litter level bar with
   Clean/More controls and a guarded two-step maintenance mode (Dump litter is
   hold-to-confirm), feeder rows with dispensed-vs-planned grams and portion-chip

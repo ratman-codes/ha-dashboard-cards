@@ -1,4 +1,4 @@
-/* flat-cat-card v1.2
+/* flat-cat-card v1.6
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -71,6 +71,37 @@
  * change from v1.0).
  * v1.2: camera_image option (eat | visit | feed) selects which event
  * snapshot the camera tiles display, globally or per feeder.
+ * v1.3: per-cat litter history panels. Tapping a cat row opens that
+ * cat's panel (collapsed card: expands AND opens in one tap; open
+ * card: toggles; one panel open at a time; everything else still
+ * expands/collapses the card as before). Panel shows visits-per-day
+ * bars (7 days), a recent-visit log (time / duration / body weight
+ * from the litter box scale), and a 10-day weight trend (raw scale
+ * readings faded, smoothed line on top). Data is fetched live from
+ * HA's recorder via the history/history_during_period websocket API
+ * when a panel opens (cached ~5 min) - no helper entities created.
+ * Recorder retention (~10 days default) bounds the window. Per-cat
+ * duration/scale entities are derived from the last_use entity id
+ * (_last_use_date -> _last_use_duration / _last_weight_measurement);
+ * override per cat with `duration:` / `scale_weight:` keys.
+ * Disable the whole feature with `history: false`.
+ * v1.4: tap-target refinement. Only the avatar-through-text run of a
+ * cat row (with its inline mini caret after the litter text) opens
+ * that cat's history; the empty remainder of the row joins the
+ * whole-card expand/collapse surface. The shared right-edge chevron
+ * is vertically centered on the cat-rows block (measured live, so it
+ * stays centered with any cat count or when the alert strip shows).
+ * v1.5: cat tap opens ONLY that cat's history panel (no longer
+ * auto-expands the litter/feeder sections - panels work inside the
+ * collapsed card too). Visit log gains aligned column headers
+ * (TIME / DUR / WEIGHED over their columns). Tap a day bar to filter
+ * the log to that day (tap it again to go back to recent). Tap the
+ * weight trend to open the scale sensor's full history via more-info.
+ * "Both feeders" row restyled: amber outline removed, geometry now
+ * identical to the individual feeder rows, gold title only.
+ * v1.6: Both-feeders row given the same block height as the two-line
+ * feeder rows (min-height 38px) so the three chip/Feed columns are
+ * evenly spaced.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -107,6 +138,9 @@
       this._holdFired = false;
       this._lpTimer = null;
       this._lpFired = false;
+      this._histOpen = -1;         // index of the cat whose history panel is open
+      this._hist = {};             // per-cat fetched history cache
+      this._histDay = {};          // per-cat day-bar filter (dayKey string or null)
     }
 
     /* ---------------- config ---------------- */
@@ -177,7 +211,18 @@
       if (this._sel.both == null) this._sel.both = def;
       this._feedBoth = config.feed_both !== false && this._fdrs.length > 1;
       this._camLive = config.camera_mode === 'live';
+      this._histOn = config.history !== false;
       this._built = false;
+    }
+
+    _catDuration(c) {
+      return c.duration || (c.last_use
+        ? c.last_use.replace('_last_use_date', '_last_use_duration') : null);
+    }
+
+    _catScale(c) {
+      return c.scale_weight || (c.last_use
+        ? c.last_use.replace('_last_use_date', '_last_weight_measurement') : null);
     }
 
     set hass(hass) {
@@ -256,11 +301,16 @@
 
     _build() {
       const catRows = this._cfg.cats.map((c, i) => `
-        <div class="row catrow pressable" id="cat${i}" data-noexpand="lp">
-          <div class="avatar" id="cat${i}av"></div>
-          <div class="cname" id="cat${i}nm"></div>
-          <div class="cinfo grow" id="cat${i}in">--</div>
-        </div>`).join('');
+        <div class="row catrow">
+          <div class="cathit pressable" id="cat${i}" data-noexpand="lp">
+            <div class="avatar" id="cat${i}av"></div>
+            <div class="cname" id="cat${i}nm"></div>
+            <div class="cinfo" id="cat${i}in">--</div>
+            <span class="rcaret" id="cat${i}car">&#9662;</span>
+          </div>
+          <div class="grow"></div>
+        </div>
+        <div class="histpanel" id="cat${i}hist" data-noexpand="1"></div>`).join('');
 
       const feederRows = this._fdrs.map((f, i) => `
         <div class="frow" id="fdr${i}">
@@ -299,7 +349,14 @@
         .primary { font-size: 13.5px; font-weight: 500; color: var(--primary-text-color); }
         .second { font-size: 12px; color: var(--secondary-text-color); margin-top: 1px; }
         .tert { font-size: 11px; color: rgba(160,160,160,.7); font-weight: 400; }
-        .catrow { padding: 3px 20px 3px 0; cursor: pointer; }
+        .catrow { padding: 3px 24px 3px 0; }
+        .cathit {
+          display: flex; align-items: center; gap: 10px;
+          min-width: 0; max-width: 100%;
+          cursor: pointer; border-radius: 8px;
+          padding: 2px 8px 2px 2px; margin-left: -2px;
+        }
+        .cathit .cinfo { flex: 0 1 auto; min-width: 0; }
         .avatar {
           width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto;
           display: flex; align-items: center; justify-content: center;
@@ -313,12 +370,13 @@
         }
         .cinfo b { color: var(--primary-text-color); font-weight: 500; }
         .chev {
-          position: absolute; right: 8px; top: 14px; width: 20px; height: 52px;
+          position: absolute; right: 8px; top: 34px; width: 20px; height: 20px;
           display: flex; align-items: center; justify-content: center;
           color: rgba(160,160,160,.55); font-size: 12px;
+          transform: translateY(-50%);
           transition: transform .25s cubic-bezier(.4,0,.2,1);
         }
-        .chev.open { transform: rotate(180deg); }
+        .chev.open { transform: translateY(-50%) rotate(180deg); }
         .occdot {
           position: absolute; right: 12px; top: 74px;
           width: 8px; height: 8px; border-radius: 50%;
@@ -371,10 +429,8 @@
         .feedbtn.flash .u { color: ${AMBER_TXT}; text-decoration: underline; text-underline-offset: 2px; }
         .frow { margin-top: 9px; }
         .frow:first-child { margin-top: 0; }
-        .bothwrap {
-          border: 1px solid rgba(255,193,7,.3); border-radius: 10px;
-          padding: 8px 10px; margin-top: 10px;
-        }
+        .bothwrap { margin-top: 9px; }
+        .bothwrap .row { min-height: 38px; }
         .morepanel {
           display: none; border: 1px solid var(--divider-color, rgba(255,255,255,.1));
           background: rgba(255,255,255,.03); border-radius: 10px;
@@ -424,6 +480,38 @@
           font-size: 10.5px; color: rgba(255,255,255,.78); font-weight: 500;
           -webkit-text-stroke: 2px rgba(0,0,0,.6); paint-order: stroke fill;
         }
+        .rcaret { color: rgba(160,160,160,.45); font-size: 10px; flex: 0 0 auto; margin-left: 1px; }
+        .histpanel {
+          display: none;
+          border: 1px solid var(--divider-color, rgba(255,255,255,.1));
+          background: rgba(255,255,255,.03);
+          border-radius: 10px;
+          padding: 11px 12px;
+          margin: 5px 20px 6px 38px;
+        }
+        .histhead { font-size: 11px; color: rgba(120,120,120,.9); margin-bottom: 8px; letter-spacing: .3px; }
+        .histhead b { color: rgba(160,160,160,.9); font-weight: 600; }
+        .hbars { display: flex; align-items: flex-end; gap: 7px; height: 46px; padding: 0 2px; }
+        .hbcol { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; cursor: pointer; }
+        .hbcol .hb { width: 100%; border-radius: 3px 3px 0 0; }
+        .hbcol .hz { width: 100%; height: 2px; border-radius: 1px; background: rgba(255,255,255,.10); }
+        .hbaxis { display: flex; gap: 7px; padding: 4px 2px 0; }
+        .hbaxis span { flex: 1; text-align: center; font-size: 9.5px; color: rgba(120,120,120,.9); }
+        .hlog { margin-top: 10px; border-top: 1px solid var(--divider-color, rgba(255,255,255,.08)); padding-top: 8px; }
+        .hvrow { display: flex; gap: 8px; font-size: 11.5px; padding: 2.5px 0; }
+        .hvrow .ht { color: var(--primary-text-color); width: 84px; flex: 0 0 auto; }
+        .hvrow .hd { color: var(--secondary-text-color); width: 58px; flex: 0 0 auto; }
+        .hvrow .hw { color: var(--primary-text-color); font-weight: 500; }
+        .hvrow.hdr { padding-bottom: 5px; }
+        .hvrow.hdr .ht, .hvrow.hdr .hd, .hvrow.hdr .hw {
+          color: rgba(120,120,120,.9); font-weight: 600; font-size: 10.5px; letter-spacing: .3px;
+        }
+        .hspark { margin-top: 10px; border-top: 1px solid var(--divider-color, rgba(255,255,255,.08)); padding-top: 9px; cursor: pointer; }
+        .hsparkrow { display: flex; align-items: center; gap: 10px; }
+        .hsparklabel { font-size: 11px; color: rgba(120,120,120,.9); flex: 0 0 auto; width: 78px; line-height: 1.35; }
+        .hsparklabel b { color: rgba(160,160,160,.9); font-weight: 600; display: block; font-size: 12px; }
+        .hsparkval { flex: 0 0 auto; font-size: 12px; color: var(--primary-text-color); }
+        .hsparkval span { font-size: 11px; color: rgba(120,120,120,.9); }
         .dimmed { opacity: .45; pointer-events: none; }
         .pressable { transition: transform .12s ease, background .12s ease; border-radius: 8px; }
         .pressable.pressed { transform: scale(.985); background: rgba(70,70,70,.22); }
@@ -535,8 +623,41 @@
         }
         if (this._moreOpen) { this._moreOpen = false; this._update(); return; }
         this._expanded = !this._expanded;
+        if (!this._expanded) this._histOpen = -1;
         this._update();
       });
+
+      // cat rows: tap opens that cat's history panel (expands card first
+      // if collapsed); one panel open at a time; tap again closes.
+      if (this._histOn) {
+        this._cfg.cats.forEach((c, i) => {
+          this.$['cat' + i].addEventListener('click', (e) => {
+            if (this._lpFired) return; // long-press already consumed this tap
+            e.stopPropagation();
+            this._toggleHist(i);
+          });
+          // inside the panel: day bars filter the log, weight trend
+          // opens the scale sensor's full history
+          const panel = this.$['cat' + i + 'hist'];
+          panel.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const path = e.composedPath();
+            for (const el of path) {
+              if (el === panel) break;
+              if (el.dataset && el.dataset.day !== undefined) {
+                this._histDay[i] = this._histDay[i] === el.dataset.day
+                  ? null : el.dataset.day;
+                this._update();
+                return;
+              }
+              if (el.classList && el.classList.contains('hspark')) {
+                this._moreInfo(this._catScale(c));
+                return;
+              }
+            }
+          });
+        });
+      }
 
       // press feedback on pressable zones
       this.shadowRoot.querySelectorAll('.pressable').forEach((el) => {
@@ -700,6 +821,239 @@
       btn.textContent = 'Feed';
     }
 
+    /* ---------------- per-cat history ---------------- */
+
+    _toggleHist(i) {
+      if (this._histOpen === i) {
+        this._histOpen = -1;
+      } else {
+        this._histOpen = i;
+        this._histDay[i] = null;
+        this._loadHist(i);
+      }
+      this._update();
+    }
+
+    _loadHist(i) {
+      const cached = this._hist[i];
+      if (cached && cached.data && Date.now() - cached.at < 300000) return;
+      const c = this._cfg.cats[i];
+      const ids = [c.last_use, this._catDuration(c), this._catScale(c)]
+        .filter(Boolean);
+      const end = new Date();
+      const start = new Date(end.getTime() - 10 * 86400000);
+      this._hist[i] = { at: Date.now(), loading: true };
+      this._hass.callWS({
+        type: 'history/history_during_period',
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        entity_ids: ids,
+        significant_changes_only: false,
+        minimal_response: true,
+        no_attributes: true
+      }).then((res) => {
+        this._hist[i] = { at: Date.now(), data: res || {} };
+        this._update();
+      }).catch((err) => {
+        this._hist[i] = {
+          at: Date.now(),
+          error: String((err && err.message) || 'history unavailable')
+        };
+        this._update();
+      });
+    }
+
+    _histRows(data, id) {
+      return (data[id] || []).map((e) => ({
+        s: e.s !== undefined ? e.s : e.state,
+        t: e.lu !== undefined ? e.lu * 1000
+          : Date.parse(e.last_updated || e.last_changed || 0)
+      })).filter((e) => e.s != null && e.s !== '' &&
+        String(e.s).toLowerCase() !== 'unavailable' &&
+        String(e.s).toLowerCase() !== 'unknown');
+    }
+
+    _fmtVisit(d) {
+      const now = new Date();
+      let h = d.getHours();
+      const ap = h >= 12 ? 'p' : 'a';
+      h = h % 12; if (h === 0) h = 12;
+      const t = h + ':' + String(d.getMinutes()).padStart(2, '0') + ap;
+      if (d.toDateString() === now.toDateString()) return 'Today ' + t;
+      const y = new Date(now); y.setDate(now.getDate() - 1);
+      if (d.toDateString() === y.toDateString()) return 'Yest ' + t;
+      const wk = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+      if (now - d < 7 * 86400000) return wk + ' ' + t;
+      return MONTHS[d.getMonth()] + ' ' + d.getDate();
+    }
+
+    _fmtDur(n) {
+      if (n < 60) return Math.round(n) + 's';
+      const m = Math.floor(n / 60);
+      return m + 'm ' + String(Math.round(n % 60)).padStart(2, '0') + 's';
+    }
+
+    _renderHist(i, panel) {
+      const h = this._hist[i] || {};
+      const key = (h.loading ? 'L' : h.error ? 'E' : 'D') + (h.at || 0) +
+        '|' + (this._histDay[i] || '');
+      if (panel.dataset.render === key) return;
+      panel.dataset.render = key;
+      if (h.loading || !h.data) {
+        panel.innerHTML = '<div class="histhead" style="margin:0;">loading history&hellip;</div>';
+        return;
+      }
+      if (h.error) {
+        panel.innerHTML = '<div class="histhead" style="margin:0;">history unavailable &middot; ' +
+          this._esc(h.error) + '</div>';
+        return;
+      }
+      const c = this._cfg.cats[i];
+      const col = c.color || AMBER_TXT;
+      const data = h.data;
+
+      // visits: each unique last_use_date VALUE is one visit; day-bucket
+      // by the value itself (robust against window-edge duplicates)
+      const seen = {};
+      const visits = [];
+      this._histRows(data, c.last_use).forEach((e) => {
+        const d = new Date(String(e.s).replace(' ', 'T'));
+        if (isNaN(d.getTime()) || seen[e.s]) return;
+        seen[e.s] = true;
+        visits.push({ d, t: e.t });
+      });
+      visits.sort((a, b) => b.d - a.d);
+
+      const dayKey = (d) => d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+      const counts = {};
+      visits.forEach((v) => {
+        const k = dayKey(v.d);
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      const WK = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+      const WKL = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const days = [];
+      for (let o = 6; o >= 0; o--) {
+        const d = new Date(); d.setDate(d.getDate() - o);
+        days.push({
+          label: WK[d.getDay()],
+          pretty: (o === 0 ? 'Today' : WKL[d.getDay()] + ' ' + MONTHS[d.getMonth()] + ' ' + d.getDate()),
+          k: dayKey(d),
+          n: counts[dayKey(d)] || 0,
+          today: o === 0
+        });
+      }
+      const maxN = Math.max(3, ...days.map((d) => d.n));
+      const avg = days.reduce((a, d) => a + d.n, 0) / 7;
+      const filt = this._histDay[i] || null;
+
+      const barsHtml = days.map((d) => {
+        const sel = filt === d.k;
+        const inner = d.n === 0
+          ? '<div class="hz"' + (sel ? ' style="background:' + col + '; opacity:.6;"' : '') + '></div>'
+          : '<div class="hb" style="height:' + Math.round(d.n / maxN * 100) +
+            '%; background:' + col + '; opacity:' +
+            (sel ? '1' : (filt ? '.35' : (d.today ? '1' : '.8'))) + ';"></div>';
+        return '<div class="hbcol" data-day="' + d.k + '">' + inner + '</div>';
+      }).join('');
+      const axisHtml = days.map((d) =>
+        '<span' + (filt === d.k ? ' style="color:' + col + '; font-weight:600;"' : '') +
+        '>' + d.label + '</span>').join('');
+
+      // duration + scale-weight rows, matched to visits by record time
+      const durs = this._histRows(data, this._catDuration(c))
+        .filter((e) => !isNaN(Number(e.s)));
+      const wts = this._histRows(data, this._catScale(c))
+        .filter((e) => !isNaN(Number(e.s)));
+      const near = (arr, t) => {
+        let best = null, bd = 120001;
+        arr.forEach((x) => {
+          const d = Math.abs(x.t - t);
+          if (d < bd) { bd = d; best = x; }
+        });
+        return best;
+      };
+      const scaleSt = this._st(this._catScale(c));
+      const scaleUnit = scaleSt && scaleSt.attributes.unit_of_measurement;
+      const dispSt = this._st(c.weight);
+      const dispUnit = (dispSt && dispSt.attributes.unit_of_measurement) || 'lb';
+      const toDisp = (kg) => {
+        let v = Number(kg);
+        if (scaleUnit === 'kg' && dispUnit !== 'kg') v = v * 2.20462;
+        return v;
+      };
+
+      const filtDay = filt ? days.find((d) => d.k === filt) : null;
+      const logSrc = filt
+        ? visits.filter((v) => dayKey(v.d) === filt)
+        : visits;
+      const logTitle = filt
+        ? '<b>VISITS</b> &middot; ' + this._esc(filtDay ? filtDay.pretty : '') +
+          ' <span style="font-weight:400;">&middot; tap day again for recent</span>'
+        : '<b>RECENT VISITS</b>';
+      const hdrRow = '<div class="hvrow hdr"><span class="ht">TIME</span>' +
+        '<span class="hd">DUR</span><span class="hw">WEIGHED</span></div>';
+      const logHtml = logSrc.slice(0, filt ? 8 : 5).map((v) => {
+        const du = near(durs, v.t);
+        const wt = near(wts, v.t);
+        return '<div class="hvrow"><span class="ht">' + this._esc(this._fmtVisit(v.d)) +
+          '</span><span class="hd">' + (du ? this._fmtDur(Number(du.s)) : '--') +
+          '</span><span class="hw">' +
+          (wt ? toDisp(wt.s).toFixed(1) + ' ' + this._esc(dispUnit) : '--') +
+          '</span></div>';
+      }).join('') || '<div class="hvrow"><span class="hd" style="width:auto;">' +
+        (filt ? 'no attributed visits that day' : 'no visits in the last 10 days') +
+        '</span></div>';
+
+      // weight trend: raw dots + moving-average line
+      let sparkHtml;
+      const pts = wts.slice().sort((a, b) => a.t - b.t).slice(-12)
+        .map((e) => ({ t: e.t, v: toDisp(e.s) }));
+      if (pts.length < 2) {
+        sparkHtml = '<div class="histhead" style="margin:0;">weight trend &middot; not enough data yet</div>';
+      } else {
+        const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
+        const vals = pts.map((p) => p.v);
+        let lo = Math.min(...vals), hi = Math.max(...vals);
+        const pad = Math.max((hi - lo) * 0.2, 0.15);
+        lo -= pad; hi += pad;
+        const X = (t) => 8 + (t - t0) / Math.max(t1 - t0, 1) * 204;
+        const Y = (v) => 26 - (v - lo) / (hi - lo) * 22;
+        const raw = pts.map((p) => X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ');
+        const sm = pts.map((p, j) => {
+          const win = pts.slice(Math.max(0, j - 1), Math.min(pts.length, j + 2));
+          return { t: p.t, v: win.reduce((a, q) => a + q.v, 0) / win.length };
+        });
+        const smooth = sm.map((p) => X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ');
+        const dots = pts.map((p, j) =>
+          '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.v).toFixed(1) +
+          '" r="' + (j === pts.length - 1 ? 2.5 : 2) + '" fill="' +
+          (j === pts.length - 1 ? '#ffffff' : col) + '" opacity="' +
+          (j === pts.length - 1 ? '1' : '.55') + '"/>').join('');
+        const recent = vals.slice(-5);
+        const mean = recent.reduce((a, v) => a + v, 0) / recent.length;
+        sparkHtml =
+          '<div class="hsparkrow">' +
+          '<div class="hsparklabel"><b>Weight</b>10-day trend</div>' +
+          '<svg class="grow" height="30" viewBox="0 0 220 30" preserveAspectRatio="none">' +
+          '<polyline points="' + raw + '" fill="none" stroke="' + col +
+          '" stroke-width="1.2" opacity=".3"/>' +
+          '<polyline points="' + smooth + '" fill="none" stroke="' + col +
+          '" stroke-width="2" stroke-linecap="round"/>' + dots + '</svg>' +
+          '<div class="hsparkval">' + mean.toFixed(1) +
+          ' <span>avg ' + this._esc(dispUnit) + '</span></div></div>';
+      }
+
+      panel.innerHTML =
+        '<div class="histhead"><b>VISITS / DAY</b> &middot; past 7 days &middot; avg ' +
+        avg.toFixed(1) + '</div>' +
+        '<div class="hbars">' + barsHtml + '</div>' +
+        '<div class="hbaxis">' + axisHtml + '</div>' +
+        '<div class="hlog"><div class="histhead" style="margin-bottom:6px;">' + logTitle + '</div>' +
+        hdrRow + logHtml + '</div>' +
+        '<div class="hspark">' + sparkHtml + '</div>';
+    }
+
     /* ---------------- update ---------------- */
 
     _update() {
@@ -734,10 +1088,35 @@
           ' &middot; litter ' + this._esc(when);
       });
 
+      /* per-cat history panels */
+      this._cfg.cats.forEach((c, i) => {
+        const panel = $['cat' + i + 'hist'];
+        const car = $['cat' + i + 'car'];
+        if (car) {
+          const cv = this._histOn ? '' : 'none';
+          if (car.style.display !== cv) car.style.display = cv;
+        }
+        if (!panel) return;
+        const open = this._histOn && this._histOpen === i;
+        const pv = open ? 'block' : 'none';
+        if (panel.style.display !== pv) panel.style.display = pv;
+        if (car && car.dataset.open !== String(open)) {
+          car.dataset.open = String(open);
+          car.innerHTML = open ? '&#9652;' : '&#9662;';
+        }
+        if (open) this._renderHist(i, panel);
+      });
+
       /* expansion */
       const mainVis = this._expanded ? 'block' : 'none';
       if ($.main.style.display !== mainVis) $.main.style.display = mainVis;
       $.chev.classList.toggle('open', this._expanded);
+      // keep the shared chevron vertically centered on the cat-rows block
+      const endCat = $['cat' + (this._cfg.cats.length - 1)];
+      if ($.cat0 && endCat) {
+        const t = Math.round(($.cat0.offsetTop + endCat.offsetTop + endCat.offsetHeight) / 2) + 'px';
+        if ($.chev.style.top !== t) $.chev.style.top = t;
+      }
 
       /* occupied */
       const occ = this._isOn(this._lit.occupied);
