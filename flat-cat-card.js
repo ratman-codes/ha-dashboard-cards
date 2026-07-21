@@ -1,4 +1,4 @@
-/* flat-cat-card v1.16
+/* flat-cat-card v1.18
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -158,6 +158,16 @@
  * transitions, checklist item 7) and no JS height measurement. The
  * inner wrapper carries overflow:hidden with margin/padding
  * compensation so the edge-to-edge dividers aren't clipped.
+ * v1.17: the per-cat history panels animate with the same grid-rows
+ * technique. Each panel sits in an overflow-hidden grid wrapper
+ * (0fr <-> 1fr); the panel's own vertical padding and the wrapper's
+ * margins transition in step so the bordered box grows/shrinks
+ * smoothly with no resting hairline while closed.
+ * v1.18: fix for v1.17's resting hairlines - a 0fr grid track cannot
+ * shrink an item below its BORDER widths, so each closed panel left
+ * a squashed 2px border line under its cat row. The panel border now
+ * animates 0 -> 1px with the open state, making the closed panel
+ * truly zero-height.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -367,7 +377,9 @@
           </div>
           <div class="grow"></div>
         </div>
-        <div class="histpanel" id="cat${i}hist" data-noexpand="1"></div>`).join('');
+        <div class="histwrap" id="cat${i}histwrap" data-noexpand="1">
+          <div class="histpanel" id="cat${i}hist"></div>
+        </div>`).join('');
 
       const feederRows = this._fdrs.map((f, i) => `
         <div class="frow" id="fdr${i}">
@@ -553,14 +565,22 @@
           -webkit-text-stroke: 2px rgba(0,0,0,.6); paint-order: stroke fill;
         }
         .rcaret { color: rgba(160,160,160,.45); font-size: 10px; flex: 0 0 auto; margin-left: 1px; }
+        .histwrap {
+          display: grid; grid-template-rows: 0fr; overflow: hidden; margin: 0;
+          transition: grid-template-rows .35s cubic-bezier(.4,0,.2,1),
+                      margin .35s cubic-bezier(.4,0,.2,1);
+        }
+        .histwrap.open { grid-template-rows: 1fr; margin: 5px 0 6px; }
         .histpanel {
-          display: none;
-          border: 1px solid var(--divider-color, rgba(255,255,255,.1));
+          overflow: hidden; min-height: 0;
+          border: 0 solid var(--divider-color, rgba(255,255,255,.1));
           background: rgba(255,255,255,.03);
           border-radius: 10px;
-          padding: 11px 12px;
-          margin: 5px 0 6px 0;
+          padding: 0 12px;
+          transition: padding .35s cubic-bezier(.4,0,.2,1),
+                      border-width .35s cubic-bezier(.4,0,.2,1);
         }
+        .histwrap.open .histpanel { padding: 11px 12px; border-width: 1px; }
         .histhead { font-size: 11px; color: rgba(120,120,120,.9); margin-bottom: 8px; letter-spacing: .3px; }
         .histhead b { color: rgba(160,160,160,.9); font-weight: 600; }
         .hbars { display: flex; align-items: flex-end; gap: 7px; height: 46px; padding: 0 2px; }
@@ -1282,8 +1302,8 @@
         }
         if (!panel) return;
         const open = this._histOn && this._histOpen === i;
-        const pv = open ? 'block' : 'none';
-        if (panel.style.display !== pv) panel.style.display = pv;
+        const wrap = $['cat' + i + 'histwrap'];
+        if (wrap) wrap.classList.toggle('open', open);
         if (car && car.dataset.open !== String(open)) {
           car.dataset.open = String(open);
           car.innerHTML = open ? '&#9652;' : '&#9662;';
