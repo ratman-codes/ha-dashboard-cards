@@ -1,4 +1,7 @@
-/* flat-weather-card v1.2 - custom Lovelace card for the main dashboard.
+/* flat-weather-card v1.3 - custom Lovelace card for the main dashboard.
+   v1.3: chip delta - the forecast-vs-actual chip appends the signed
+   difference, e.g. "77 deg called - 78 deg so far (+1)". Plain ink by
+   design (the number speaks; no color).
    v1.2: dew point in the header - the humidity line becomes "Dew NN deg - RH%"
    when dew_entity is configured, with the dew value color-coded by the
    owner's window-flush thresholds: plain grey under 60F (crisp air),
@@ -301,9 +304,13 @@ class FlatWeatherCard extends HTMLElement {
       const f = parseFloat(sf.state), act = parseFloat(sa.state);
       if (!isNaN(f) && f > -50) {
         show = true;
-        const actTxt = (!isNaN(act) && act > -50)
-          ? ' &middot; actual so far <b>' + Math.round(act) + '&deg;</b>' : '';
-        const html = 'Today: forecast <b>' + Math.round(f) + '&deg;</b>' + actTxt;
+        let actTxt = '';
+        if (!isNaN(act) && act > -50) {
+          const d = Math.round(act) - Math.round(f);
+          const dTxt = ' (' + (d >= 0 ? '+' : '') + d + ')';
+          actTxt = ' &middot; actual so far <b>' + Math.round(act) + '&deg;</b><b>' + dTxt + '</b>';
+        }
+        const html = 'Today: <b>' + Math.round(f) + '&deg;</b> called' + actTxt;
         if (this._chipHtml !== html) { this._chipHtml = html; el.chiptxt.innerHTML = html; }
       }
     }

@@ -1,4 +1,4 @@
-/* flat-cat-card v1.11
+/* flat-cat-card v1.16
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -132,6 +132,32 @@
  * expander convention - whole card body toggles with no glyph; the
  * per-cat mini carets remain as the only affordance markers). The
  * live-measurement centering code went with it.
+ * v1.12: whole-card hover affordance (superseded by v1.13 same day).
+ * v1.13: expand/collapse is now confined to the cat-rows HEADER ZONE
+ * (Party-Mode-title pattern, owner request): tapping blank space in
+ * the cat-rows block toggles the card and that zone highlights on
+ * hover (rgba .05, suppressed while a cat row or history panel is
+ * hovered); the rest of the card body is inert - blank space in the
+ * litter/feeder/camera areas no longer collapses the card, only the
+ * controls there do their own jobs. Card-level tap now only closes
+ * an open More panel. Cat-row taps still open history panels;
+ * with history: false, header-zone taps (rows included) just toggle.
+ * v1.14: header zone bleeds to the card edges (negative margins,
+ * padding restored) so its hover highlight spans full card width
+ * with the card's top corner radius - a true title strip like the
+ * Party Mode overlay, not an inner box. When the alert strip is
+ * visible the zone yields the top edge to it (.withalert class).
+ * v1.15: condensed header zone (mockup option A, 28px avatars kept):
+ * zone padding 12/6 -> 8/4, row padding 3 -> 1, camera-strip gap
+ * 10 -> 8. ~16px less empty space above the cameras; text, avatar,
+ * and tap-target sizes unchanged.
+ * v1.16: animated expand/collapse. The litter/feeder section is a
+ * CSS grid whose row animates 0fr <-> 1fr at the house timing
+ * (.35s cubic-bezier(.4,0,.2,1)) - same smooth height slide as the
+ * dashboard's expander cards, no display toggling (which would kill
+ * transitions, checklist item 7) and no JS height measurement. The
+ * inner wrapper carries overflow:hidden with margin/padding
+ * compensation so the edge-to-edge dividers aren't clipped.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -375,12 +401,27 @@
       <style>
         :host { display: block; }
         ha-card { padding: 12px 14px; position: relative; overflow: hidden; }
+        #catblock {
+          margin: -12px -14px 0;
+          padding: 8px 14px 4px;
+          border-radius: var(--ha-card-border-radius, 12px);
+          border-bottom-left-radius: 0;
+          border-bottom-right-radius: 0;
+        }
+        #catblock.withalert { margin-top: 0; padding-top: 4px; }
+        @media (hover: hover) {
+          #catblock { cursor: pointer; transition: background .12s ease; }
+          #catblock:hover:not(:has(.cathit:hover, .histpanel:hover)) {
+            background: rgba(255,255,255,.05);
+          }
+          .histpanel { cursor: default; }
+        }
         .row { display: flex; align-items: center; gap: 10px; }
         .grow { flex: 1; min-width: 0; }
         .primary { font-size: 13.5px; font-weight: 500; color: var(--primary-text-color); }
         .second { font-size: 12px; color: var(--secondary-text-color); margin-top: 1px; }
         .tert { font-size: 11px; color: rgba(160,160,160,.7); font-weight: 400; }
-        .catrow { padding: 3px 24px 3px 0; }
+        .catrow { padding: 1px 24px 1px 0; }
         .cathit {
           display: flex; align-items: center; gap: 10px;
           min-width: 0; max-width: 100%;
@@ -417,7 +458,12 @@
           font-size: 11.5px; font-weight: 600;
         }
         .divider { height: 1px; background: var(--divider-color, rgba(255,255,255,.08)); margin: 11px -14px; }
-        .main { display: none; }
+        .main {
+          display: grid; grid-template-rows: 0fr;
+          transition: grid-template-rows .35s cubic-bezier(.4,0,.2,1);
+        }
+        .main.open { grid-template-rows: 1fr; }
+        .maininner { overflow: hidden; min-height: 0; margin: 0 -14px; padding: 0 14px; }
         .bar {
           height: 8px; border-radius: 4px; background: rgba(70,70,70,.3);
           overflow: hidden; position: relative;
@@ -492,7 +538,7 @@
           width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
           background: ${AMBER}; animation: fccpulse 1.6s ease-in-out infinite;
         }
-        .camstrip { display: flex; gap: 10px; margin-top: 10px; }
+        .camstrip { display: flex; gap: 10px; margin-top: 8px; }
         .camth {
           border-radius: 8px; height: 92px; position: relative; overflow: hidden;
           background: linear-gradient(135deg, #23282c 0%, #191d20 60%, #141719 100%);
@@ -556,6 +602,7 @@
           <div class="occdot" id="occdotc" title="litter box occupied"></div>
         </div>
         <div class="main" id="main">
+          <div class="maininner" id="maininner">
           <div class="divider"></div>
           <div id="litnormal">
             <div class="primary pressable lpzone" id="littitle" data-noexpand="lp">
@@ -600,6 +647,7 @@
             ${feederRows}
             ${bothRow}
           </div>
+          </div>
         </div>
         <div class="camstrip" id="camstrip">
           ${camTiles}
@@ -641,18 +689,32 @@
     /* ---------------- wiring ---------------- */
 
     _wire() {
-      // body tap: close More if open, else toggle expand.
+      // card-level tap: ONLY closes an open More panel (outside-tap).
+      // The card body is otherwise inert - expand/collapse lives on the
+      // cat-rows header zone alone (v1.13).
       this.$.card.addEventListener('click', (e) => {
+        if (!this._moreOpen) return;
         const path = e.composedPath();
         for (const el of path) {
           if (el === this.$.card) break;
+          if ((el.dataset && el.dataset.noexpand && el.dataset.noexpand !== 'lp') ||
+              el.tagName === 'BUTTON') return;
+        }
+        this._moreOpen = false;
+        this._update();
+      });
+
+      // header zone (cat-rows block): tap blank area = expand/collapse
+      this.$.catblock.addEventListener('click', (e) => {
+        const path = e.composedPath();
+        for (const el of path) {
+          if (el === this.$.catblock) break;
           if (el.dataset && el.dataset.noexpand) {
-            if (el.dataset.noexpand === 'lp') break; // long-press zones still expand on tap
+            if (el.dataset.noexpand === 'lp') break; // cat rows fall through only when history is disabled
             return;
           }
           if (el.tagName === 'BUTTON') return;
         }
-        if (this._moreOpen) { this._moreOpen = false; this._update(); return; }
         this._expanded = !this._expanded;
         if (!this._expanded) this._histOpen = -1;
         this._update();
@@ -1229,9 +1291,8 @@
         if (open) this._renderHist(i, panel);
       });
 
-      /* expansion */
-      const mainVis = this._expanded ? 'block' : 'none';
-      if ($.main.style.display !== mainVis) $.main.style.display = mainVis;
+      /* expansion (grid-rows 0fr->1fr animates the height) */
+      $.main.classList.toggle('open', this._expanded);
 
       /* occupied */
       const occ = this._isOn(this._lit.occupied);
@@ -1370,6 +1431,7 @@
       } else if ($.alerts.style.display !== 'none') {
         $.alerts.style.display = 'none';
       }
+      $.catblock.classList.toggle('withalert', alerts.length > 0);
     }
 
     _capitalize(s) {
