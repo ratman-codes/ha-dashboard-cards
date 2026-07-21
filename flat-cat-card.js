@@ -1,4 +1,4 @@
-/* flat-cat-card v1.6
+/* flat-cat-card v1.11
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -6,7 +6,7 @@
  *
  * WHAT IT DOES
  *  - Headerless. Tap anywhere on the card body to expand/collapse
- *    (chevron on the right edge rotates). Collapsed = cat rows +
+ *    (no glyph, house expander convention). Collapsed = cat rows +
  *    camera strip. Expanded adds litter section + feeder rows.
  *  - Cat rows: avatar (photo from entity_picture when available),
  *    weight, last litter visit. Long-press -> more-info.
@@ -66,6 +66,9 @@
  *                            # per-feeder on a feeder entry. Labels follow:
  *                            # eat="last eat", visit="last seen", feed="last feed"
  *   avatars: auto            # auto (photo if available) | initials
+ *   trend_days: 90           # weight-trend window in days (14-365);
+ *                            # drawn from permanent long-term statistics
+ *   history: true            # false disables the per-cat history panels
  *
  * v1.1: header example genericized to placeholder names (no functional
  * change from v1.0).
@@ -102,6 +105,33 @@
  * v1.6: Both-feeders row given the same block height as the two-line
  * feeder rows (min-height 38px) so the three chip/Feed columns are
  * evenly spaced.
+ * v1.7: history panel aligned full-width with the card content edges
+ * (flush left with the avatars, matching the camera strip) instead of
+ * indented under the text column.
+ * v1.8: subtle hover highlight on the per-cat tap target (house-style
+ * small-element hover, rgba(255,255,255,.05), pointer devices only
+ * via the hover media query).
+ * v1.9: weight trend now draws from HA's PERMANENT long-term
+ * statistics (recorder/statistics_during_period, daily means) over a
+ * configurable window - `trend_days: 90` default, clamp 14-365. Adds
+ * faint month gridlines, a start/mid/today axis, and a delta readout
+ * under the average (steady dot when < 0.15; amber when the smoothed
+ * change exceeds ~5% of body weight - the drift-alert case). X axis
+ * spans the FULL window, so sparse early data honestly clusters at
+ * the right edge and fills in over time. Falls back to the old
+ * 10-day raw-reading chart when fewer than 2 daily statistics exist.
+ * The 10-day per-visit log is unchanged.
+ * v1.10: zero-poisoning filter for the trend. The PetKit integration
+ * writes literal 0s to the scale sensor around reloads/dropouts, and
+ * HA's time-weighted daily means average them in (observed: a real
+ * 5.9 kg day with a 0.41 kg mean -> a fictional +5 lb "trend"). Per
+ * day: min > 0 -> trust the mean; zero-tainted day with a real
+ * reading -> use that day's max; all-zero day -> dropped. A median
+ * guard then discards any survivor below half the window median.
+ * v1.11: shared right-edge chevron removed (matches the house
+ * expander convention - whole card body toggles with no glyph; the
+ * per-cat mini carets remain as the only affordance markers). The
+ * live-measurement centering code went with it.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -212,6 +242,7 @@
       this._feedBoth = config.feed_both !== false && this._fdrs.length > 1;
       this._camLive = config.camera_mode === 'live';
       this._histOn = config.history !== false;
+      this._trendDays = Math.max(14, Math.min(365, Number(config.trend_days) || 90));
       this._built = false;
     }
 
@@ -357,6 +388,9 @@
           padding: 2px 8px 2px 2px; margin-left: -2px;
         }
         .cathit .cinfo { flex: 0 1 auto; min-width: 0; }
+        @media (hover: hover) {
+          .cathit:hover { background: rgba(255,255,255,.05); }
+        }
         .avatar {
           width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto;
           display: flex; align-items: center; justify-content: center;
@@ -369,14 +403,6 @@
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .cinfo b { color: var(--primary-text-color); font-weight: 500; }
-        .chev {
-          position: absolute; right: 8px; top: 34px; width: 20px; height: 20px;
-          display: flex; align-items: center; justify-content: center;
-          color: rgba(160,160,160,.55); font-size: 12px;
-          transform: translateY(-50%);
-          transition: transform .25s cubic-bezier(.4,0,.2,1);
-        }
-        .chev.open { transform: translateY(-50%) rotate(180deg); }
         .occdot {
           position: absolute; right: 12px; top: 74px;
           width: 8px; height: 8px; border-radius: 50%;
@@ -487,7 +513,7 @@
           background: rgba(255,255,255,.03);
           border-radius: 10px;
           padding: 11px 12px;
-          margin: 5px 20px 6px 38px;
+          margin: 5px 0 6px 0;
         }
         .histhead { font-size: 11px; color: rgba(120,120,120,.9); margin-bottom: 8px; letter-spacing: .3px; }
         .histhead b { color: rgba(160,160,160,.9); font-weight: 600; }
@@ -510,8 +536,14 @@
         .hsparkrow { display: flex; align-items: center; gap: 10px; }
         .hsparklabel { font-size: 11px; color: rgba(120,120,120,.9); flex: 0 0 auto; width: 78px; line-height: 1.35; }
         .hsparklabel b { color: rgba(160,160,160,.9); font-weight: 600; display: block; font-size: 12px; }
-        .hsparkval { flex: 0 0 auto; font-size: 12px; color: var(--primary-text-color); }
+        .hsparkval { flex: 0 0 auto; font-size: 12px; color: var(--primary-text-color); text-align: right; }
         .hsparkval span { font-size: 11px; color: rgba(120,120,120,.9); }
+        .hdelta { font-size: 11px; margin-top: 2px; }
+        .haxis {
+          display: flex; justify-content: space-between;
+          font-size: 9.5px; color: rgba(120,120,120,.9);
+          padding: 3px 58px 0 88px;
+        }
         .dimmed { opacity: .45; pointer-events: none; }
         .pressable { transition: transform .12s ease, background .12s ease; border-radius: 8px; }
         .pressable.pressed { transform: scale(.985); background: rgba(70,70,70,.22); }
@@ -521,7 +553,6 @@
         <div class="alertstrip" id="alerts"></div>
         <div id="catblock" style="position:relative;">
           ${catRows}
-          <div class="chev" id="chev">&#9660;</div>
           <div class="occdot" id="occdotc" title="litter box occupied"></div>
         </div>
         <div class="main" id="main">
@@ -843,7 +874,7 @@
       const end = new Date();
       const start = new Date(end.getTime() - 10 * 86400000);
       this._hist[i] = { at: Date.now(), loading: true };
-      this._hass.callWS({
+      const histP = this._hass.callWS({
         type: 'history/history_during_period',
         start_time: start.toISOString(),
         end_time: end.toISOString(),
@@ -851,8 +882,19 @@
         significant_changes_only: false,
         minimal_response: true,
         no_attributes: true
-      }).then((res) => {
-        this._hist[i] = { at: Date.now(), data: res || {} };
+      });
+      // long-term daily weight statistics for the trend window
+      const scaleId = this._catScale(c);
+      const statsP = scaleId ? this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: new Date(end.getTime() - this._trendDays * 86400000).toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: [scaleId],
+        period: 'day',
+        types: ['mean', 'min', 'max']
+      }).catch(() => null) : Promise.resolve(null);
+      Promise.all([histP, statsP]).then(([res, stats]) => {
+        this._hist[i] = { at: Date.now(), data: res || {}, stats: stats || {} };
         this._update();
       }).catch((err) => {
         this._hist[i] = {
@@ -1005,11 +1047,91 @@
         (filt ? 'no attributed visits that day' : 'no visits in the last 10 days') +
         '</span></div>';
 
-      // weight trend: raw dots + moving-average line
+      // weight trend: long-term daily means (preferred), raw-reading fallback
       let sparkHtml;
-      const pts = wts.slice().sort((a, b) => a.t - b.t).slice(-12)
+      const stRows = (h.stats && h.stats[this._catScale(c)]) || [];
+      // zero-poisoning filter: the integration writes 0s around
+      // reloads/dropouts and they contaminate time-weighted means.
+      let daily = stRows.map((r) => {
+        const t = typeof r.start === 'number' ? r.start : Date.parse(r.start);
+        let v = null;
+        if (r.min != null && Number(r.min) > 0 && r.mean != null) {
+          v = Number(r.mean);            // clean day: trust the mean
+        } else if (r.max != null && Number(r.max) > 0) {
+          v = Number(r.max);             // tainted day: use the real reading
+        }
+        return { t, v };
+      }).filter((p) => p.v != null && p.v > 0 && !isNaN(p.v) && !isNaN(p.t))
+        .sort((a, b) => a.t - b.t)
+        .map((p) => ({ t: p.t, v: toDisp(p.v) }));
+      if (daily.length >= 3) {
+        const sorted = daily.map((p) => p.v).slice().sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        daily = daily.filter((p) => p.v >= median * 0.5);
+      }
+      if (daily.length >= 2) {
+        const nowMs = new Date().getTime();
+        const w0 = nowMs - this._trendDays * 86400000;
+        const vals = daily.map((p) => p.v);
+        let lo = Math.min(...vals), hi = Math.max(...vals);
+        const vpad = Math.max((hi - lo) * 0.2, 0.15);
+        lo -= vpad; hi += vpad;
+        const X = (t) => 6 + Math.max(0, Math.min(1, (t - w0) / (nowMs - w0))) * 208;
+        const Y = (v) => 28 - (v - lo) / (hi - lo) * 22;
+        const sm = daily.map((p, j) => {
+          const win = daily.slice(Math.max(0, j - 2), Math.min(daily.length, j + 3));
+          return { t: p.t, v: win.reduce((a, q) => a + q.v, 0) / win.length };
+        });
+        let grid = '';
+        const gd = new Date(w0);
+        gd.setHours(0, 0, 0, 0); gd.setDate(1); gd.setMonth(gd.getMonth() + 1);
+        while (gd.getTime() < nowMs) {
+          const gx = X(gd.getTime()).toFixed(1);
+          grid += '<line x1="' + gx + '" y1="3" x2="' + gx +
+            '" y2="31" stroke="rgba(255,255,255,.07)" stroke-width="1"/>';
+          gd.setMonth(gd.getMonth() + 1);
+        }
+        const rawLine = daily.map((p) => X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ');
+        const smLine = sm.map((p) => X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1)).join(' ');
+        const dots = daily.map((p, j) =>
+          '<circle cx="' + X(p.t).toFixed(1) + '" cy="' + Y(p.v).toFixed(1) +
+          '" r="' + (j === daily.length - 1 ? 2.5 : 1.7) + '" fill="' +
+          (j === daily.length - 1 ? '#ffffff' : col) + '" opacity="' +
+          (j === daily.length - 1 ? '1' : '.4') + '"/>').join('');
+        const mean = sm[sm.length - 1].v;
+        const delta = mean - sm[0].v;
+        let deltaHtml;
+        if (Math.abs(delta) < 0.15) {
+          deltaHtml = '<div class="hdelta" style="color: rgba(120,120,120,.9);">&#9679; steady</div>';
+        } else {
+          const warn = Math.abs(delta) >= 0.05 * mean;
+          deltaHtml = '<div class="hdelta" style="color:' +
+            (warn ? '#ffc107' : 'rgba(160,160,160,.9)') + ';">' +
+            (delta > 0 ? '&#9650;' : '&#9660;') + ' ' + Math.abs(delta).toFixed(1) +
+            ' / ' + this._trendDays + 'd</div>';
+        }
+        const axStart = new Date(w0);
+        const axMid = new Date((w0 + nowMs) / 2);
+        sparkHtml =
+          '<div class="hsparkrow">' +
+          '<div class="hsparklabel"><b>Weight</b>' + this._trendDays + '-day trend</div>' +
+          '<svg class="grow" height="34" viewBox="0 0 220 34" preserveAspectRatio="none">' +
+          grid +
+          '<polyline points="' + rawLine + '" fill="none" stroke="' + col +
+          '" stroke-width="1" opacity=".3"/>' +
+          '<polyline points="' + smLine + '" fill="none" stroke="' + col +
+          '" stroke-width="2" stroke-linecap="round"/>' + dots + '</svg>' +
+          '<div class="hsparkval"><div>' + mean.toFixed(1) +
+          ' <span>avg ' + this._esc(dispUnit) + '</span></div>' + deltaHtml + '</div></div>' +
+          '<div class="haxis"><span>' + MONTHS[axStart.getMonth()] + ' ' + axStart.getDate() +
+          '</span><span>' + MONTHS[axMid.getMonth()] + '</span><span>today</span></div>';
+        // fallthrough skips the raw path below
+      }
+      const pts = daily.length >= 2 ? [] : wts.slice().sort((a, b) => a.t - b.t).slice(-12)
         .map((e) => ({ t: e.t, v: toDisp(e.s) }));
-      if (pts.length < 2) {
+      if (daily.length >= 2) {
+        // already built above
+      } else if (pts.length < 2) {
         sparkHtml = '<div class="histhead" style="margin:0;">weight trend &middot; not enough data yet</div>';
       } else {
         const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
@@ -1110,13 +1232,6 @@
       /* expansion */
       const mainVis = this._expanded ? 'block' : 'none';
       if ($.main.style.display !== mainVis) $.main.style.display = mainVis;
-      $.chev.classList.toggle('open', this._expanded);
-      // keep the shared chevron vertically centered on the cat-rows block
-      const endCat = $['cat' + (this._cfg.cats.length - 1)];
-      if ($.cat0 && endCat) {
-        const t = Math.round(($.cat0.offsetTop + endCat.offsetTop + endCat.offsetHeight) / 2) + 'px';
-        if ($.chev.style.top !== t) $.chev.style.top = t;
-      }
 
       /* occupied */
       const occ = this._isOn(this._lit.occupied);

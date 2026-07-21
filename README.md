@@ -35,7 +35,7 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   clean flow, full cleaning profiles (Away/Default popup editors), maintenance
   counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `flat-cat-card.js` — v1.6. Adds per-cat litter history panels (tap a cat row: visits-per-day bars, recent-visit log with duration + scale weight, 10-day weight trend — fetched live from the recorder, no helper entities) and configurable camera tiles (camera_image: eat | visit | feed). Consolidated cats card (PetKit litter box + two
+- `flat-cat-card.js` — v1.11. Weight trend now spans a configurable window (trend_days, default 90) from permanent long-term statistics, with month gridlines and a drift-delta readout. Adds per-cat litter history panels (tap a cat row: visits-per-day bars, recent-visit log with duration + scale weight, 10-day weight trend — fetched live from the recorder, no helper entities) and configurable camera tiles (camera_image: eat | visit | feed). Consolidated cats card (PetKit litter box + two
   feeders + per-cat rows): headerless tap-to-expand layout, litter level bar with
   Clean/More controls and a guarded two-step maintenance mode (Dump litter is
   hold-to-confirm), feeder rows with dispensed-vs-planned grams and portion-chip
