@@ -1,10 +1,11 @@
-/* flat-thermostat-card v2.3 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.4.5 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
-   temperature track right, native-style mode strip below, detached eco
-   (leaf) toggle beside the strip.
-   Built 2026-07-09, eco added 2026-07-20, by Claude for Ratman (design spec
-   archived in the "NAS / Smart Home" Claude project, doc
-   claude/ha-dashboard-notes.md).
+   temperature track right, native-style mode strip below (with optional
+   daily-runtime chip at its left), detached eco (leaf) toggle beside the
+   strip.
+   Built 2026-07-09, eco added 2026-07-20, runtime chip added 2026-07-23,
+   by Claude for Ratman (design spec archived in the "NAS / Smart Home"
+   Claude project, doc claude/ha-dashboard-notes.md).
 
    HOW THIS WORKS / HOW TO MAINTAIN IT (read me first, future person):
    - This entire card is plain JavaScript encoded as base64 and stored as a
@@ -28,7 +29,36 @@
      target_temp_low/high (verified live 2026-07-20: cool 76 -> eco -> 80),
      so the track just renders what the entity says - in green, read-only
      (handles hidden, drag disabled: Nest rejects setpoint changes in eco).
-   - button hides itself if the entity has no "eco" in preset_modes. */
+   - button hides itself if the entity has no "eco" in preset_modes.
+
+   RUNTIME CHIP (v2.4): optional chip at the LEFT of the bottom row showing
+   today's ACTIVE HVAC time (compressor/furnace actually running, from
+   hvac_action - not just mode-on time). Config:
+     runtime_cooling: <entity>   e.g. sensor.nest_cooling_runtime_today
+     runtime_heating: <entity>   e.g. sensor.nest_heating_runtime_today
+   These are daily utility_meter entities counting HOURS, fed by Riemann
+   integrals of 0/1 template signals on hvac_action (pipeline documented in
+   project doc claude/hvac-runtime-tracking-notes.md). Behavior: cool mode
+   shows the cooling meter, heat the heating meter, heat_cool both (two
+   compact rows); configured meters for the active mode are ALWAYS shown,
+   including at "0m" (owner choice, v2.4.1) - the chip hides only when
+   unconfigured, mode off, or the thermostat is unavailable. Unavailable
+   meter shows '--'. Tap = more-info history of the shown meter.
+   v2.4.5 (owner request): NO resting background on the chip - it reads as
+   a quiet stat, not a button; a subtle hover highlight (wrapped in
+   media hover:hover so touch devices skip it, per house style) reveals
+   that it is tappable.
+   Layout (v2.4.4 FINAL after owner iteration; supersedes the v2.4.2
+   offset-row and v2.4.3 two-column attempts): original two-row structure.
+   Row 1: temp/status block (20%, min 84px) + track vertically centered
+   beside it (as in v2.2/v2.3). Row 2: chip slot (same 20%/84px basis,
+   chip pinned 80px, centered under the temp block) + mode strip + eco.
+   Alignment invariants: strip left edge == track left edge (slot width +
+   8px row gap == temp-block width + 8px track left padding), and both
+   track and eco run flush to the card's right padding edge (right-side
+   track padding removed in v2.4.3; handle/label overhang at max temp
+   spills harmlessly into the card padding). Chip hidden (mode off /
+   unconfigured) leaves the empty slot so the strip never moves. */
 
 const ICONS = { off: 'mdi:power', cool: 'mdi:snowflake', heat: 'mdi:fire', heat_cool: 'mdi:sun-snowflake-variant' };
 const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107', eco: '#4caf50' };
@@ -48,6 +78,8 @@ class FlatThermostatCard extends HTMLElement {
     this._optModeUntil = 0;
     this._optEco = null;
     this._optEcoUntil = 0;
+    this._rtHtml = '';
+    this._rtEnt = null;
     if (!this.shadowRoot) this._createDom();
     this._modesBuilt = false;
   }
@@ -68,7 +100,7 @@ class FlatThermostatCard extends HTMLElement {
         :host { display: block; }
         ha-card { padding: 12px 14px 10px 14px; }
         .main { display: flex; gap: 0; align-items: center; padding: 4px 0 0 0; }
-        .curblock { flex: 0 0 25%; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; position: relative; z-index: 0; cursor: pointer; }
+        .curblock { flex: 0 0 20%; min-width: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; z-index: 0; cursor: pointer; }
         .cur::before { content: ''; position: absolute; width: 104px; height: 84px; top: 50%; left: 50%;
           transform: translate(-50%, -50%);
           background: radial-gradient(closest-side, var(--glow, transparent) 0%, transparent 100%);
@@ -76,7 +108,7 @@ class FlatThermostatCard extends HTMLElement {
         .cur { position: relative; z-index: 0; font-size: 32px; font-weight: 500; line-height: 1.05; color: var(--primary-text-color); }
         .cur sup { position: absolute; left: calc(100% + 1px); top: 2px; font-size: 14px; color: var(--secondary-text-color); font-weight: 400; }
         .st { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
-        .bar-wrap { position: relative; flex: 1; padding: 0 10px; }
+        .bar-wrap { position: relative; flex: 1; min-width: 0; padding: 0 0 0 8px; }
         .bar { position: relative; height: 16px; border-radius: 8px; background: rgba(70,70,70,.3); touch-action: none; cursor: pointer; }
         .bar.ecolock { cursor: default; }
         .fill { position: absolute; top: 0; bottom: 0; pointer-events: none; display: none;
@@ -101,7 +133,8 @@ class FlatThermostatCard extends HTMLElement {
         .bar.dragging .fill, .bar.dragging .handle, .bar.dragging .blabel, .bar.dragging .curdot { transition: none; }
         .offlabel { position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
           color: var(--secondary-text-color); font-size: 13px; display: none; }
-        .bottom { display: flex; gap: 8px; margin-top: 8px; }
+        .bottom { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+        .chipslot { flex: 0 0 20%; min-width: 84px; display: flex; align-items: center; justify-content: center; }
         .modes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); height: 42px;
           border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden; }
         .mode { display: flex; align-items: center; justify-content: center; border-radius: 12px;
@@ -119,6 +152,19 @@ class FlatThermostatCard extends HTMLElement {
         .ecobtn.on:hover { background: ${COLORS.eco}; }
         .ecobtn.on ha-icon { color: #fff; }
         .ecobtn.gone { display: none; }
+        .rtchip { flex: 0 0 auto; box-sizing: border-box; width: 80px; height: 42px; border-radius: 12px;
+          background: transparent; transition: background .15s;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          padding: 0 4px; gap: 1px; cursor: pointer; }
+        @media (hover: hover) { .rtchip:hover { background: rgba(255,255,255,.07); } }
+        .rtchip .rrow { font-size: 12px; font-weight: 600; color: var(--primary-text-color);
+          line-height: 1.2; display: flex; align-items: center; gap: 4px; }
+        .rtchip .rrow ha-icon { --mdc-icon-size: 12px; width: 12px; height: 12px; display: flex;
+          align-items: center; justify-content: center; line-height: 0; }
+        .rtchip .rcap { font-size: 8.5px; color: var(--secondary-text-color);
+          text-transform: uppercase; letter-spacing: .6px; }
+        .rtchip.two .rrow { font-size: 11px; }
+        .rtchip.gone { display: none; }
         .unavailable { opacity: .4; pointer-events: none; }
       </style>
       <ha-card>
@@ -144,18 +190,28 @@ class FlatThermostatCard extends HTMLElement {
           </div>
         </div>
         <div class="bottom">
+          <div class="chipslot"><div class="rtchip gone" id="rtchip"></div></div>
           <div class="modes" id="modes"></div>
           <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon></div>
         </div>
       </ha-card>
     `;
     this._el = {};
-    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','curval','unit','state']
+    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','curval','unit','state']
       .forEach(id => this._el[id] = root.getElementById(id));
     this._el.bfheat.style.background = COLORS.heat;
     this._el.bfcool.style.background = COLORS.cool;
     this._bindDrag();
     this._el.ecobtn.addEventListener('click', () => this._toggleEco());
+    // tapping the runtime chip opens more-info (history) for the shown meter
+    this._el.rtchip.addEventListener('click', () => {
+      if (!this._rtEnt) return;
+      this.dispatchEvent(new CustomEvent('hass-more-info', {
+        detail: { entityId: this._rtEnt },
+        bubbles: true,
+        composed: true,
+      }));
+    });
     // clicking the current temp / status area opens the native more-info dialog
     this._el.curblock.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('hass-more-info', {
@@ -231,6 +287,48 @@ class FlatThermostatCard extends HTMLElement {
     this._buildModes();
     this._updateModes(mode);
     this._updateBar(mode);
+    this._updateRuntime(mode, act, unavailable);
+  }
+
+  /* ---------- runtime chip (v2.4) ---------- */
+  _fmtRuntime(v) {
+    if (v == null) return '--';
+    let h = Math.floor(v);
+    let m = Math.round((v - h) * 60);
+    if (m === 60) { h += 1; m = 0; }
+    return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+  }
+
+  _updateRuntime(mode, act, unavailable) {
+    const el = this._el.rtchip;
+    const defs = [
+      { key: 'runtime_cooling', icon: this._config.icon_cool || ICONS.cool, color: LABEL_COLORS.cool, act: 'cooling' },
+      { key: 'runtime_heating', icon: this._config.icon_heat || ICONS.heat, color: LABEL_COLORS.heat, act: 'heating' },
+    ];
+    const want = mode === 'cool' ? [defs[0]] : mode === 'heat' ? [defs[1]] : mode === 'heat_cool' ? defs : [];
+    const rows = [];
+    for (const d of want) {
+      const ent = this._config[d.key];
+      if (!ent) continue;
+      const st = this._hass.states[ent];
+      if (!st) continue;
+      const num = parseFloat(st.state);
+      const v = isNaN(num) ? null : num;
+      // v2.4.1: configured meters for the active mode always show ("0m" included); '--' when unavailable
+      rows.push({ ent: ent, icon: d.icon, color: d.color, v: v });
+    }
+    if (unavailable || !rows.length) {
+      el.classList.add('gone');
+      this._rtEnt = null;
+      return;
+    }
+    el.classList.remove('gone');
+    el.classList.toggle('two', rows.length > 1);
+    const html = rows.map(r =>
+      '<div class="rrow"><ha-icon icon="' + r.icon + '" style="color:' + r.color + '"></ha-icon>' + this._fmtRuntime(r.v) + '</div>'
+    ).join('') + (rows.length === 1 ? '<div class="rcap">today</div>' : '');
+    if (html !== this._rtHtml) { el.innerHTML = html; this._rtHtml = html; }
+    this._rtEnt = rows[0].ent;
   }
 
   _buildModes() {
@@ -431,5 +529,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-thermostat-card',
   name: 'Flat Thermostat Card',
-  description: 'Slim flat thermostat with dual-handle temperature track, native-style mode strip, and eco toggle',
+  description: 'Slim flat thermostat with dual-handle temperature track, native-style mode strip, eco toggle, and daily HVAC runtime chip',
 });

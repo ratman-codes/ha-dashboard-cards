@@ -11,12 +11,15 @@ itself: the entire JS file is base64-encoded into the resource URL
 backup, and has zero runtime dependencies on the internet or on this repo.
 
 ## Contents
-- `flat-thermostat-card.js` — v2.3. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.4.5. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
-  and a detached eco-preset leaf button (green when on; track renders the
+  a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
-  writes in eco). Used as `type: custom:flat-thermostat-card` with a climate
-  entity. HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
+  writes in eco), and an optional daily HVAC runtime chip (v2.4.x) under the temp
+  block showing today's active compressor/furnace hours from daily runtime meter
+  entities (`runtime_cooling`/`runtime_heating` in YAML; hover-highlight only,
+  tap opens the meter's history). Used as `type: custom:flat-thermostat-card`
+  with a climate entity. HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
