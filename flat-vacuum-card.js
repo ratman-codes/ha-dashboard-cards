@@ -1,4 +1,22 @@
-/* flat-vacuum-card v2.6 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.7 - custom Lovelace card for the main dashboard.
+   v2.7: EDGE 2 MIGRATION - all entities remapped to the qx_revo_ultra_2
+   prefix (Roborock Qrevo Edge 2, Costco "QX Revo Ultra 2"). Start command
+   is now the native vacuum.start service (the old full_cleaning button
+   was a cloud ROUTINE on the returned unit - integration creates buttons
+   per app routine; none exist on the new device and none are needed).
+   DORMANT-ENTITY PATTERN: the Edge 2 integration currently exposes no
+   dock error sensor, no dock strainer counter, and no empty-mode select.
+   Those rows/tokens sleep when their entity is absent from hass.states
+   and wake automatically if a future integration update (or lazy cloud
+   property creation) adds them. Absent dock error sensor = NO error.
+   SMOOTH COLLAPSE: outer body + all four groups now use the
+   grid-template-rows 0fr/1fr technique (runtime .gin wrappers); ALL
+   hardcoded height math is gone - groups always open to exact content
+   size. Group headers + title header gained hover/active affordance.
+   Mop intensity on this model: off/slight/low/medium/moderate/high/
+   extreme (7 levels); smart_mode exists on suction + mop mode (DirTect;
+   the app calls it SmartPlan). In smart_mode the intensity select reads
+   'unknown' - profiles stay deterministic, smart is a per-run choice.
    v2.6: FULL CLEANING PROFILES - the Auto-clean suction rows became
    Away profile / Default profile rows: summary chip "max - high - deep >",
    tapping the row opens a popup editor with segmented pickers for
@@ -56,14 +74,14 @@
    REPLACES v1.8's trailing "\u00b7 blocked"/"\u26a0" suffixes and whole-line
    amber (owner-chosen two-tone). Eligibility text is suppressed while
    blocked. (2) Cleaning progress reads "34% done". (3) Current room appears
-   in the cleaning line (sensor.roborock_q_revo_current_room). (4) Battery
+   in the cleaning line (sensor.qx_revo_ultra_2_current_room). (4) Battery
    with a bolt appears in the DOCKED/IDLE line ONLY (deliberate: a second
    naked percentage in the cleaning line misreads as charge - owner-tested).
    (5) MAP BUTTON in the header while moving (cleaning/paused/returning)
    opens a dialog showing the live integration map (image entity's
    entity_picture proxy URL, session-authed; refreshes while open). The map
    dialog reuses the guide overlay with steps/footer hidden. (6) DOCK-ACTIVITY
-   states: sensor.roborock_q_revo_status disambiguates 'docked' - during
+   states: sensor.qx_revo_ultra_2_status disambiguates 'docked' - during
    washing_the_mop / going_to_wash_the_mop / emptying_the_bin the header shows
    that activity in cyan (run-in-progress) instead of the idle Docked line;
    play/arm suppressed, map available. 'charging' and stale 'paused' are
@@ -157,12 +175,11 @@ class FlatVacuumCard extends HTMLElement {
 
   setConfig(config) {
     this._config = Object.assign({
-      vacuum: 'vacuum.roborock_q_revo',
-      last_clean_sensor: 'sensor.roborock_q_revo_last_clean_end',
-      progress_sensor: 'sensor.roborock_q_revo_cleaning_progress',
-      error_sensor: 'sensor.roborock_q_revo_vacuum_error',
-      dock_error_sensor: 'sensor.roborock_q_revo_dock_dock_error',
-      clean_button: 'button.roborock_q_revo_full_cleaning',
+      vacuum: 'vacuum.qx_revo_ultra_2',
+      last_clean_sensor: 'sensor.qx_revo_ultra_2_last_clean_end',
+      progress_sensor: 'sensor.qx_revo_ultra_2_cleaning_progress',
+      error_sensor: 'sensor.qx_revo_ultra_2_vacuum_error',
+      dock_error_sensor: 'sensor.qx_revo_ultra_2_dock_dock_error',
       automation: 'automation.vacuum_auto_clean_opportunistic_backstop',
       min_days_entity: 'input_number.vacuum_min_days_between',
       delay_entity: 'input_number.vacuum_departure_delay',
@@ -174,32 +191,32 @@ class FlatVacuumCard extends HTMLElement {
       notify_slider_max: 10,
       away_sensor: 'binary_sensor.household_all_away',
       maint: [
-        ['m_main', 'mdi:broom', 'Main brush', 'sensor.roborock_q_revo_main_brush_time_left'],
-        ['m_side', 'mdi:brush-variant', 'Side brush', 'sensor.roborock_q_revo_side_brush_time_left'],
-        ['m_filt', 'mdi:air-filter', 'Filter', 'sensor.roborock_q_revo_filter_time_left'],
-        ['m_sens', 'mdi:eye-outline', 'Sensor cleaning', 'sensor.roborock_q_revo_sensor_time_left'],
-        ['m_strn', 'mdi:filter-variant', 'Cleaning tray', 'sensor.roborock_q_revo_dock_strainer_time_left'],
+        ['m_filt', 'mdi:air-filter', 'Filter', 'sensor.qx_revo_ultra_2_filter_time_left'],
+        ['m_main', 'mdi:broom', 'Main brush', 'sensor.qx_revo_ultra_2_main_brush_time_left'],
+        ['m_side', 'mdi:brush-variant', 'Side brush', 'sensor.qx_revo_ultra_2_side_brush_time_left'],
+        ['m_sens', 'mdi:eye-outline', 'Sensor cleaning', 'sensor.qx_revo_ultra_2_sensor_time_left'],
         ['m_mop', 'mdi:circle-multiple-outline', 'Mop pads', null],
+        ['m_strn', 'mdi:filter-variant', 'Cleaning tray', 'sensor.qx_revo_ultra_2_dock_strainer_time_left'],
         ['m_bag', 'mdi:sack', 'Dust bag', null],
       ],
       guides_base: '/local/vacuum-guides/',
-      room_sensor: 'sensor.roborock_q_revo_current_room',
-      battery_sensor: 'sensor.roborock_q_revo_battery',
-      water_sensor: 'binary_sensor.roborock_q_revo_water_shortage',
-      map_entity: 'image.roborock_q_revo_map_0',
-      status_sensor: 'sensor.roborock_q_revo_status',
-      mop_intensity_entity: 'select.roborock_q_revo_mop_intensity',
-      mop_mode_entity: 'select.roborock_q_revo_mop_mode',
-      empty_mode_entity: 'select.roborock_q_revo_dock_empty_mode',
-      volume_entity: 'number.roborock_q_revo_volume',
-      dnd_entity: 'switch.roborock_q_revo_do_not_disturb',
-      dnd_begin_entity: 'time.roborock_q_revo_do_not_disturb_begin',
-      dnd_end_entity: 'time.roborock_q_revo_do_not_disturb_end',
-      child_lock_entity: 'switch.roborock_q_revo_dock_child_lock',
-      drying_entity: 'binary_sensor.roborock_q_revo_dock_mop_drying',
-      drying_time_entity: 'sensor.roborock_q_revo_dock_mop_drying_remaining_time',
-      clean_begin_sensor: 'sensor.roborock_q_revo_last_clean_begin',
-      clean_area_sensor: 'sensor.roborock_q_revo_cleaning_area',
+      room_sensor: 'sensor.qx_revo_ultra_2_current_room',
+      battery_sensor: 'sensor.qx_revo_ultra_2_battery',
+      water_sensor: 'binary_sensor.qx_revo_ultra_2_water_shortage',
+      map_entity: 'image.qx_revo_ultra_2_map_0',
+      status_sensor: 'sensor.qx_revo_ultra_2_status',
+      mop_intensity_entity: 'select.qx_revo_ultra_2_mop_intensity',
+      mop_mode_entity: 'select.qx_revo_ultra_2_mop_mode',
+      empty_mode_entity: 'select.qx_revo_ultra_2_dock_empty_mode',
+      volume_entity: 'number.qx_revo_ultra_2_volume',
+      dnd_entity: 'switch.qx_revo_ultra_2_do_not_disturb',
+      dnd_begin_entity: 'time.qx_revo_ultra_2_do_not_disturb_begin',
+      dnd_end_entity: 'time.qx_revo_ultra_2_do_not_disturb_end',
+      child_lock_entity: 'switch.qx_revo_ultra_2_dock_child_lock',
+      drying_entity: 'binary_sensor.qx_revo_ultra_2_dock_mop_drying',
+      drying_time_entity: 'sensor.qx_revo_ultra_2_dock_mop_drying_remaining_time',
+      clean_begin_sensor: 'sensor.qx_revo_ultra_2_last_clean_begin',
+      clean_area_sensor: 'sensor.qx_revo_ultra_2_cleaning_area',
       run_trigger_entity: 'input_text.vacuum_run_trigger',
       suction_away_entity: 'input_select.vacuum_suction_away',
       suction_default_entity: 'input_select.vacuum_suction_default',
@@ -273,6 +290,9 @@ class FlatVacuumCard extends HTMLElement {
         ha-card { padding: 0; overflow: hidden; position: relative; }
         .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
           cursor: pointer; transition: transform .12s ease, background .12s ease; }
+        .hdr:hover { background: rgba(255,255,255,.04); }
+        .grow:hover { background: rgba(255,255,255,.05); }
+        .grow:active { transform: scale(.99); }
         .hdr.pressed { transform: scale(.985); background: rgba(70,70,70,.22); }
         .hdr ha-icon { --mdc-icon-size: 26px; width: 26px; height: 26px; display: flex;
           align-items: center; justify-content: center; line-height: 0; flex: none; }
@@ -281,7 +301,10 @@ class FlatVacuumCard extends HTMLElement {
         .ht .s { font-size: 12px; color: var(--secondary-text-color); line-height: 1.3;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .hctl { display: flex; align-items: center; gap: 8px; flex: none; }
-        .body { overflow: hidden; max-height: 0; transition: max-height .3s cubic-bezier(.4,0,.2,1); }
+        .body { display: grid; grid-template-rows: 0fr;
+          transition: grid-template-rows .3s cubic-bezier(.4,0,.2,1); }
+        .body.open { grid-template-rows: 1fr; }
+        .body > .gin, .gbody > .gin { overflow: hidden; min-height: 0; }
         .grow { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px;
           border-top: 1px solid rgba(255,255,255,.05); cursor: pointer;
           transition: transform .12s ease, background .12s ease; }
@@ -297,8 +320,10 @@ class FlatVacuumCard extends HTMLElement {
           align-items: center; justify-content: center; line-height: 0; flex: none;
           color: #666; transition: transform .25s ease; }
         .chev.open { transform: rotate(180deg); }
-        .gbody { overflow: hidden; max-height: 0; transition: max-height .28s cubic-bezier(.4,0,.2,1);
+        .gbody { display: grid; grid-template-rows: 0fr;
+          transition: grid-template-rows .28s cubic-bezier(.4,0,.2,1);
           background: rgba(0,0,0,.25); }
+        .gbody.open { grid-template-rows: 1fr; }
         .srow { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 14px 0 28px;
           border-top: 1px solid rgba(255,255,255,.04);
           transition: transform .12s ease, background .12s ease; }
@@ -742,14 +767,14 @@ class FlatVacuumCard extends HTMLElement {
     this._grp = this._grp === name ? null : name;
     if (this._closeMenu) this._closeMenu();
     if (this._grp === 'hist') this._fetchHist();
-    const map = { auto: [this._el.b_auto, this._el.ch_auto, 332],
-                  maint: [this._el.b_maint, this._el.ch_maint, 330 + (this._issueCt || 0) * 36],
-                  conf: [this._el.b_conf, this._el.ch_conf, 335],
-                  hist: [this._el.b_hist, this._el.ch_hist, this._histH || 170] };
+    const map = { auto: [this._el.b_auto, this._el.ch_auto],
+                  maint: [this._el.b_maint, this._el.ch_maint],
+                  conf: [this._el.b_conf, this._el.ch_conf],
+                  hist: [this._el.b_hist, this._el.ch_hist] };
     Object.keys(map).forEach(k => {
-      const [b, ch, h] = map[k];
+      const [b, ch] = map[k];
       const open = this._grp === k;
-      b.style.maxHeight = open ? h + 'px' : '0px';
+      b.classList.toggle('open', open);
       ch.classList.toggle('open', open);
     });
   }
@@ -766,10 +791,19 @@ class FlatVacuumCard extends HTMLElement {
     });
     ['pointerup','pointercancel','pointerleave'].forEach(ev =>
       el.hdr.addEventListener(ev, () => clearTimeout(timer)));
+    /* grid-collapse wrappers: each collapsing container needs a single
+       grid-row child (min-height:0). Built at runtime so the markup
+       stays flat; element references survive the move. */
+    [el.body, el.b_auto, el.b_maint, el.b_conf, el.b_hist].forEach((b) => {
+      const w = document.createElement('div');
+      w.className = 'gin';
+      while (b.firstChild) w.appendChild(b.firstChild);
+      b.appendChild(w);
+    });
     el.hdr.addEventListener('click', () => {
       if (this._lp) { this._lp = false; return; }
       this._open = !this._open;
-      el.body.style.maxHeight = this._open ? '620px' : '0px';
+      el.body.classList.toggle('open', this._open);
     });
     /* header controls: keep presses off the header */
     el.hctl.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -800,7 +834,7 @@ class FlatVacuumCard extends HTMLElement {
         if (fan && mi && mm)
           this._svc('input_text', 'set_value', { entity_id: c.run_trigger_entity,
             value: 'manual ' + new Date().toISOString() + ' M:' + fan + '|' + mi + '|' + mm });
-        this._svc('button', 'press', { entity_id: c.clean_button });
+        this._svc('vacuum', 'start', { entity_id: c.vacuum });
       }
       disarm();
     });
@@ -954,15 +988,20 @@ class FlatVacuumCard extends HTMLElement {
         this._menuKey = key;
       });
     };
+    /* smart_mode is a ONE-WAY DOOR from HA: the device rejects individual
+       mode commands while in SmartPlan, so only the Roborock app can exit
+       it. It stays visible as a CURRENT value but is never offered as a
+       pickable option in the Config dropdowns. */
+    const noSmart = (l) => (l || []).filter((o) => o !== 'smart_mode');
     const selSpec = (entity) => ({
-      opts: () => ((this._st(entity) || {}).attributes || {}).options,
+      opts: () => noSmart(((this._st(entity) || {}).attributes || {}).options),
       cur: () => (this._st(entity) || {}).state,
       set: (o) => this._svc('select', 'select_option', { entity_id: entity, option: o }),
     });
     dd(el.c_mopi, 'mopi', selSpec(c.mop_intensity_entity));
     dd(el.c_mopm, 'mopm', selSpec(c.mop_mode_entity));
     dd(el.c_fan, 'fan', {
-      opts: () => ((this._st(c.vacuum) || {}).attributes || {}).fan_speed_list,
+      opts: () => noSmart(((this._st(c.vacuum) || {}).attributes || {}).fan_speed_list),
       cur: () => ((this._st(c.vacuum) || {}).attributes || {}).fan_speed,
       set: (o) => this._svc('vacuum', 'set_fan_speed', { entity_id: c.vacuum, fan_speed: o }),
     });
@@ -1409,9 +1448,6 @@ class FlatVacuumCard extends HTMLElement {
         '</span><span class="hmid">' + mid +
         '</span><span class="rt stat">' + right + '</span></div>' + profLine + '</div>';
     }).join('') || '<div class="hrun"><div class="hl1"><span class="hmid">no runs in the last 14 days</span></div></div>';
-    const profCt = runs.slice(0, 4).filter((r) => r.prof && r.prof.length > 2).length;
-    this._histH = 170 + profCt * 12;
-    if (this._grp === 'hist') el.b_hist.style.maxHeight = this._histH + 'px';
     const cleaned = new Set(runs.map((r) => {
       const d = new Date(r.endT); d.setHours(0, 0, 0, 0); return d.getTime();
     }));
@@ -1437,7 +1473,13 @@ class FlatVacuumCard extends HTMLElement {
     const as = this._st(c.automation);
     const autoOn = this._optv('auto', as ? as.state : 'off') === 'on';
     const errVac = (this._st(c.error_sensor) || {}).state !== 'none';
-    const errDock = (this._st(c.dock_error_sensor) || {}).state !== 'ok';
+    /* dormant-entity guard: the Edge 2 integration does not (currently)
+       expose a dock error sensor. Absent entity = no dock issues; if a
+       future integration update creates it, the row+token wake untouched. */
+    const dockSt = this._hass.states[c.dock_error_sensor]
+      ? this._hass.states[c.dock_error_sensor].state : null;
+    const errDock = dockSt != null && dockSt !== 'ok'
+      && dockSt !== 'unknown' && dockSt !== 'unavailable';
     const water = (this._st(c.water_sensor) || {}).state === 'on';
     const warnTok = errVac ? 'blocked' : errDock ? 'dock' : water ? 'water' : null;
     const prog = this._num(c.progress_sensor);
@@ -1571,13 +1613,18 @@ class FlatVacuumCard extends HTMLElement {
     if (errDock) el.iss_dock_t.textContent = 'Dock: ' + pretty(dockErrState);
     show(el.iss_water, water);
     const issueCt = (errVac ? 1 : 0) + (errDock ? 1 : 0) + (water ? 1 : 0);
-    this._issueCt = issueCt;
-    if (this._grp === 'maint')
-      el.b_maint.style.maxHeight = (330 + issueCt * 36) + 'px';
     let overdue = 0, unknownCt = 0, counterRows = 0;
     c.maint.forEach(([id, , , entity]) => {
       const vEl = el[id + '_v'];
       const iEl = el[id + '_ic'];
+      /* dormant-entity guard: hide counter rows whose entity does not
+         exist on this device (e.g. dock strainer on the Edge 2). Rows
+         with a null entity are guide-only by design and always show. */
+      if (entity && !this._hass.states[entity]) {
+        vEl.parentElement.style.display = 'none';
+        return;
+      }
+      vEl.parentElement.style.display = '';
       if (!entity) {
         vEl.textContent = 'as needed';
         vEl.style.color = 'rgba(158,158,158,.55)';
@@ -1629,7 +1676,9 @@ class FlatVacuumCard extends HTMLElement {
     el.c_mopm.textContent = selTxt('mopm', c.mop_mode_entity) + ' \u25be';
     const va = (this._st(c.vacuum) || {}).attributes || {};
     el.c_fan.textContent = (this._optv('fan', va.fan_speed) || '--') + ' \u25be';
-    el.c_empty.textContent = selTxt('empty', c.empty_mode_entity);
+    show(el.rempty, !!this._hass.states[c.empty_mode_entity]);
+    if (this._hass.states[c.empty_mode_entity])
+      el.c_empty.textContent = selTxt('empty', c.empty_mode_entity);
     const drying = (this._st(c.drying_entity) || {}).state;
     const dryMin = this._num(c.drying_time_entity);
     if (drying === 'on') {
