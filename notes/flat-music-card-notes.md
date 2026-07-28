@@ -1,8 +1,9 @@
 # flat-music-card — design notes (sanitized repo copy)
 
 Whole-home music control card for a Music Assistant sync group, in the flat-* card
-family. Built + iterated to v1.21 in one session (2026-07-27). Deployed as a
-data-URL Lovelace resource via the Card Manager card; this repo copy is archive only.
+family. Built + iterated to v1.21 in one session (2026-07-27); extended to v1.25
+(2026-07-28: shared lock helper, follow-the-leader automation, mute-wins policy).
+Deployed as a data-URL Lovelace resource via the Card Manager card; this repo copy is archive only.
 Full private notes (real entity ids, inventory, upstream-bug forensics) live in the
 "NAS / Smart Home" Claude project (`claude/flat-music-card-notes.md`).
 
@@ -32,6 +33,22 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
   ratio. Baseline editor: draft-only steppers + typable values + "capture
   current volumes"; save (input_number.set_value) is the only write path,
   reset/close discards.
+- Shared lock (v1.22): lock_entity binds the ratio-lock chip to an
+  input_boolean the card reads/writes (optimistic hold, follows external
+  toggles) - so an HA automation can share the same lock state. Companion
+  pattern: a "follow the leader" automation that, while the lock helper is on
+  and the group plays, scales the other rooms to the baseline ratio whenever
+  the leader room's volume changes (the MA Companion desktop app syncs the
+  PC's OS volume into its player, so OS volume keys drive the whole house).
+  Cards only run while a dashboard is open - always-on behavior belongs in
+  the automation; the helper is the shared state.
+- Mute policy (v1.24/v1.25): MA quirk - volume_set on a muted player audibly
+  un-mutes it while is_volume_muted stays true (stale mute UI). Policy: MUTE
+  WINS on incidental writes (lock-scaling and the follow automation skip
+  muted rooms; the group master slider switches to client-side proportional
+  scaling of unmuted members while any member is muted, since MA's server-side
+  fan-out cannot be intercepted); balance apply is the deliberate exception -
+  it explicitly un-mutes (volume_mute false) then restores baselines.
 
 ## YAML shape (placeholders)
     type: custom:flat-music-card
@@ -45,8 +62,9 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
     cast_on_script: script.my_cast_script    # optional cast chip
     cast_off_script: script.my_uncast_script
     cast_label: pc / cast_match: vban_receiver
-    labels: { ma: browse, playlists: music, balance: link }
+    labels: { ma: browse, playlists: music, balance: link, lock: hold }
     strip_order: [ma, playlists, cast, balance]
+    lock_entity: input_boolean.my_music_lock   # shared ratio-lock state
     title / group_label / start_open / show_progress / lock_default
 
 ## Known upstream context
@@ -70,3 +88,8 @@ v1.15 57634 d74d2bfc cast toggle · v1.16 58097 6aa7a471 configurable labels ·
 v1.17 58199 46e797e9 lock into split chip · v1.18 58596 0c5af426 strip_order ·
 v1.19 58759 31fcf4b7 zone stretch · v1.20 58884 5666dbe8 chip height fix ·
 v1.21 60776 77091fde typable baseline values.
+
+2026-07-28: v1.22 61890 ff5a98a5 lock_entity binding · v1.23 62074 7ba87d3c
+labels.lock revived (dead since the v1.17 split-chip fold-in) · v1.24 62565
+ef038953 balance apply un-mutes explicitly (stale-mute fix) · v1.25 64923
+6058c37e mute-wins on all incidental volume paths.

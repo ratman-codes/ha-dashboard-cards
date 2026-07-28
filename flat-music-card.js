@@ -1,4 +1,4 @@
-/* flat-music-card v1.21
+/* flat-music-card v1.25
    Whole-home music control card for Music Assistant sync groups.
    Flat-family bespoke card. Header row is a mini-player: album art,
    title/artist, prev/play/next - always visible, fixed ~60px.
@@ -73,6 +73,31 @@
    is an invisible input (identical rendering); click to type,
    Enter/blur commits to the draft (clamped 0-100), Escape cancels,
    steppers unchanged.
+   v1.22: lock can bind to an input_boolean via lock_entity - the
+   chip reads/writes the helper (optimistic hold, follows external
+   toggles), so automations can share the same lock state (e.g. a
+   follow-the-leader volume automation). Without lock_entity the
+   old card-internal lock behavior is unchanged; lock_default only
+   applies to the internal fallback.
+   v1.23: labels.lock works again (dead since the v1.17 split-chip
+   fold-in) - labels: {lock: link} puts a text label in the lock
+   zone; default stays icon-only.
+   v1.24: fix - applying balance audibly un-muted muted rooms
+   (volume_set overrides mute) while is_volume_muted stayed true,
+   leaving a stale M in the UI. Balance apply now explicitly
+   un-mutes muted rooms first (volume_mute false + optimistic
+   clear) so the flag matches what you hear.
+   v1.25: MUTE WINS everywhere else - a muted room is never
+   volume-written by incidental paths (which would audibly un-mute
+   it): lock-scaling skips muted rooms, and the Everywhere slider,
+   while any member is muted, switches from the native group write
+   to client-side proportional scaling of unmuted members only
+   (native group write, and MA's server-side fan-out, resume when
+   nothing is muted). Balance apply remains the deliberate
+   unmute-and-reset gesture. Companion HA automation ("Follow:
+   rooms track EVA-01 volume") skips muted rooms the same way.
+   A muted room can drift off-ratio; unmute then balance/lock
+   brings it back.
 
    HOW-TO (hosting/update):
    - Ships as a base64 data: URL Lovelace resource:
@@ -106,7 +131,8 @@
      title: Music            # idle header label
      group_label: Everywhere # master row + source line label
      start_open: false       # force expanded on load
-     lock_default: true      # ratio-lock active on load
+     lock_default: true      # ratio-lock active on load (fallback)
+     lock_entity: input_boolean.my_music_lock  # shared lock helper
      show_progress: true     # thin progress line
 */
 (function () {
@@ -223,7 +249,7 @@
       playlists: '<div class="chip" data-act="picker">' + svg(ICONS.playlist, 13) + lbl("playlists", "playlists") + "</div>",
       balance: '<div class="chip split">' +
           '<span class="zone" data-act="balance">' + svg(ICONS.balance, 13) + lbl("balance", "balance") + "</span>" +
-          '<span class="zone zlock" data-act="lock">' + svg(ICONS.lock, 12) + "</span>" +
+          '<span class="zone zlock" data-act="lock">' + svg(ICONS.lock, 12) + lbl("lock", "") + "</span>" +
           '<span class="zone zgear" data-act="bl">' + svg(ICONS.gear, 13) + "</span>" +
         "</div>",
       cast: c.cast_on_script
@@ -428,7 +454,7 @@
     this._bindEvents(root);
     this._built = true;
     this._els.bodywrap.classList.toggle("open", this._open);
-    this._els.lockChip.classList.toggle("active", this._lock);
+    this._els.lockChip.classList.toggle("active", this._lockOn());
   };
 
   /* ---------- events ---------- */
@@ -589,10 +615,14 @@
     var opt = this._opt[key];
     if (!opt) return;
     var entity = d.kind === "room" ? this._config.rooms[d.idx].entity : this._config.group_entity;
-    this._hass.callService("media_player", "volume_set", {
-      entity_id: entity, volume_level: Math.round(opt.val) / 100
-    });
-    if (this._lock && d.kind === "room") {
+    if (d.kind !== "room" && this._anyRoomMuted()) {
+      this._masterScale(Math.round(opt.val));
+    } else {
+      this._hass.callService("media_player", "volume_set", {
+        entity_id: entity, volume_level: Math.round(opt.val) / 100
+      });
+    }
+    if (this._lockOn() && d.kind === "room") {
       for (var j = 0; j < this._config.rooms.length; j++) {
         if (j === d.idx) continue;
         var o = this._opt["room" + j];
@@ -624,7 +654,7 @@
       ? this._els.rooms[d.idx].querySelector(".pct")
       : this._els.masterPct;
     pctEl.textContent = String(val);
-    if (this._lock && d.kind === "room") this._lockScale(d.idx, val);
+    if (this._lockOn() && d.kind === "room") this._lockScale(d.idx, val);
   };
 
   FlatMusicCard.prototype._balanceOf = function (idx) {
@@ -651,10 +681,46 @@
       if (typeof jbal !== "number") continue;
       var st = this._roomState(j);
       if (!st || st.unavailable) continue;
+      if (this._optVal("mute" + j, st.muted)) continue;
       var v = Math.max(0, Math.min(100, Math.round(jbal * factor)));
       this._opt["room" + j] = { val: v, until: Date.now() + OPT_MS, locked: true };
       this._paintSlider(this._els.rooms[j].querySelector(".slider"), v);
       this._els.rooms[j].querySelector(".pct").textContent = String(v);
+    }
+  };
+
+  FlatMusicCard.prototype._anyRoomMuted = function () {
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var st = this._roomState(i);
+      if (st && !st.unavailable && st.inGroup && this._optVal("mute" + i, st.muted)) return true;
+    }
+    return false;
+  };
+
+  /* Client-side stand-in for MA's group volume scaling, used only
+     while a member is muted: scales each UNMUTED in-group room
+     proportionally and never writes to muted rooms (a volume_set
+     would audibly un-mute them server-side). */
+  FlatMusicCard.prototype._masterScale = function (newVal) {
+    var g = this._hass.states[this._config.group_entity];
+    var cur = g && typeof g.attributes.volume_level === "number"
+      ? Math.round(g.attributes.volume_level * 100) : null;
+    if (!cur || cur <= 0) {
+      this._hass.callService("media_player", "volume_set", {
+        entity_id: this._config.group_entity, volume_level: newVal / 100
+      });
+      return;
+    }
+    var factor = newVal / cur;
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var st = this._roomState(i);
+      if (!st || st.unavailable || !st.inGroup || typeof st.vol !== "number") continue;
+      if (this._optVal("mute" + i, st.muted)) continue;
+      var v = Math.max(0, Math.min(100, Math.round(st.vol * factor)));
+      this._opt["room" + i] = { val: v, until: Date.now() + OPT_MS };
+      this._hass.callService("media_player", "volume_set", {
+        entity_id: this._config.rooms[i].entity, volume_level: v / 100
+      });
     }
   };
 
@@ -731,9 +797,27 @@
     this._update();
   };
 
+  FlatMusicCard.prototype._lockOn = function () {
+    var e = this._config && this._config.lock_entity;
+    if (e && this._hass) {
+      var o = this._opt.lock;
+      if (o && Date.now() < o.until) return o.val;
+      var st = this._hass.states[e];
+      if (st) return st.state === "on";
+    }
+    return this._lock;
+  };
+
   FlatMusicCard.prototype._toggleLock = function () {
-    this._lock = !this._lock;
-    this._els.lockChip.classList.toggle("active", this._lock);
+    var on = !this._lockOn();
+    if (this._config.lock_entity && this._hass) {
+      this._opt.lock = { val: on, until: Date.now() + OPT_MS };
+      this._hass.callService("input_boolean", on ? "turn_on" : "turn_off", {
+        entity_id: this._config.lock_entity
+      });
+    }
+    this._lock = on;
+    this._els.lockChip.classList.toggle("active", on);
   };
 
   /* ---------- cast toggle ---------- */
@@ -906,6 +990,10 @@
       if (typeof bal !== "number") continue;
       var st = this._roomState(i);
       if (!st || st.unavailable) continue;
+      if (st.muted && st.canMute) {
+        this._opt["mute" + i] = { val: false, until: Date.now() + OPT_MS };
+        this._svc("volume_mute", room.entity, { is_volume_muted: false });
+      }
       this._opt["room" + i] = { val: bal, until: Date.now() + OPT_MS };
       this._hass.callService("media_player", "volume_set", {
         entity_id: room.entity, volume_level: bal / 100
@@ -1082,6 +1170,7 @@
   FlatMusicCard.prototype._update = function () {
     if (!this._built || !this._hass) return;
     var c = this._config;
+    this._els.lockChip.classList.toggle("active", this._lockOn());
     var t = this._target();
     var st = t.st;
     var playing = st && st.state === "playing";
