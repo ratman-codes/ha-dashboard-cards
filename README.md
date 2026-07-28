@@ -62,6 +62,16 @@ backup, and has zero runtime dependencies on the internet or on this repo.
 - `flat-party-card.js` — v1.3. Party-mode control card (scene color chips, motion
   and per-device effect selectors, brightness, room toggles) for the dashboard's
   party lighting. Used as `type: custom:flat-party-card`.
+- `flat-music-card.js` — v1.21. Whole-home music controller for a Music Assistant
+  sync group: header mini-player (art/title/transport) that follows the active
+  output, source line with app + LIVE detection, scrubber, shuffle/seek/stop/
+  repeat, per-room group ticks + volume sliders + tap-to-mute, one-click output
+  switching via transfer_queue, live MA-favorites playlist picker, balance
+  baselines in input_number helpers with ratio-lock and a draft/save baseline
+  editor (typable + capture-current), optional cast on/off toggle chip wired to
+  a pair of scripts, and YAML-configurable strip labels/order. Used as
+  `type: custom:flat-music-card` (see `notes/flat-music-card-notes.md` for the
+  YAML shape). Resource identified by its `name=flat-music-card` label.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -82,6 +92,8 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   device quirk census, version history.
 - `notes/vacuum-system-notes.md` — deep notes for the vacuum card and cleaning
   profiles.
+- `notes/flat-music-card-notes.md` — design notes for the music card (features,
+  YAML shape, version history, upstream context).
 
 ## How to read / modify a deployed card
 Each source file opens with a "HOW THIS WORKS / HOW TO MAINTAIN IT" header. Short
