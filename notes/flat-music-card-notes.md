@@ -2,7 +2,8 @@
 
 Whole-home music control card for a Music Assistant sync group, in the flat-* card
 family. Built + iterated to v1.21 in one session (2026-07-27); extended to v1.25
-(2026-07-28: shared lock helper, follow-the-leader automation, mute-wins policy).
+(2026-07-28: shared lock helper, follow-the-leader automation, mute-wins policy)
+and v1.26 (2026-07-30: anchored volume-scaling mode).
 Deployed as a data-URL Lovelace resource via the Card Manager card; this repo copy is archive only.
 Full private notes (real entity ids, inventory, upstream-bug forensics) live in the
 "NAS / Smart Home" Claude project (`claude/flat-music-card-notes.md`).
@@ -49,6 +50,25 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
   scaling of unmuted members while any member is muted, since MA's server-side
   fan-out cannot be intercepted); balance apply is the deliberate exception -
   it explicitly un-mutes (volume_mute false) then restores baselines.
+- Anchored scaling mode (v1.26): equal slider RATIOS are not equal LOUDNESS -
+  each device maps slider%->dB with its own taper, so linear ratio-lock only
+  matches at the calibration point. Fix: mode_entity (an input_select,
+  linear|anchored) + per-room low_entity/high_entity anchor helpers. Anchored
+  mode moves rooms along per-room piecewise power curves through three
+  ear-calibrated anchor rows (LOW / BASE / HIGH; BASE = the balance helpers,
+  shared with linear mode) - each segment is linear in LOG space (knee at
+  BASE): the follower travels the same ratio-fraction between its anchors as
+  the leader does between its own. Extrapolates past the anchors, clamps
+  0-100, falls back to linear per-room when anchors are missing. Gear panel
+  gains a linear/anchored toggle (writes the input_select so companion
+  automations flip in lockstep) and a 3x3 typable anchor grid: tap a column
+  header to ARM it (arming exists solely to tell "capture current" which
+  column receives the live room volumes), draft/save/reset rules unchanged.
+  Lock-scaling inverts the dragged room's own anchors to a log-level, then
+  maps every other room to that level. Companion-automation gotcha worth
+  repeating: HA stores script `variables:` KEY-SORTED and evaluates them in
+  that order - a variable template referencing a sibling that sorts later
+  silently sees Undefined; make each variable template fully self-contained.
 
 ## YAML shape (placeholders)
     type: custom:flat-music-card
@@ -65,6 +85,8 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
     labels: { ma: browse, playlists: music, balance: link, lock: hold }
     strip_order: [ma, playlists, cast, balance]
     lock_entity: input_boolean.my_music_lock   # shared ratio-lock state
+    mode_entity: input_select.my_scaling_mode  # linear | anchored (v1.26)
+    # per room (anchored mode): low_entity / high_entity input_numbers
     title / group_label / start_open / show_progress / lock_default
 
 ## Known upstream context
@@ -93,3 +115,6 @@ v1.21 60776 77091fde typable baseline values.
 labels.lock revived (dead since the v1.17 split-chip fold-in) · v1.24 62565
 ef038953 balance apply un-mutes explicitly (stale-mute fix) · v1.25 64923
 6058c37e mute-wins on all incidental volume paths.
+
+2026-07-30: v1.26 78847 805dcf99 anchored scaling mode (mode toggle, 3x3
+anchor grid with column-armed capture, log-space piecewise lock-scaling).

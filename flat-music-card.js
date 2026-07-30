@@ -1,4 +1,4 @@
-/* flat-music-card v1.25
+/* flat-music-card v1.26
    Whole-home music control card for Music Assistant sync groups.
    Flat-family bespoke card. Header row is a mini-player: album art,
    title/artist, prev/play/next - always visible, fixed ~60px.
@@ -98,6 +98,22 @@
    rooms track EVA-01 volume") skips muted rooms the same way.
    A muted room can drift off-ratio; unmute then balance/lock
    brings it back.
+   v1.26: ANCHORED scaling mode. New config mode_entity (an
+   input_select with options linear/anchored) + per-room
+   low_entity/high_entity anchor helpers. linear = the existing
+   ratio behavior, byte-for-byte. anchored = rooms move along
+   per-room piecewise power curves through three ear-calibrated
+   anchor rows (LOW / BASE / HIGH; BASE = the balance_entity
+   helpers, shared with linear mode). Gear panel gains a mode
+   toggle (writes the input_select so companion automations flip
+   in lockstep) and, in anchored mode, a 3x3 typable anchor grid:
+   tap a column header to arm it, "capture current" writes live
+   volumes into the armed column (draft only; save = only write
+   path, same rules as the baseline editor). Lock-scaling maps the
+   dragged room to a log-space level via its own anchors and moves
+   every other room to the same level. Balance apply = BASE row in
+   both modes. Rooms missing anchor entities fall back to linear.
+   Mute-wins policy unchanged in both modes.
 
    HOW-TO (hosting/update):
    - Ships as a base64 data: URL Lovelace resource:
@@ -117,6 +133,8 @@
        - entity: media_player.room_a
          name: Room A
          balance_entity: input_number.balance_room_a   # live helper
+         low_entity: input_number.low_room_a     # anchored mode
+         high_entity: input_number.high_room_a   # anchored mode
        - entity: media_player.room_b
          name: Room B
          balance: 70                                   # or a literal
@@ -133,6 +151,7 @@
      start_open: false       # force expanded on load
      lock_default: true      # ratio-lock active on load (fallback)
      lock_entity: input_boolean.my_music_lock  # shared lock helper
+     mode_entity: input_select.my_scaling_mode # linear | anchored
      show_progress: true     # thin progress line
 */
 (function () {
@@ -197,6 +216,10 @@
     self._blOpen = false;
     self._blDraft = null;
     self._blStored = null;
+    self._ancDraft = null;
+    self._ancStored = null;
+    self._ancCol = 1;
+    self._blModeShown = null;
     return self;
   };
   FlatMusicCard.prototype = Object.create(HTMLElement.prototype);
@@ -363,7 +386,23 @@
       ".blpanel{overflow:hidden;min-height:0;margin:0 16px}" +
       ".blinner{border-top:1px solid " + LINE + ";padding:6px 0 10px}" +
       ".blhead{font-size:10.5px;letter-spacing:1px;color:" + SUB + ";font-weight:600;padding:6px 2px 8px}" +
+      ".blhead.hasmodes{display:flex;align-items:center;justify-content:space-between}" +
       ".bldirty{color:#ffc107}" +
+      ".modes{display:flex;border:1px solid rgba(70,70,70,.4);border-radius:14px;overflow:hidden;font-size:11px;font-weight:600;letter-spacing:0}" +
+      ".modes span{padding:4px 12px;color:" + SUB + ";cursor:pointer;transition:background .12s ease,color .12s ease}" +
+      ".modes span.on{background:rgba(76,175,80,.18);color:#8fdb93}" +
+      "@media (hover:hover){.modes span:not(.on):hover{background:rgba(255,255,255,.08);color:var(--primary-text-color)}}" +
+      ".agrid{display:grid;grid-template-columns:86px 1fr 1fr 1fr;align-items:center;row-gap:2px}" +
+      ".agrid .ach{font-size:10px;letter-spacing:1px;font-weight:600;color:" + SUB + ";text-align:center;padding:5px 0;border-radius:9px;cursor:pointer;transition:background .12s ease,color .12s ease}" +
+      ".agrid .ach.sel{color:#ffc107;background:rgba(255,193,7,.10);box-shadow:inset 0 0 0 1px rgba(255,193,7,.4)}" +
+      "@media (hover:hover){.agrid .ach:not(.sel):hover{background:rgba(255,255,255,.08)}}" +
+      ".agrid .arn{font-size:12.5px;padding:7px 0;color:var(--primary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+      ".agrid .avin{width:100%;text-align:center;font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;padding:6px 0;border-radius:8px;background:transparent;border:none;outline:none;color:var(--primary-text-color);font-family:inherit;cursor:text}" +
+      "@media (hover:hover){.agrid .avin:hover{background:rgba(255,255,255,.08)}}" +
+      ".agrid .avin:focus{background:rgba(255,255,255,.10)}" +
+      ".agrid .avin.pend{color:#8fdb93}" +
+      ".agrid .avin.selcol{background:rgba(255,193,7,.06)}" +
+      ".agrid .avdash{text-align:center;font-size:13.5px;color:" + SUB + "}" +
       ".blrow{display:flex;align-items:center;gap:11px;height:38px}" +
       ".blrn{font-size:13px;flex:0 0 100px;color:var(--primary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
       ".was{font-size:10px;color:" + SUB + ";margin-left:auto;font-variant-numeric:tabular-nums}" +
@@ -498,6 +537,11 @@
       else if (act === "blcap") self._blCapture();
       else if (act === "blreset") self._blReset();
       else if (act === "blsave") self._blSave();
+      else if (act === "blmode") self._setScalingMode(el.dataset.mode);
+      else if (act === "blcol") self._ancArm(parseInt(el.dataset.c, 10));
+      else if (act === "anccap") self._ancCapture();
+      else if (act === "ancreset") self._ancReset();
+      else if (act === "ancsave") self._ancSave();
       else if (act === "pkplay") self._playPlaylist(el.dataset.uri);
     });
 
@@ -675,6 +719,10 @@
     var base = this._balanceOf(srcIdx);
     if (typeof base !== "number" || base <= 0) return;
     var factor = srcVal / base;
+    var anchored = this._scalingMode() === "anchored";
+    var srcAnc = anchored ? this._anchorsOf(srcIdx) : null;
+    var srcLevel = anchored && this._ancUsable(srcAnc) && srcVal > 0
+      ? this._levelOf(srcAnc, srcVal) : null;
     for (var j = 0; j < rooms.length; j++) {
       if (j === srcIdx) continue;
       var jbal = this._balanceOf(j);
@@ -682,7 +730,17 @@
       var st = this._roomState(j);
       if (!st || st.unavailable) continue;
       if (this._optVal("mute" + j, st.muted)) continue;
-      var v = Math.max(0, Math.min(100, Math.round(jbal * factor)));
+      var v;
+      if (srcLevel !== null) {
+        var jAnc = this._anchorsOf(j);
+        v = this._ancUsable(jAnc)
+          ? this._valueAt(jAnc, srcLevel)
+          : Math.max(0, Math.min(100, Math.round(jbal * factor)));
+      } else if (anchored && srcVal <= 0) {
+        v = 0;
+      } else {
+        v = Math.max(0, Math.min(100, Math.round(jbal * factor)));
+      }
       this._opt["room" + j] = { val: v, until: Date.now() + OPT_MS, locked: true };
       this._paintSlider(this._els.rooms[j].querySelector(".slider"), v);
       this._els.rooms[j].querySelector(".pct").textContent = String(v);
@@ -820,6 +878,73 @@
     this._els.lockChip.classList.toggle("active", on);
   };
 
+  /* ---------- scaling mode + anchor curves ---------- */
+
+  FlatMusicCard.prototype._scalingMode = function () {
+    var e = this._config && this._config.mode_entity;
+    if (!e || !this._hass) return "linear";
+    var o = this._opt.scalemode;
+    if (o && Date.now() < o.until) return o.val;
+    var st = this._hass.states[e];
+    return st && st.state === "anchored" ? "anchored" : "linear";
+  };
+
+  FlatMusicCard.prototype._setScalingMode = function (mode) {
+    if (!this._config.mode_entity || !this._hass) return;
+    if (mode !== "linear" && mode !== "anchored") return;
+    if (mode === this._scalingMode()) return;
+    this._opt.scalemode = { val: mode, until: Date.now() + OPT_MS };
+    this._hass.callService("input_select", "select_option", {
+      entity_id: this._config.mode_entity, option: mode
+    });
+    if (this._blOpen) {
+      this._blModeShown = mode;
+      if (mode === "anchored") { this._ancStored = this._ancReadStored(); this._ancDraft = this._cloneAnc(this._ancStored); }
+      else { this._blStored = this._blReadStored(); this._blDraft = this._blStored.slice(); }
+      this._renderBl();
+      fireEvent(this, "card-size-changed", {});
+    }
+  };
+
+  FlatMusicCard.prototype._helperVal = function (entity) {
+    if (!entity || !this._hass) return null;
+    var st = this._hass.states[entity];
+    if (!st) return null;
+    var v = parseFloat(st.state);
+    return isNaN(v) ? null : v;
+  };
+
+  /* anchors for room idx: [low, base, high] in slider % (null where missing) */
+  FlatMusicCard.prototype._anchorsOf = function (idx) {
+    var room = this._config.rooms[idx];
+    if (!room) return null;
+    var base = this._balanceOf(idx);
+    return [
+      this._helperVal(room.low_entity),
+      typeof base === "number" ? base : null,
+      this._helperVal(room.high_entity)
+    ];
+  };
+
+  FlatMusicCard.prototype._ancUsable = function (a) {
+    return !!(a && a[0] > 0 && a[1] > 0 && a[2] > 0 && a[0] !== a[1] && a[2] !== a[1]);
+  };
+
+  /* log-space level of value v against anchors [l,b,h]: 0=base, -1=low, +1=high */
+  FlatMusicCard.prototype._levelOf = function (a, v) {
+    if (v <= 0) return null;
+    if (v >= a[1]) return Math.log(v / a[1]) / Math.log(a[2] / a[1]);
+    return Math.log(v / a[1]) / Math.log(a[0] / a[1]) * -1;
+  };
+
+  /* value at level L for anchors [l,b,h] */
+  FlatMusicCard.prototype._valueAt = function (a, L) {
+    var v = L >= 0
+      ? a[1] * Math.pow(a[2] / a[1], L)
+      : a[1] * Math.pow(a[0] / a[1], -L);
+    return Math.max(0, Math.min(100, Math.round(v)));
+  };
+
   /* ---------- cast toggle ---------- */
 
   FlatMusicCard.prototype._castActive = function () {
@@ -846,12 +971,21 @@
     this._blOpen = open;
     if (open) {
       if (this._pickerOpen) this._setPicker(false);
-      this._blStored = this._blReadStored();
-      this._blDraft = this._blStored.slice();
+      var m = this._scalingMode();
+      this._blModeShown = m;
+      if (m === "anchored" && this._config.mode_entity) {
+        this._ancStored = this._ancReadStored();
+        this._ancDraft = this._cloneAnc(this._ancStored);
+      } else {
+        this._blStored = this._blReadStored();
+        this._blDraft = this._blStored.slice();
+      }
       this._renderBl();
     } else {
       this._blDraft = null;
       this._blStored = null;
+      this._ancDraft = null;
+      this._ancStored = null;
     }
     this._els.blWrap.classList.toggle("open", open);
     this._els.gearBtn.classList.toggle("active", open);
@@ -925,11 +1059,27 @@
     this._renderBl();
   };
 
+  FlatMusicCard.prototype._blHeadHtml = function (title, dirty) {
+    var hasModes = !!this._config.mode_entity;
+    var h = '<div class="blhead' + (hasModes ? " hasmodes" : "") + '"><span>' + title +
+      (dirty ? ' <span class="bldirty">\u00b7 UNSAVED</span>' : "") + "</span>";
+    if (hasModes) {
+      var m = this._scalingMode();
+      h += '<span class="modes">' +
+        '<span data-act="blmode" data-mode="linear" class="' + (m === "linear" ? "on" : "") + '">linear</span>' +
+        '<span data-act="blmode" data-mode="anchored" class="' + (m === "anchored" ? "on" : "") + '">anchored</span>' +
+        "</span>";
+    }
+    return h + "</div>";
+  };
+
   FlatMusicCard.prototype._renderBl = function () {
     var el = this._els.blInner;
-    if (!el || !this._blDraft) return;
+    if (!el) return;
+    if (this._scalingMode() === "anchored" && this._config.mode_entity) { this._renderAnc(); return; }
+    if (!this._blDraft) return;
     var dirty = this._blDirty();
-    var html = '<div class="blhead">BALANCE BASELINES' + (dirty ? ' <span class="bldirty">\u00b7 UNSAVED</span>' : "") + "</div>";
+    var html = this._blHeadHtml("BALANCE BASELINES", dirty);
     for (var i = 0; i < this._config.rooms.length; i++) {
       var room = this._config.rooms[i];
       var name = room.name || room.entity;
@@ -981,6 +1131,157 @@
     if (v === this._blDraft[idx]) { inp.value = String(v); return; }
     this._blDraft[idx] = v;
     this._renderBl();
+  };
+
+  /* ---------- anchored (3x3) editor ---------- */
+
+  FlatMusicCard.prototype._ancEntities = function (i) {
+    var r = this._config.rooms[i];
+    return [r.low_entity || null, r.balance_entity || null, r.high_entity || null];
+  };
+
+  FlatMusicCard.prototype._ancReadStored = function () {
+    var out = [];
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var es = this._ancEntities(i);
+      var row = [];
+      for (var c = 0; c < 3; c++) {
+        var v = this._helperVal(es[c]);
+        row.push(typeof v === "number" ? Math.round(v) : null);
+      }
+      out.push(row);
+    }
+    return out;
+  };
+
+  FlatMusicCard.prototype._cloneAnc = function (a) {
+    var out = [];
+    for (var i = 0; i < a.length; i++) out.push(a[i].slice());
+    return out;
+  };
+
+  FlatMusicCard.prototype._ancDirty = function () {
+    if (!this._ancDraft || !this._ancStored) return false;
+    for (var i = 0; i < this._ancDraft.length; i++) {
+      for (var c = 0; c < 3; c++) {
+        if (this._ancDraft[i][c] !== this._ancStored[i][c]) return true;
+      }
+    }
+    return false;
+  };
+
+  FlatMusicCard.prototype._ancRefreshClean = function () {
+    if (!this._blOpen || !this._ancStored || this._ancDirty()) return;
+    var fresh = this._ancReadStored();
+    for (var i = 0; i < fresh.length; i++) {
+      for (var c = 0; c < 3; c++) {
+        if (fresh[i][c] !== this._ancStored[i][c]) {
+          this._ancStored = fresh;
+          this._ancDraft = this._cloneAnc(fresh);
+          this._renderBl();
+          return;
+        }
+      }
+    }
+  };
+
+  FlatMusicCard.prototype._ancArm = function (c) {
+    if (c < 0 || c > 2 || c === this._ancCol) return;
+    this._ancCol = c;
+    this._renderBl();
+  };
+
+  FlatMusicCard.prototype._ancCapture = function () {
+    if (!this._ancDraft) return;
+    var c = this._ancCol;
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var st = this._roomState(i);
+      if (st && !st.unavailable && typeof st.vol === "number" && this._ancDraft[i][c] !== null) {
+        this._ancDraft[i][c] = st.vol;
+      }
+    }
+    this._renderBl();
+  };
+
+  FlatMusicCard.prototype._ancReset = function () {
+    if (!this._ancStored) return;
+    this._ancDraft = this._cloneAnc(this._ancStored);
+    this._renderBl();
+  };
+
+  FlatMusicCard.prototype._ancSave = function () {
+    if (!this._ancDirty()) return;
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var es = this._ancEntities(i);
+      for (var c = 0; c < 3; c++) {
+        if (!es[c]) continue;
+        if (this._ancDraft[i][c] === null || this._ancDraft[i][c] === this._ancStored[i][c]) continue;
+        this._hass.callService("input_number", "set_value", {
+          entity_id: es[c], value: this._ancDraft[i][c]
+        });
+      }
+    }
+    this._ancStored = this._cloneAnc(this._ancDraft);
+    this._renderBl();
+  };
+
+  FlatMusicCard.prototype._ancType = function (i, c, inp) {
+    if (!this._ancDraft || this._ancDraft[i][c] === null) return;
+    var v = parseInt(String(inp.value).replace(/[^0-9]/g, ""), 10);
+    if (isNaN(v)) { inp.value = String(this._ancDraft[i][c]); return; }
+    v = Math.max(0, Math.min(100, v));
+    if (v === this._ancDraft[i][c]) { inp.value = String(v); return; }
+    this._ancDraft[i][c] = v;
+    this._renderBl();
+  };
+
+  FlatMusicCard.prototype._renderAnc = function () {
+    var el = this._els.blInner;
+    if (!el || !this._ancDraft) return;
+    var dirty = this._ancDirty();
+    var labels = ["LOW", "BASE", "HIGH"];
+    var html = this._blHeadHtml("VOLUME ANCHORS", dirty);
+    html += '<div class="agrid"><div></div>';
+    for (var c = 0; c < 3; c++) {
+      html += '<div class="ach' + (c === this._ancCol ? " sel" : "") + '" data-act="blcol" data-c="' + c + '">' + labels[c] + "</div>";
+    }
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var room = this._config.rooms[i];
+      html += '<div class="arn">' + this._escHtml(room.name || room.entity) + "</div>";
+      for (var k = 0; k < 3; k++) {
+        var v = this._ancDraft[i][k];
+        var stored = this._ancStored[i][k];
+        var editable = !!this._ancEntities(i)[k] && v !== null;
+        html += editable
+          ? '<input class="avin' + (v !== stored ? " pend" : "") + (k === this._ancCol ? " selcol" : "") + '" data-ar="' + i + '" data-ac="' + k + '" type="text" inputmode="numeric" maxlength="3" value="' + v + '">'
+          : '<div class="avdash">--</div>';
+      }
+    }
+    html += "</div>";
+    html += '<div class="blfoot">' +
+      '<div class="blact" data-act="anccap">\u21bb capture current</div>' +
+      (dirty ? '<div class="blact blreset" data-act="ancreset">reset</div>' : "") +
+      '<div class="blact ' + (dirty ? "blsave-on" : "blsave-off") + '"' + (dirty ? ' data-act="ancsave"' : "") + ">save</div>" +
+    "</div>" +
+    '<div class="blnote' + (dirty ? " d" : "") + '">' +
+      (dirty ? "unsaved draft \u00b7 reset returns to stored values" : "tap a column header to arm it \u00b7 capture writes live volumes into the armed column") + "</div>";
+    el.innerHTML = html;
+    var self = this;
+    var ins = el.querySelectorAll(".avin");
+    for (var n = 0; n < ins.length; n++) {
+      (function (inp) {
+        var ri = parseInt(inp.dataset.ar, 10);
+        var ci = parseInt(inp.dataset.ac, 10);
+        inp.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter") { inp.blur(); }
+          else if (ev.key === "Escape") { inp.value = String(self._ancDraft[ri][ci]); inp.blur(); }
+          ev.stopPropagation();
+        });
+        inp.addEventListener("change", function () { self._ancType(ri, ci, inp); });
+        inp.addEventListener("blur", function () { self._ancType(ri, ci, inp); });
+        inp.addEventListener("pointerdown", function (ev) { ev.stopPropagation(); });
+      })(ins[n]);
+    }
   };
 
   FlatMusicCard.prototype._applyBalance = function () {
@@ -1286,7 +1587,25 @@
     }
 
     if (this._els.castChip) this._els.castChip.classList.toggle("on", this._castActive());
-    if (this._blOpen) this._blRefreshClean();
+    if (this._blOpen) {
+      var blMode = this._scalingMode();
+      if (this._blModeShown !== blMode) {
+        this._blModeShown = blMode;
+        if (blMode === "anchored" && c.mode_entity) {
+          this._ancStored = this._ancReadStored();
+          this._ancDraft = this._cloneAnc(this._ancStored);
+        } else {
+          this._blStored = this._blReadStored();
+          this._blDraft = this._blStored.slice();
+        }
+        this._renderBl();
+        fireEvent(this, "card-size-changed", {});
+      } else if (blMode === "anchored" && c.mode_entity) {
+        this._ancRefreshClean();
+      } else {
+        this._blRefreshClean();
+      }
+    }
     this._updateProgress();
   };
 

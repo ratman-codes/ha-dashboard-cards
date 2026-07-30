@@ -62,7 +62,7 @@ backup, and has zero runtime dependencies on the internet or on this repo.
 - `flat-party-card.js` — v1.3. Party-mode control card (scene color chips, motion
   and per-device effect selectors, brightness, room toggles) for the dashboard's
   party lighting. Used as `type: custom:flat-party-card`.
-- `flat-music-card.js` — v1.25. Whole-home music controller for a Music Assistant
+- `flat-music-card.js` — v1.26. Whole-home music controller for a Music Assistant
   sync group: header mini-player (art/title/transport) that follows the active
   output, source line with app + LIVE detection, scrubber, shuffle/seek/stop/
   repeat, per-room group ticks + volume sliders + tap-to-mute, one-click output
@@ -71,8 +71,13 @@ backup, and has zero runtime dependencies on the internet or on this repo.
   editor (typable + capture-current), optional cast on/off toggle chip wired to
   a pair of scripts, YAML-configurable strip labels/order, ratio-lock bindable
   to a shared input_boolean (lock_entity — automations can follow the same
-  state), and a mute-wins policy (incidental volume writes never un-mute a
-  muted room; balance apply is the deliberate unmute+reset). Used as
+  state), a mute-wins policy (incidental volume writes never un-mute a
+  muted room; balance apply is the deliberate unmute+reset), and a switchable
+  anchored scaling mode (mode_entity input_select + per-room low/high anchor
+  helpers: rooms follow per-room piecewise log-space curves through three
+  ear-calibrated anchor rows, so loudness stays matched across the whole
+  range despite per-device volume tapers; editable via a 3x3 grid in the
+  gear panel with capture-into-column). Used as
   `type: custom:flat-music-card` (see `notes/flat-music-card-notes.md` for the
   YAML shape). Resource identified by its `name=flat-music-card` label.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
