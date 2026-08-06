@@ -2,25 +2,29 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.4.5 (runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.5.5 (runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
-(daily runtime meter entities, in hours). v2.3 adds the eco preset (Nest
-`none|eco`) as a detached leaf button beside the mode strip — a separate
-rounded-rect, NOT a fifth strip slot, because eco overlays the active hvac mode
-rather than replacing it. While eco is on: leaf and idle status go green
-(#4caf50/#81c784), and the track renders the entity-reported eco setpoints
-green and read-only (handles hidden, drag disabled — the thermostat rejects
-setpoint changes in eco). The button self-hides on entities without an eco
-preset. v2.4.x adds a daily HVAC runtime chip: a fixed 80px readout in a slot
-under the temp block (same-width column keeps the mode strip edge-aligned with
-the temperature track), showing today's ACTIVE cooling/heating hours ("2h 41m"
-+ "TODAY" caption; both meters as two rows in heat_cool). Fed by daily
-utility-meter entities built on Riemann integrals of 0/1 template signals over
-the climate entity's `hvac_action` (mode-on time is NOT counted, only actual
-compressor/furnace run time). Chip always shows when configured and mode is not
-off; unavailable meters render '--'; no resting background — hover highlight
-only (`@media (hover:hover)`); tap opens the meter's more-info history. Full
-spec, version trail, and the statistics backfill notes live in the private
-project.
+(daily runtime meters, hours) + `runtime_cooling_stats`/`runtime_heating_stats`
+(long-term statistics sources for the graph — typically the Riemann totals
+behind the daily meters). Eco (v2.3): Nest `none|eco` preset as a detached leaf
+button beside the mode strip; while on, track renders the entity-reported eco
+setpoints green and read-only. Runtime chip (v2.4.x): today's ACTIVE
+compressor/furnace hours in a fixed-width slot under the temp block; mode picks
+the meter (cool/heat), heat_cool shows both rows, off mode shows whichever ran
+today (v2.5); transparent at rest, hover highlight only. Runtime graph (v2.5):
+tap the chip and the card expands in place (grid-rows animation, no popups, no
+dependencies) into a 14-day daily-runtime bar chart pulled from HA long-term
+statistics over the card's own websocket (`recorder/statistics_during_period`,
+change/day), with a live dashed today bar fed by the daily meter, a dashed
+7-day-average line, a peak label (historical days only), per-bar hover/tap
+tooltips, and a today / 7-day avg / peak summary row whose tiles tap through to
+native more-info (v2.5.5). Layout/centering rule (v2.5.2–v2.5.4, owner-final):
+the left column is fixed-width; the empty region spans from the card's visible
+edge (card padding counts as empty space) to the track's left edge, and the
+temp digits, status text, and chip all sit on that region's center axis — the
+small degree unit is absolutely positioned outside the centering as an
+adornment. Mode strip's left edge aligns exactly with the track's left edge;
+track and eco run flush right. Full spec, version trail with hashes, and the
+runtime-sensor pipeline live in the private project notes.

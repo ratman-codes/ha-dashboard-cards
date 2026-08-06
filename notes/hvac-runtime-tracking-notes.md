@@ -10,8 +10,9 @@ measurement) → integration (Riemann sum) helper (method `left` — exact for a
 total hours, state_class `total`, kept forever in long-term statistics) →
 utility_meter helper (cycle daily; "hours today", resets at local midnight).
 One chain per action (cooling, heating). The daily meters feed the
-flat-thermostat-card runtime chip; the totals feed statistics graphs
-("change" per day = daily runtime bars).
+flat-thermostat-card runtime chip; the totals feed the card's expanding 14-day
+runtime graph and any statistics-graph card ("change" per day = daily runtime
+bars, arbitrary window since LTS is permanent).
 
 Notes: the integral/meter entities carry no unit_of_measurement (unitless
 source) — cosmetic only. Hourly LTS rows appear only for hours with actual
@@ -20,5 +21,9 @@ emits once (`homeassistant.update_entity` on the signal fixes it). Historical
 runtime can be backfilled into the total's long-term statistics from raw
 recorder history (hvac_action transitions) via the `recorder/import_statistics`
 websocket API + a `recorder/adjust_sum_statistics` shift so sums start at zero
-— done for ~11 days of cooling history on this install; method details in the
-private project notes.
+— done for ~11 days of cooling history on this install. Known cosmetic
+artifact of backfilling: the total's raw History **state** line shows a cliff
+where the synthetic backfilled odometer meets the real sensor (born at 0) —
+the statistics **sum/change** series is continuous across the seam, which is
+what every change-per-day view consumes. Method details in the private
+project notes.

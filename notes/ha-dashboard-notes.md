@@ -69,7 +69,8 @@ Now in `notes/debug-lessons.md` (append-only).
 Per-card sanitized notes now live beside this file (split 2026-07-21):
 
 - `notes/flat-thermostat-card-notes.md` — thermostat (v2.3 spec incl. eco toggle)
-- `notes/flat-weather-card-notes.md` — weather card (v1.3 spec)
+- `notes/flat-weather-card-notes.md` — weather card (v1.5.1 spec incl. the
+  auto backup-station fallback)
 - `notes/flat-scoreboard-card-notes.md` — scoreboard + Forecast Lab status
 - `notes/flat-treadmill-card-notes.md` — treadmill deep notes
 - `notes/vacuum-system-notes.md` — vacuum card + system notes

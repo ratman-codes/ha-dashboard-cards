@@ -1,4 +1,22 @@
-/* flat-weather-card v1.3 - custom Lovelace card for the main dashboard.
+/* flat-weather-card v1.5.1 - custom Lovelace card for the main dashboard.
+   v1.5.1: sanitization fix - this comment's example de-localized; no
+   behavior change.
+   v1.5: named backup tag - optional fallback_name labels backup mode with
+   the backup station's name, e.g. "Sunny - Backup Station (backup)"
+   instead of the bare "Backup" tag (owner request 2026-08-04).
+   v1.4: automatic fallback - optional fallback_entity (a second weather
+   entity; the owner uses a nearby backup PWS). When the primary station
+   entity reads unavailable/unknown, the header current conditions and
+   the 5-day strip switch to the fallback automatically and the condition
+   line shows "... - Backup" (subtle tag, owner-approved 2026-08-04).
+   The dew line switches to fallback_dew_entity if configured (same color
+   thresholds), else drops to fallback humidity only - the primary dew
+   sensor is deliberately ignored during outages because it freezes stale
+   rather than going unavailable (observed 2026-08-03). The moment the
+   primary reports again the card flips back on its own; daily forecast
+   subscriptions are restarted on the unavailable->available transition
+   so pushes resume. No helpers, no automations - the fallback lives
+   entirely in this card.
    v1.3: chip delta - the forecast-vs-actual chip appends the signed
    difference, e.g. "77 deg called - 78 deg so far (+1)". Plain ink by
    design (the number speaks; no color).
@@ -44,6 +62,12 @@
        chip_actual_entity:   input_number...
        chip_path: /your-lab-dashboard            # chip tap -> HA path
        dew_entity: sensor.YOUR_DEW_SENSOR        # optional: colored dew line
+       fallback_entity: weather.YOUR_BACKUP      # optional: auto-backup when
+                                                 #   the station is offline
+       fallback_dew_entity: sensor.BACKUP_DEW    # optional: dew line source
+                                                 #   while in backup mode
+       fallback_name: Backup Station Label       # optional: backup-mode tag
+                                                 #   reads "<name> (backup)"
        accent: "#ffc107"                         # curve color (optional)
        hours: 12   # curve span    days: 5       # strip length (optional)
    - Long-press anywhere on the card = native HA more-info for the section
@@ -88,6 +112,8 @@ class FlatWeatherCard extends HTMLElement {
     this._config = Object.assign({ hours: 12, days: 5, accent: ACCENT_DEFAULT, chip_path: '' }, config);
     this._hourly = null;
     this._daily = null;
+    this._dailyFb = null;
+    this._dOk = undefined;
     this._hourlyKey = '';
     this._dailyKey = '';
     this._subsStarted = false;
@@ -98,17 +124,27 @@ class FlatWeatherCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    /* auto-heal: when the primary daily source comes back from an outage,
+       restart the forecast subscriptions so its pushes resume cleanly */
+    const dOk = !this._bad(this._st(this._config.daily_entity));
+    if (this._dOk === false && dOk && this._subsStarted) this._restartSubs();
+    this._dOk = dOk;
     this._startSubs();
     this._render();
   }
 
   connectedCallback() { this._startSubs(); }
 
-  disconnectedCallback() {
+  disconnectedCallback() { this._stopSubs(); }
+
+  _stopSubs() {
     this._subsStarted = false;
     if (this._unsubH) { this._unsubH.then(u => u()).catch(() => {}); this._unsubH = null; }
     if (this._unsubD) { this._unsubD.then(u => u()).catch(() => {}); this._unsubD = null; }
+    if (this._unsubF) { this._unsubF.then(u => u()).catch(() => {}); this._unsubF = null; }
   }
+
+  _restartSubs() { this._stopSubs(); this._startSubs(); }
 
   _startSubs() {
     if (this._subsStarted || !this._hass || !this._config || !this.isConnected) return;
@@ -122,6 +158,10 @@ class FlatWeatherCard extends HTMLElement {
     this._unsubH.catch(() => { this._hourly = []; this._renderHourly(); });
     this._unsubD = sub(this._config.daily_entity, 'daily', f => { this._daily = f; this._renderDaily(); this._renderHeader(); });
     this._unsubD.catch(() => { this._daily = []; this._renderDaily(); });
+    if (this._config.fallback_entity) {
+      this._unsubF = sub(this._config.fallback_entity, 'daily', f => { this._dailyFb = f; this._renderDaily(); this._renderHeader(); });
+      this._unsubF.catch(() => { this._dailyFb = []; });
+    }
   }
 
   _st(id) { return this._hass && this._hass.states[id]; }
@@ -255,7 +295,12 @@ class FlatWeatherCard extends HTMLElement {
 
   _renderHeader() {
     const el = this._el; if (!el) return;
-    const s = this._st(this._config.station_entity);
+    let s = this._st(this._config.station_entity);
+    let fb = false;
+    if (this._bad(s) && this._config.fallback_entity) {
+      const b = this._st(this._config.fallback_entity);
+      if (!this._bad(b)) { s = b; fb = true; }
+    }
     const bad = this._bad(s);
     el.hdr.classList.toggle('unavailable', bad);
     const a = (s && s.attributes) || {};
@@ -263,10 +308,16 @@ class FlatWeatherCard extends HTMLElement {
     const condKey = s && s.state;
     el.cico.setAttribute('icon', COND_ICON[condKey] || 'mdi:weather-partly-cloudy');
     el.cico.style.color = COND_COLOR[condKey] || GREY_TEXT;
-    const label = this._config.name ? ' \u00b7 ' + this._config.name : '';
+    const label = fb ? ' \u00b7 ' + (this._config.fallback_name
+        ? this._config.fallback_name + ' (backup)' : 'Backup')
+      : (this._config.name ? ' \u00b7 ' + this._config.name : '');
     el.cond.textContent = bad ? 'Unavailable' : ((COND_TEXT[condKey] || condKey || '') + label);
     const rhTxt = (a.humidity != null && !bad) ? Math.round(a.humidity) + '%' : '';
-    const dewS = this._config.dew_entity ? this._st(this._config.dew_entity) : null;
+    /* in fallback mode the station's dew sensor is stale (it freezes rather
+       than going unavailable during outages) - use the backup station's dew
+       sensor instead when configured, else humidity only */
+    const dewCfg = fb ? this._config.fallback_dew_entity : this._config.dew_entity;
+    const dewS = dewCfg ? this._st(dewCfg) : null;
     const dew = (dewS && !this._bad(dewS)) ? parseFloat(dewS.state) : NaN;
     if (!isNaN(dew)) {
       /* flush thresholds: <60 plain grey, 60-65 amber, 65+ orange (owner strategy) */
@@ -286,13 +337,23 @@ class FlatWeatherCard extends HTMLElement {
     el.lo.textContent = today ? this._fmt(today.templow) : '--';
   }
 
+  /* the daily list in force: primary while its entity is alive and has data,
+     otherwise the fallback's - switches back automatically when primary heals */
+  _activeDaily() {
+    const p = this._daily || [], f = this._dailyFb || [];
+    const primOk = !this._bad(this._st(this._config.daily_entity));
+    if (primOk && p.length) return p;
+    return f.length ? f : p;
+  }
+
   _todayEntry() {
-    if (!this._daily || !this._daily.length) return null;
+    const list = this._activeDaily();
+    if (!list.length) return null;
     const now = new Date(); const key = now.toDateString();
-    for (const e of this._daily) {
+    for (const e of list) {
       if (new Date(e.datetime).toDateString() === key) return e;
     }
-    return this._daily[0];
+    return list[0];
   }
 
   _renderChip() {
@@ -368,7 +429,7 @@ class FlatWeatherCard extends HTMLElement {
   _renderDaily() {
     const el = this._el; if (!el) return;
     const seen = new Set();
-    const list = (this._daily || []).filter(e => {
+    const list = this._activeDaily().filter(e => {
       if (e.temperature == null) return false;
       const k = new Date(e.datetime).toDateString();
       if (seen.has(k)) return false;
