@@ -76,6 +76,21 @@ header.)*
   curves with an in-card anchor editor. All entities via YAML config. Used as
   `type: custom:flat-music-card` (see notes for the YAML shape).
   HA resource id: `87772b46cd93458f86bb144df94f502c`.
+- `flat-security-card.js` — v1.4.1. Collapsible Alarmo security card: a one-line
+  sentinel header (state-colored shield, flat-hero state word, open-sensor and
+  person glyphs, and a slim countdown strip during exit/entry delays — visible
+  even when collapsed) that expands to a camera-forward panel — entry-camera
+  still view with live/person chips and an optional Frigate-UI link chip,
+  ARM/DISARM strip with optimistic hold (splitting into CANCEL + ARM NOW
+  during the exit delay — ARM NOW cuts the countdown short via Alarmo's
+  dedicated skip_delay service), and a perimeter sensor list with
+  open / guarding / BYPASSED-while-armed (the silent bypass gap made visible) /
+  no-signal states, quiet-twin row merging, and sub-25% battery badges; the list
+  focuses to the tripped sensor during entry delay and alarm, and the card
+  surface pulses while triggered. Card chrome (background/border/radius) comes
+  from the theme's card variables. All entities via YAML config. Used as
+  `type: custom:flat-security-card` (see notes for the YAML shape). Resource
+  identified by its `name=flat-security-card` label.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -95,7 +110,8 @@ header.)*
 - `notes/flat-treadmill-card-notes.md`, `notes/flat-thermostat-card-notes.md`,
   `notes/flat-weather-card-notes.md`, `notes/flat-scoreboard-card-notes.md`,
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
-  `notes/hvac-runtime-tracking-notes.md` — sanitized per-card / per-system deep
+  `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md` —
+  sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 
 ## How to read / modify a deployed card
