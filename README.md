@@ -91,6 +91,19 @@ header.)*
   from the theme's card variables. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
+- `flat-climate-card.js` — v1.4. Whole-house climate card for a fleet of BLE
+  temperature/humidity meters: an indoor-vs-outdoor delta headline ("5.8 F
+  cooler outside") with an OPEN WINDOWS chip (temperature-delta-only with
+  hysteresis; a moisture gate was deliberately removed after historical
+  dew-point analysis — reasoning in the source header) over a 24h all-rooms
+  temperature overlay (5 series, CVD-validated palette, outdoor pair
+  direct-labeled), expanding to an out-vs-in humidity row and a per-room
+  now-strip. Includes a sun-spike trim (`sun_cap`) so an outdoor sensor heated
+  by reflected sun can't distort the headline (graph lines stay raw), hover/tap
+  scrubbing with an all-series tooltip, and availability-honest '--' handling.
+  Default entities are this dashboard's meters; override via indoor:/outdoor:
+  YAML lists. Used as `type: custom:flat-climate-card`. HA resource id:
+  `f8f2966083af4b31b2588016c24dcc19`.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -110,7 +123,8 @@ header.)*
 - `notes/flat-treadmill-card-notes.md`, `notes/flat-thermostat-card-notes.md`,
   `notes/flat-weather-card-notes.md`, `notes/flat-scoreboard-card-notes.md`,
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
-  `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md` —
+  `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
+  `notes/flat-climate-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 
