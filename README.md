@@ -104,6 +104,21 @@ header.)*
   Default entities are this dashboard's meters; override via indoor:/outdoor:
   YAML lists. Used as `type: custom:flat-climate-card`. HA resource id:
   `f8f2966083af4b31b2588016c24dcc19`.
+- `flat-server-card.js` — v1.5. NAS health + backup confidence card ("is the
+  server okay and is my data safe?"): green-is-boring collapsed header (one
+  quiet row; problems surface as a red-first alert strip even collapsed) that
+  expands to Storage (array state/fill, parity age with next-due countdown from
+  an anchor helper, per-disk problem sensors collapsed to "N/N healthy", pool
+  bars), Mounts (host-truth JSON from a cron script via webhook + staleness
+  guard), Services (torrent-client WebUI truth, container count, quiet updates
+  row), System (host RAM, HA-VM RAM and HA-VM disk with unit-converted
+  "used / total GB" labels, uptime with reboot amber), Power (UPS status /
+  battery bar / runtime / load) and Backups (client + HA age rows). Row
+  tap-throughs to the server / torrent / backup web UIs; long-press = more-info;
+  alert-only server-notification and CPU-temp checks; every threshold is card
+  YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
+  (see notes for the YAML shape). HA resource id:
+  `54f8b17d7b9547c68be324e899b5ed0f`.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -124,7 +139,7 @@ header.)*
   `notes/flat-weather-card-notes.md`, `notes/flat-scoreboard-card-notes.md`,
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
   `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
-  `notes/flat-climate-card-notes.md` —
+  `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 
