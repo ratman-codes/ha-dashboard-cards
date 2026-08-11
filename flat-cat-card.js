@@ -1,4 +1,4 @@
-/* flat-cat-card v1.18
+/* flat-cat-card v1.20
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -168,6 +168,37 @@
  * a squashed 2px border line under its cat row. The panel border now
  * animates 0 -> 1px with the open state, making the closed panel
  * truly zero-height.
+ * v1.19: litter SETTINGS panel + feeder SCHEDULE panel (mockup v6,
+ * approved 2026-08-11). Litter stats row now shows Maint (starts
+ * maintenance directly; Clean moved into More); More panel is an even
+ * 2x2 grid with no subtext: Clean / Level litter / Pause / Settings.
+ * Settings panel (groups CLEANING / DEEP CLEANING / DEODORIZING /
+ * BOX) exposes the PetKit smart settings as instant-write controls:
+ * toggles -> switch.turn_on/off (8s optimistic overlay), cleaning
+ * delay stepper -> number.set_value (800ms debounce, 0-60 min),
+ * repeat interval stepper + litter type chips -> select.select_option
+ * (options read live from the select entity; interval walks the
+ * non-Disabled options). Deep deodorizing wires switch._deep_deodorizing;
+ * the integration exposes a duplicate _2 entity - override per card
+ * config `deep_deo_suffix: deep_deodorizing_2` if flip-testing shows
+ * the duplicate is the live one. Scheduled cleaning/deodorizing and
+ * screen display are on/off only - their times are not exposed by the
+ * integration (app-side). Feeder block gains a Plan row: per-feeder
+ * tabbed schedule panel reading the weekly meal plan from
+ * sensor._raw_distribution_data attributes (feed_daily_list; meals
+ * grouped across identical days), with a meal editor (time in 15-min
+ * steps, grams in 5g steps, per-weekday dots, add/remove). Edits are
+ * LOCAL until Save plan - petkit.set_feeding_schedule REPLACES the
+ * feeder's entire weekly plan (device_id from the raw sensor's
+ * attributes), so the save bar only appears when dirty and Cancel
+ * reverts to the live plan. Manual feeds are untouched.
+ * v1.20: child panels reset with their parents (owner request).
+ * Closing the More panel (More button, outside-tap, or starting
+ * maintenance) also closes the Settings panel; collapsing the card
+ * from the header zone closes Settings AND the feeder Plan panel
+ * (and any open meal editor), so both always reopen fresh. Unsaved
+ * schedule edits survive in the local model (dirty flag persists) -
+ * only the panel's open state resets.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -207,6 +238,14 @@
       this._histOpen = -1;         // index of the cat whose history panel is open
       this._hist = {};             // per-cat fetched history cache
       this._histDay = {};          // per-cat day-bar filter (dayKey string or null)
+      this._setOpen = false;       // litter settings panel open
+      this._optSet = {};           // entity_id -> {state, until} optimistic overlay
+      this._delayPend = null;      // pending cleaning-delay value while debouncing
+      this._delayTimer = null;
+      this._schedOpen = false;     // feeder schedule panel open
+      this._schedTab = 0;          // which feeder tab is active
+      this._sched = {};            // per-feeder {model, dirty, saving, doneUntil}
+      this._schedEdit = null;      // meal key with editor open
     }
 
     /* ---------------- config ---------------- */
@@ -242,6 +281,26 @@
         pause: 'button.' + lp + '_action_pause',
         cont: 'button.' + lp + '_action_continue'
       };
+      const deepDeo = config.deep_deo_suffix || 'deep_deodorizing';
+      this._setEnts = {
+        autoClean: 'switch.' + lp + '_auto_clean',
+        delay: 'number.' + lp + '_cleaning_delay',
+        schedClean: 'switch.' + lp + '_periodic_cleaning',
+        avoidRepeat: 'switch.' + lp + '_avoid_repeat_cleaning',
+        repeatIvl: 'select.' + lp + '_avoid_repeat_cleaning_interval',
+        deepClean: 'switch.' + lp + '_deep_cleaning',
+        litterSave: 'switch.' + lp + '_litter_saving',
+        wasteCover: 'switch.' + lp + '_waste_covering',
+        autoDeo: 'switch.' + lp + '_auto_deodorizing',
+        schedDeo: 'switch.' + lp + '_periodic_deodorizing',
+        deepDeo: 'switch.' + lp + '_' + deepDeo,
+        rotation: 'switch.' + lp + '_continuous_rotation',
+        display: 'switch.' + lp + '_display',
+        litterType: 'select.' + lp + '_litter_type',
+        dnd: 'switch.' + lp + '_do_not_disturb',
+        childLock: 'switch.' + lp + '_child_lock',
+        kitten: 'switch.' + lp + '_kitten_mode'
+      };
       const CAM_IMAGES = {
         eat: ['last_eat_event', 'last eat'],
         visit: ['last_visit_event', 'last seen'],
@@ -263,7 +322,8 @@
           devStatus: 'sensor.' + p + '_device_status',
           hopper: 'binary_sensor.' + p + '_food_level',
           image: 'image.' + p + '_' + cam[0],
-          camera: 'camera.' + p
+          camera: 'camera.' + p,
+          raw: 'sensor.' + p + '_raw_distribution_data'
         };
       });
       this._portions = (config.portions && config.portions.length)
@@ -534,6 +594,7 @@
         }
         .maintbtn .bsub { font-size: 10.5px; color: rgba(160,160,160,.7); font-weight: 400; }
         .maintbtn[disabled] { opacity: .4; cursor: default; }
+        .maintbtn.on { background: rgba(255,193,7,.16); color: ${AMBER_TXT}; }
         .maintbtn .holdfill {
           position: absolute; left: 0; top: 0; bottom: 0; width: 0;
           background: rgba(255,193,7,.25); border-radius: 10px;
@@ -614,6 +675,73 @@
         .pressable { transition: transform .12s ease, background .12s ease; border-radius: 8px; }
         .pressable.pressed { transform: scale(.985); background: rgba(70,70,70,.22); }
         .unavail { opacity: .5; }
+        .setpanel {
+          display: none; border: 1px solid var(--divider-color, rgba(255,255,255,.1));
+          background: rgba(255,255,255,.03); border-radius: 10px;
+          padding: 8px 11px 10px; margin-top: 9px;
+        }
+        .grouphead {
+          font-size: 10.5px; color: rgba(120,120,120,.9); font-weight: 600;
+          letter-spacing: .4px; margin: 10px 0 2px;
+        }
+        .grouphead:first-child { margin-top: 2px; }
+        .setrow { display: flex; align-items: center; gap: 10px; padding: 4px 0; min-height: 30px; }
+        .setrow .slbl { font-size: 12.5px; color: var(--primary-text-color); }
+        .setrow .ssub { font-size: 10.5px; color: rgba(160,160,160,.7); margin-top: 1px; line-height: 1.3; }
+        .setrow.unavail { pointer-events: none; }
+        .tgl {
+          width: 34px; height: 20px; border-radius: 10px; flex: 0 0 auto;
+          background: rgba(255,255,255,.10); position: relative; cursor: pointer;
+          transition: background .15s ease;
+        }
+        .tgl::after {
+          content: ''; position: absolute; top: 3px; left: 3px;
+          width: 14px; height: 14px; border-radius: 50%;
+          background: #9e9e9e; transition: left .15s ease, background .15s ease;
+        }
+        .tgl.on { background: rgba(255,193,7,.35); }
+        .tgl.on::after { left: 17px; background: ${AMBER_TXT}; }
+        .stepper { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+        .stepbtn {
+          width: 26px; height: 26px; border-radius: 13px;
+          background: rgba(255,255,255,.06); color: #bdbdbd;
+          font-size: 14px; border: none; cursor: pointer; font-family: inherit;
+          display: inline-flex; align-items: center; justify-content: center;
+        }
+        .stepval { font-size: 12.5px; color: var(--primary-text-color); font-weight: 500; min-width: 46px; text-align: center; }
+        .stepval span { font-size: 10.5px; color: rgba(160,160,160,.7); font-weight: 400; }
+        .mealrow { padding: 7px 0 5px; border-top: 1px solid var(--divider-color, rgba(255,255,255,.08)); }
+        .mealrow.first { border-top: none; padding-top: 2px; }
+        .mealtime { font-size: 13px; font-weight: 500; color: var(--primary-text-color); width: 56px; flex: 0 0 auto; }
+        .mealmeta { font-size: 11px; color: var(--secondary-text-color); }
+        .daydots { display: flex; gap: 4px; }
+        .ddot {
+          width: 17px; height: 17px; border-radius: 50%;
+          font-size: 8.5px; font-weight: 600; cursor: pointer; border: none;
+          font-family: inherit; padding: 0;
+          display: inline-flex; align-items: center; justify-content: center;
+          background: rgba(255,255,255,.06); color: rgba(160,160,160,.55);
+        }
+        .ddot.on { background: rgba(255,193,7,.16); color: ${AMBER_TXT}; }
+        .mealed { margin-top: 8px; padding: 9px 10px; border: 1px solid var(--divider-color, rgba(255,255,255,.08)); border-radius: 8px; background: rgba(255,255,255,.02); }
+        .edlabel { font-size: 10px; color: rgba(120,120,120,.9); font-weight: 600; letter-spacing: .4px; width: 44px; flex: 0 0 auto; }
+        .dangerbtn {
+          height: 26px; padding: 0 11px; border-radius: 13px;
+          background: rgba(244,67,54,.12); color: #ef9a9a;
+          font-size: 11.5px; border: none; cursor: pointer; font-family: inherit;
+        }
+        .addmeal {
+          margin-top: 6px; width: 100%; height: 30px; border-radius: 8px;
+          background: none; border: 1px dashed rgba(255,255,255,.15);
+          color: rgba(160,160,160,.7); font-size: 11.5px; cursor: pointer; font-family: inherit;
+        }
+        .savebar {
+          display: flex; align-items: center; gap: 8px; margin-top: 10px;
+          padding-top: 10px; border-top: 1px solid var(--divider-color, rgba(255,255,255,.08));
+        }
+        .savebar .snote { font-size: 10px; color: rgba(160,160,160,.7); line-height: 1.3; }
+        .fdrtabs { display: flex; gap: 5px; margin-bottom: 8px; }
+        .medcaret { color: rgba(160,160,160,.45); font-size: 10px; cursor: pointer; border: none; background: none; font-family: inherit; padding: 4px 2px 4px 6px; }
       </style>
       <ha-card id="card">
         <div class="alertstrip" id="alerts"></div>
@@ -634,18 +762,20 @@
             </div>
             <div class="row" style="margin-top:7px;">
               <div class="tert grow" id="litstats">--</div>
-              <button class="ghostbtn" id="cleanbtn" data-noexpand="1">&#10227; Clean</button>
+              <button class="ghostbtn" id="maintstartbtn" data-noexpand="1">&#128295; Maint</button>
               <button class="ghostbtn" id="morebtn" data-noexpand="1">&#8943; More</button>
             </div>
             <div class="morepanel" id="morepanel" data-noexpand="1">
               <div class="row" style="gap:8px;">
-                <button class="maintbtn" id="levelbtn"><span>&#9776; Level litter</span><span class="bsub">smooth the bed</span></button>
-                <button class="maintbtn" id="pausebtn"><span id="pauselbl">&#10073;&#10073; Pause</span><span class="bsub">current cycle</span></button>
+                <button class="maintbtn" id="cleanbtn"><span>&#10227; Clean</span></button>
+                <button class="maintbtn" id="levelbtn"><span>&#9776; Level litter</span></button>
               </div>
               <div class="row" style="gap:8px; margin-top:8px;">
-                <button class="maintbtn" id="maintstartbtn"><span>&#128295; Start maintenance</span><span class="bsub">parks drum for bag &amp; refill</span></button>
+                <button class="maintbtn" id="pausebtn"><span id="pauselbl">&#10073;&#10073; Pause</span></button>
+                <button class="maintbtn" id="setsbtn"><span>&#9881; Settings</span></button>
               </div>
             </div>
+            <div class="setpanel" id="setpanel" data-noexpand="1"></div>
           </div>
           <div class="maintpanel" id="maintpanel" data-noexpand="1">
             <div class="row" style="margin-bottom:10px;">
@@ -666,6 +796,11 @@
           <div id="feedblock">
             ${feederRows}
             ${bothRow}
+            <div class="row" style="margin-top:10px;" data-noexpand="1">
+              <div class="tert grow" id="schedsum">--</div>
+              <button class="ghostbtn" id="planbtn">&#9201; Plan</button>
+            </div>
+            <div class="setpanel" id="schedpanel" data-noexpand="1"></div>
           </div>
           </div>
         </div>
@@ -721,6 +856,7 @@
               el.tagName === 'BUTTON') return;
         }
         this._moreOpen = false;
+        this._setOpen = false;
         this._update();
       });
 
@@ -736,7 +872,12 @@
           if (el.tagName === 'BUTTON') return;
         }
         this._expanded = !this._expanded;
-        if (!this._expanded) this._histOpen = -1;
+        if (!this._expanded) {
+          this._histOpen = -1;
+          this._setOpen = false;
+          this._schedOpen = false;
+          this._schedEdit = null;
+        }
         this._update();
       });
 
@@ -810,6 +951,7 @@
       this.$.morebtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._moreOpen = !this._moreOpen;
+        if (!this._moreOpen) this._setOpen = false;
         this._update();
       });
       this.$.levelbtn.addEventListener('click', (e) => {
@@ -828,6 +970,7 @@
         this._press(this._lit.maintStart);
         this._maintPending = Date.now();
         this._moreOpen = false;
+        this._setOpen = false;
         this._update();
       });
       this.$.maintexitbtn.addEventListener('click', (e) => {
@@ -878,6 +1021,383 @@
           this._moreInfo(f.camera);
         });
       });
+
+      // settings panel toggle + delegated controls (v1.19)
+      this.$.setsbtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._setOpen = !this._setOpen;
+        this._update();
+      });
+      this.$.setpanel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const t = e.target.closest('[data-tgl],[data-step],[data-lt]');
+        if (!t) return;
+        if (t.dataset.tgl) this._tglSw(t.dataset.tgl);
+        else if (t.dataset.step) this._setStep(t.dataset.step, Number(t.dataset.d));
+        else if (t.dataset.lt) this._selOption(this._setEnts.litterType, t.dataset.lt);
+      });
+
+      // feeder schedule panel toggle + delegated controls (v1.19)
+      this.$.planbtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._schedOpen = !this._schedOpen;
+        if (!this._schedOpen) this._schedEdit = null;
+        this._update();
+      });
+      this.$.schedpanel.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const t = e.target.closest(
+          '[data-tab],[data-medit],[data-mstep],[data-mday],[data-mdel],[data-madd],[data-msave],[data-mcancel]');
+        if (!t) return;
+        const d = t.dataset;
+        if (d.tab !== undefined) {
+          this._schedTab = Number(d.tab); this._schedEdit = null;
+        } else if (d.medit !== undefined) {
+          this._schedEdit = this._schedEdit === d.medit ? null : d.medit;
+        } else if (d.mstep !== undefined) {
+          this._mealStep(d.mstep, Number(d.idx), Number(d.d));
+        } else if (d.mday !== undefined) {
+          this._mealDay(Number(d.idx), Number(d.mday));
+        } else if (d.mdel !== undefined) {
+          this._mealDel(Number(d.idx));
+        } else if (d.madd !== undefined) {
+          this._mealAdd();
+        } else if (d.msave !== undefined) {
+          this._schedSave();
+        } else if (d.mcancel !== undefined) {
+          this._schedCancel();
+        }
+        this._update();
+      });
+    }
+
+    /* ---------------- litter settings (v1.19) ---------------- */
+
+    _setOn(ent) {
+      const o = this._optSet[ent];
+      if (o && Date.now() < o.until) return o.state === 'on';
+      return this._isOn(ent);
+    }
+
+    _tglSw(ent) {
+      const on = this._setOn(ent);
+      this._optSet[ent] = { state: on ? 'off' : 'on', until: Date.now() + OPT_MS };
+      this._hass.callService('switch', on ? 'turn_off' : 'turn_on', { entity_id: ent });
+      this._update();
+    }
+
+    _selOption(ent, opt) {
+      this._optSet[ent] = { state: opt, until: Date.now() + OPT_MS };
+      this._hass.callService('select', 'select_option', { entity_id: ent, option: opt });
+      this._update();
+    }
+
+    _selVal(ent) {
+      const o = this._optSet[ent];
+      if (o && Date.now() < o.until) return o.state;
+      return this._sv(ent);
+    }
+
+    _setStep(which, d) {
+      if (which === 'delay') {
+        const st = this._st(this._setEnts.delay);
+        const min = st && st.attributes.min != null ? Number(st.attributes.min) : 0;
+        const max = st && st.attributes.max != null ? Number(st.attributes.max) : 60;
+        const cur = this._delayPend != null ? this._delayPend
+          : (this._num(this._setEnts.delay) || 0);
+        this._delayPend = Math.max(min, Math.min(max, cur + d));
+        clearTimeout(this._delayTimer);
+        this._delayTimer = setTimeout(() => {
+          const v = this._delayPend;
+          this._delayPend = null;
+          if (v != null) {
+            this._optSet[this._setEnts.delay] = { state: String(v), until: Date.now() + OPT_MS };
+            this._hass.callService('number', 'set_value', {
+              entity_id: this._setEnts.delay, value: v
+            });
+          }
+        }, 800);
+      } else if (which === 'repeat') {
+        const st = this._st(this._setEnts.repeatIvl);
+        const opts = (st && st.attributes.options
+          ? st.attributes.options.filter((o) => o !== 'Disabled') : []);
+        if (!opts.length) return;
+        const cur = this._selVal(this._setEnts.repeatIvl);
+        let idx = opts.indexOf(cur);
+        if (idx === -1) idx = 0; else idx = Math.max(0, Math.min(opts.length - 1, idx + d));
+        this._selOption(this._setEnts.repeatIvl, opts[idx]);
+        return;
+      }
+      this._update();
+    }
+
+    _setRowHtml(lbl, sub, control, unavailable) {
+      return '<div class="setrow' + (unavailable ? ' unavail' : '') + '">' +
+        '<div class="grow"><div class="slbl">' + lbl + '</div>' +
+        (sub ? '<div class="ssub">' + sub + '</div>' : '') + '</div>' + control + '</div>';
+    }
+
+    _tglHtml(ent) {
+      const missing = !this._st(ent);
+      return '<div class="tgl' + (this._setOn(ent) ? ' on' : '') +
+        '" data-tgl="' + ent + '"' + (missing ? ' style="opacity:.3;"' : '') + '></div>';
+    }
+
+    _renderSetPanel() {
+      const $ = this.$;
+      const E = this._setEnts;
+      const delayShow = this._delayPend != null ? this._delayPend
+        : (this._selVal(E.delay) != null ? Math.round(Number(this._selVal(E.delay))) : null);
+      const rep = this._selVal(E.repeatIvl) || '--';
+      const lt = this._selVal(E.litterType);
+      const ltSt = this._st(E.litterType);
+      const ltOpts = ltSt && ltSt.attributes.options ? ltSt.attributes.options : [];
+      const key = [delayShow, rep, lt,
+        E.autoClean, this._setOn(E.autoClean), this._setOn(E.schedClean),
+        this._setOn(E.avoidRepeat), this._setOn(E.deepClean), this._setOn(E.litterSave),
+        this._setOn(E.wasteCover), this._setOn(E.autoDeo), this._setOn(E.schedDeo),
+        this._setOn(E.deepDeo), this._setOn(E.rotation), this._setOn(E.display),
+        this._setOn(E.dnd), this._setOn(E.childLock), this._setOn(E.kitten),
+        ltOpts.join(',')].join('|');
+      if ($.setpanel.dataset.render === key) return;
+      $.setpanel.dataset.render = key;
+      const stepperHtml = (which, valHtml) =>
+        '<div class="stepper">' +
+        '<button class="stepbtn" data-step="' + which + '" data-d="-1">&#8722;</button>' +
+        '<div class="stepval">' + valHtml + '</div>' +
+        '<button class="stepbtn" data-step="' + which + '" data-d="1">+</button></div>';
+      const ltChips = '<div class="chips" style="flex:0 0 auto;">' +
+        ltOpts.map((o) => '<button class="pchip' + (o === lt ? ' sel' : '') +
+          '" data-lt="' + this._esc(o) + '">' + this._esc(o) + '</button>').join('') +
+        '</div>';
+      $.setpanel.innerHTML =
+        '<div class="grouphead">CLEANING</div>' +
+        this._setRowHtml('Auto clean', 'cycle after each visit', this._tglHtml(E.autoClean)) +
+        this._setRowHtml('Cleaning delay', 'wait after cat exits',
+          stepperHtml('delay', (delayShow == null ? '--' : delayShow) + ' <span>min</span>')) +
+        this._setRowHtml('Scheduled cleaning', 'scheduled cycles &middot; times set in PetKit app',
+          this._tglHtml(E.schedClean)) +
+        this._setRowHtml('Avoid repeat cleaning', 'skip re-clean within interval',
+          this._tglHtml(E.avoidRepeat)) +
+        this._setRowHtml('Repeat interval', 'fixed steps: 5m&#8211;2h',
+          stepperHtml('repeat', this._esc(rep))) +
+        '<div class="grouphead">DEEP CLEANING</div>' +
+        this._setRowHtml('Deep cleaning', 'extended sift cycle', this._tglHtml(E.deepClean)) +
+        this._setRowHtml('Litter saving', 'use less litter per cycle', this._tglHtml(E.litterSave)) +
+        this._setRowHtml('Waste covering', 'bury waste during the delay', this._tglHtml(E.wasteCover)) +
+        '<div class="grouphead">DEODORIZING</div>' +
+        this._setRowHtml('Auto deodorizing', 'spray cycle after cleans', this._tglHtml(E.autoDeo)) +
+        this._setRowHtml('Scheduled deodorizing', 'scheduled runs &middot; times set in PetKit app',
+          this._tglHtml(E.schedDeo)) +
+        this._setRowHtml('Deep deodorizing', 'intensive deodorize cycle', this._tglHtml(E.deepDeo)) +
+        '<div class="grouphead">BOX</div>' +
+        this._setRowHtml('Uninterrupted rotation', 'no pause mid-cycle', this._tglHtml(E.rotation)) +
+        this._setRowHtml('Screen display', 'on-box screen &middot; schedule set in PetKit app',
+          this._tglHtml(E.display)) +
+        this._setRowHtml('Litter type', '', ltChips) +
+        this._setRowHtml('Do not disturb', 'quiet hours per app schedule', this._tglHtml(E.dnd)) +
+        this._setRowHtml('Child lock', 'panel buttons disabled', this._tglHtml(E.childLock)) +
+        this._setRowHtml('Kitten mode',
+          '<span style="color:' + AMBER_TXT + ';">&#9888; disables all auto-cleaning</span>',
+          this._tglHtml(E.kitten));
+    }
+
+    /* ---------------- feeder schedule (v1.19) ---------------- */
+
+    _fmtSec(sec) {
+      let h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+      const ap = h >= 12 ? 'p' : 'a';
+      h = h % 12; if (h === 0) h = 12;
+      return h + ':' + String(m).padStart(2, '0') + ap;
+    }
+
+    _parseSched(i) {
+      const st = this._st(this._fdrs[i].raw);
+      if (!st || !st.attributes.feed_daily_list) return null;
+      const byKey = {};
+      st.attributes.feed_daily_list.forEach((day) => {
+        const d = Number(day.repeats) - 1;
+        if (d < 0 || d > 6) return;
+        (day.items || []).forEach((it) => {
+          const key = it.time + '|' + (it.name || '') + '|' + it.amount;
+          if (!byKey[key]) {
+            byKey[key] = {
+              time: Number(it.time), name: it.name || 'Meal',
+              amount: Number(it.amount) || 0,
+              days: [false, false, false, false, false, false, false]
+            };
+          }
+          byKey[key].days[d] = true;
+        });
+      });
+      const meals = Object.values(byKey).sort((a, b) => a.time - b.time);
+      return { meals, deviceId: st.attributes.device_id };
+    }
+
+    _schedLocal(i) {
+      let s = this._sched[i];
+      if (!s || (!s.dirty && !s.saving)) {
+        const live = this._parseSched(i);
+        s = this._sched[i] = {
+          model: live ? live.meals.map((m) => ({
+            time: m.time, name: m.name, amount: m.amount, days: m.days.slice()
+          })) : null,
+          deviceId: live ? live.deviceId : null,
+          dirty: (s && s.dirty) || false,
+          saving: (s && s.saving) || false,
+          doneUntil: (s && s.doneUntil) || 0
+        };
+      }
+      return s;
+    }
+
+    _daysSum(days) {
+      const n = days.filter(Boolean).length;
+      if (n === 7) return 'daily';
+      if (n === 5 && days[0] && days[1] && days[2] && days[3] && days[4]) return 'M&#8211;F';
+      if (n === 2 && days[5] && days[6]) return 'weekends';
+      return n + 'd/wk';
+    }
+
+    _mealStep(which, idx, d) {
+      const s = this._sched[this._schedTab];
+      if (!s || !s.model || !s.model[idx]) return;
+      const m = s.model[idx];
+      if (which === 'time') m.time = (m.time + d * 900 + 86400) % 86400;
+      else if (which === 'grams') m.amount = Math.max(5, Math.min(100, m.amount + d * 5));
+      s.dirty = true;
+    }
+
+    _mealDay(idx, day) {
+      const s = this._sched[this._schedTab];
+      if (!s || !s.model || !s.model[idx]) return;
+      const m = s.model[idx];
+      const n = m.days.filter(Boolean).length;
+      if (m.days[day] && n <= 1) return; // keep at least one day
+      m.days[day] = !m.days[day];
+      s.dirty = true;
+    }
+
+    _mealDel(idx) {
+      const s = this._sched[this._schedTab];
+      if (!s || !s.model) return;
+      s.model.splice(idx, 1);
+      s.dirty = true;
+      this._schedEdit = null;
+    }
+
+    _mealAdd() {
+      const s = this._schedLocal(this._schedTab);
+      if (!s.model) s.model = [];
+      s.model.push({
+        time: 28800, name: 'Meal', amount: 10,
+        days: [true, true, true, true, true, true, true]
+      });
+      s.dirty = true;
+      this._schedEdit = this._schedTab + ':' + (s.model.length - 1);
+    }
+
+    _schedCancel() {
+      const i = this._schedTab;
+      this._sched[i] = null;
+      this._schedEdit = null;
+      this._schedLocal(i);
+    }
+
+    _schedSave() {
+      const i = this._schedTab;
+      const s = this._sched[i];
+      if (!s || !s.model || s.saving || s.deviceId == null) return;
+      const list = [];
+      for (let d = 1; d <= 7; d++) {
+        list.push({
+          repeats: d, suspended: 0,
+          items: s.model.filter((m) => m.days[d - 1])
+            .sort((a, b) => a.time - b.time)
+            .map((m) => ({ time: m.time, name: m.name, amount: m.amount }))
+        });
+      }
+      s.saving = true;
+      this._hass.callService('petkit', 'set_feeding_schedule', {
+        device_id: Number(s.deviceId), feed_daily_list: list
+      }).then(() => {
+        s.saving = false; s.dirty = false;
+        s.doneUntil = Date.now() + 1500;
+        this._schedEdit = null;
+        setTimeout(() => this._update(), 1600);
+        this._update();
+      }).catch(() => {
+        s.saving = false;
+        s.error = 'save failed';
+        this._update();
+      });
+      this._update();
+    }
+
+    _renderSched() {
+      const $ = this.$;
+      const i = this._schedTab;
+      const s = this._schedLocal(i);
+      const key = JSON.stringify([i, this._schedEdit, s.dirty, s.saving,
+        s.doneUntil > Date.now(), s.error || '', s.model]);
+      if ($.schedpanel.dataset.render === key) return;
+      $.schedpanel.dataset.render = key;
+      const tabs = '<div class="fdrtabs">' + this._fdrs.map((f, j) =>
+        '<button class="pchip' + (j === i ? ' sel' : '') + '" data-tab="' + j + '">' +
+        this._esc(f.owner ? f.owner + "'s" : f.label) + '</button>').join('') + '</div>';
+      let body;
+      if (!s.model) {
+        body = '<div class="histhead" style="margin:0;">schedule unavailable &middot; raw sensor missing</div>';
+      } else {
+        const DL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+        body = s.model.map((m, idx) => {
+          const ek = i + ':' + idx;
+          const dots = '<div class="daydots">' + m.days.map((on, d) =>
+            '<button class="ddot' + (on ? ' on' : '') + '" data-mday="' + d +
+            '" data-idx="' + idx + '">' + DL[d] + '</button>').join('') + '</div>';
+          let ed = '';
+          if (this._schedEdit === ek) {
+            ed = '<div class="mealed">' +
+              '<div class="row" style="margin-bottom:8px;"><div class="edlabel">TIME</div>' +
+              '<div class="stepper">' +
+              '<button class="stepbtn" data-mstep="time" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
+              '<div class="stepval" style="min-width:56px;">' + this._fmtSec(m.time) + '</div>' +
+              '<button class="stepbtn" data-mstep="time" data-idx="' + idx + '" data-d="1">+</button></div>' +
+              '<div class="tert">15-min steps</div></div>' +
+              '<div class="row"><div class="edlabel">GRAMS</div>' +
+              '<div class="stepper">' +
+              '<button class="stepbtn" data-mstep="grams" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
+              '<div class="stepval">' + m.amount + ' <span>g</span></div>' +
+              '<button class="stepbtn" data-mstep="grams" data-idx="' + idx + '" data-d="1">+</button></div>' +
+              '<div class="grow"></div>' +
+              '<button class="dangerbtn" data-mdel="1" data-idx="' + idx + '">Remove</button></div>' +
+              '</div>';
+          }
+          return '<div class="mealrow' + (idx === 0 ? ' first' : '') + '">' +
+            '<div class="row">' +
+            '<div class="mealtime">' + this._fmtSec(m.time) + '</div>' +
+            '<div class="grow"><div class="mealmeta">' + this._esc(m.name) + ' &middot; ' +
+            m.amount + ' g &middot; ' + this._daysSum(m.days) + '</div></div>' +
+            dots +
+            '<button class="medcaret" data-medit="' + ek + '">' +
+            (this._schedEdit === ek ? '&#9652;' : '&#9662;') + '</button>' +
+            '</div>' + ed + '</div>';
+        }).join('') +
+        '<button class="addmeal" data-madd="1">+ Add meal</button>';
+        if (s.dirty || s.saving || s.doneUntil > Date.now() || s.error) {
+          const note = s.error ? s.error
+            : 'saving replaces this feeder\'s full weekly plan';
+          const btnTxt = s.saving ? 'Saving&hellip;'
+            : (s.doneUntil > Date.now() ? 'Saved &#10003;' : 'Save plan');
+          body += '<div class="savebar">' +
+            '<div class="snote grow">' + note + '</div>' +
+            (s.dirty && !s.saving
+              ? '<button class="ghostbtn" data-mcancel="1">Cancel</button>' : '') +
+            '<button class="feedbtn" data-msave="1"' +
+            ((s.saving || !s.dirty) ? ' disabled' : '') + '>' + btnTxt + '</button></div>';
+        }
+      }
+      $.schedpanel.innerHTML = tabs + body;
     }
 
     /* ---------------- feeding + undo ---------------- */
@@ -1385,6 +1905,12 @@
       $.pauselbl.innerHTML = st.indexOf('paus') !== -1
         ? '&#9654; Resume' : '&#10073;&#10073; Pause';
 
+      /* settings panel (v1.19) */
+      const sv = this._setOpen && this._moreOpen && !showMaint ? 'block' : 'none';
+      if ($.setpanel.style.display !== sv) $.setpanel.style.display = sv;
+      $.setsbtn.classList.toggle('on', this._setOpen);
+      if (sv === 'block') this._renderSetPanel();
+
       /* feeders */
       this._fdrs.forEach((f, i) => {
         $['fdr' + i + 'own'].textContent = f.owner ? ' \u00b7 ' + f.owner + "'s" : '';
@@ -1427,6 +1953,21 @@
         });
         this._feedBtnLabel('both', $.bothfeed);
       }
+
+      /* feeder schedule (v1.19) */
+      const todayIdx = (new Date().getDay() + 6) % 7; // Mon = 0
+      const sumTxt = 'scheduled: ' + this._fdrs.map((f, j) => {
+        const live = this._parseSched(j);
+        if (!live) return (f.owner || f.label) + ' --';
+        const todays = live.meals.filter((m) => m.days[todayIdx]);
+        const g = todays.reduce((a, m) => a + m.amount, 0);
+        return (f.owner || f.label) + ' ' + todays.length + 'x/' + g + 'g';
+      }).join(' \u00b7 ');
+      if ($.schedsum.textContent !== sumTxt) $.schedsum.textContent = sumTxt;
+      const spv = this._schedOpen ? 'block' : 'none';
+      if ($.schedpanel.style.display !== spv) $.schedpanel.style.display = spv;
+      $.planbtn.classList.toggle('open', this._schedOpen);
+      if (spv === 'block') this._renderSched();
 
       /* alerts */
       const alerts = [];

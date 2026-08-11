@@ -54,20 +54,31 @@ header.)*
   header, room-pick clean flow, full cleaning profiles (Away/Default popup
   editors), maintenance counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `flat-cat-card.js` — v1.18. Consolidated cats card (pet-tech litter box + two
+- `flat-cat-card.js` — v1.20. Consolidated cats card (pet-tech litter box + two
   feeders + per-cat rows): header-zone expand/collapse with hover strip and
   animated height (grid-rows technique), per-cat litter history panels (tap a cat
   row: visits-per-day bars with day filtering, recent-visit log with duration +
   scale weight, long-term weight trend from permanent statistics with a
   zero-poisoning filter and drift-delta readout — no helper entities), litter
-  level bar with Clean/More controls and a guarded two-step maintenance mode
-  (Dump litter is hold-to-confirm), feeder rows with dispensed-vs-planned grams
+  level bar with Maint/More controls (More = even 2x2 grid: Clean / Level /
+  Pause / Settings) and a guarded two-step maintenance mode (Dump litter is
+  hold-to-confirm), litter SETTINGS panel (grouped instant-write toggles,
+  cleaning-delay and repeat-interval steppers, litter-type chips — switches,
+  number, and selects from the litter-box integration; 8s optimistic overlay;
+  `deep_deo_suffix` config override for integrations exposing duplicate
+  deep-deodorizing switches), feeder rows with dispensed-vs-planned grams
   and portion-chip manual feeds (single or both feeders) with a 5s undo window,
+  per-feeder SCHEDULE panel (weekly meal plan parsed from the raw distribution
+  sensor; meal editor with 15-min time steps, gram steps, weekday dots;
+  local-until-Save editing — Save replaces the feeder's full weekly plan via
+  the integration's set_feeding_schedule service; Cancel reverts to live),
   configurable event-snapshot camera tiles (camera_image: eat | visit | feed,
   tap for live), amber alert strip (litter low, bin full, hopper empty, offline,
-  frequent-use health flag), pulsing occupied dot. All entities via YAML config
-  (cat list + entity prefixes). Used as `type: custom:flat-cat-card` (see notes
-  for the YAML shape). HA resource id: `6de3dc9ee5524b81a702ecbabae6e156`.
+  frequent-use health flag), pulsing occupied dot. Child panels reset with
+  their parents (closing More closes Settings; collapsing the card closes
+  Settings + Plan). All entities via YAML config (cat list + entity prefixes).
+  Used as `type: custom:flat-cat-card` (see notes for the YAML shape).
+  HA resource id: `6de3dc9ee5524b81a702ecbabae6e156`.
 - `flat-music-card.js` — v1.26. Whole-home music control card for Music Assistant
   sync groups: header mini-player with active-output retargeting, queue-transfer
   output switching, scrubber and transport controls, live favorites picker,
