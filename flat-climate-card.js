@@ -1,4 +1,4 @@
-/* flat-climate-card v1.4 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v1.5 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an OPEN WINDOWS action chip
@@ -61,6 +61,24 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v1.5: HALL (thermostat) LINE + TRANSLUCENT AVERAGE DASHES.
+     (a) The thermostat's own temperature joins the overlay as a solid sixth
+     line, seated IN THE INDOOR GROUP (legend/strip/tooltip order: indoor
+     rooms, Hall, then outdoor). Color #a774d6 (violet) - measured as the
+     most-distinct remaining hue vs the existing five (red candidates land
+     ~2x closer to the orange/magenta pair). Hall is display-only by default:
+     NOT in the indoor average (thermostat-embedded sensors run slightly
+     warm; also keeps the headline's meaning stable). Config:
+       hall: {entity, humidity, name, color, in_average: false}
+     Set in_average: true to count it; hall: false removes the line.
+     (b) Dashed translucent average lines (owner idea: dashed = computed,
+     solid = measured): in-avg (warm #e6c193) + out-avg (cool #8fb8e8),
+     2px dash, opacity 0.35 (config avg_opacity; 0 hides), end-labeled
+     "in avg"/"out avg" at the right edge. The out-avg dash IS the
+     sun-trimmed value the headline reports - the trim is visible where
+     the dash refuses to follow the patio spike.
+     (c) Chip relocated bottom-legend -> TOP-LEFT under the headline (its
+     v1.0 home) - the legend line now carries six items and needed the room.
    - v1.3: title-graph tap-to-more-info REMOVED (fought mobile tap-scrubbing;
      humidity row + strip cells keep their taps). SUN-SPIKE TRIM added to the
      outdoor math: each outdoor temp is capped at (coolest outdoor + sun_cap,
@@ -92,6 +110,10 @@ const DEF_OUTDOOR = [
     name: 'Front', color: '#199e70' },
 ];
 const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS' };
+const DEF_HALL = { entity: 'sensor.hall_nest_thermostat_temperature',
+                   humidity: 'sensor.hall_nest_thermostat_humidity',
+                   name: 'Hall', color: '#a774d6', in_average: false };
+const AVG_IN = '#e6c193', AVG_OUT = '#8fb8e8', DEF_AVG_OP = 0.35;
 const DEF_SUN_CAP = 4; // F; outdoor sensors count at most this far above the coolest one
 const HERO_H = 170, HERO_G = 170, ROW_H = 116, ROW_G = 99;
 const REFRESH_MS = 5 * 60 * 1000;
@@ -108,7 +130,10 @@ class FlatClimateCard extends HTMLElement {
     this._outdoor = mk(config.outdoor, DEF_OUTDOOR);
     this._chipCfg = Object.assign({}, DEF_CHIP, config.chip || {});
     this._sunCap = (config.sun_cap != null) ? Number(config.sun_cap) : DEF_SUN_CAP;
-    this._series = this._indoor.concat(this._outdoor);
+    this._hall = (config.hall === false) ? null : Object.assign({}, DEF_HALL, config.hall || {});
+    this._avgOp = (config.avg_opacity != null) ? Number(config.avg_opacity) : DEF_AVG_OP;
+    // display order: indoor rooms, Hall (indoor group), then outdoor
+    this._series = this._indoor.concat(this._hall ? [this._hall] : [], this._outdoor);
     this._open = false;
     this._chipOn = false;
     this._chipShown = null;   // last applied visibility (idempotent display writes)
@@ -161,6 +186,7 @@ class FlatClimateCard extends HTMLElement {
           -webkit-text-stroke: 2px var(--card-background-color); paint-order: stroke fill; }
         .val .uom { font-size: 16px; font-weight: 400; color: var(--secondary-text-color);
           margin-left: 4px; -webkit-text-stroke: 0; }
+        .chipwrap { position: absolute; top: 47px; left: 16px; z-index: 2; pointer-events: none; }
         .chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex: none;
           padding: 2px 8px; border-radius: 999px; border: 1px solid ${GOOD};
           color: ${GOOD}; font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
@@ -239,8 +265,9 @@ class FlatClimateCard extends HTMLElement {
         <div class="reading">
           <div class="val"><span id="dv">--</span><span class="uom" id="dw"></span></div>
         </div>
-        <div class="legend"><span class="chip" id="chip" style="display:none">
-          <span class="cdot"></span><span id="chiplab"></span></span>${legend}</div>
+        <div class="chipwrap"><span class="chip" id="chip" style="display:none">
+          <span class="cdot"></span><span id="chiplab"></span></span></div>
+        <div class="legend">${legend}</div>
         <div class="toggle" id="pill"></div>
         <div class="xline"></div>
         <div class="tip"><div class="tt"></div>${tipRows(this._series)}</div>
@@ -366,7 +393,8 @@ class FlatClimateCard extends HTMLElement {
   _renderStates() {
     if (!this._hass || !this._el) return;
     const root = this.shadowRoot;
-    const inT = this._avg(this._indoor, 'entity');
+    const inList = this._indoor.concat(this._hall && this._hall.in_average ? [this._hall] : []);
+    const inT = this._avg(inList, 'entity');
     // sun-spike trim: no outdoor sensor may count more than sun_cap above the coolest one
     const outVals = this._outdoor.map(r => this._num(r.entity)).filter(v => v != null);
     let outT = null;
@@ -451,6 +479,7 @@ class FlatClimateCard extends HTMLElement {
       } catch (e2) { return; }
     }
     if (!result) return;
+    this._t0 = start.getTime(); this._t1 = end.getTime();
     ids.forEach(id => {
       this._hist[id] = this._bucket(result[id] || [], start.getTime(), end.getTime(), hours, id);
     });
@@ -507,6 +536,27 @@ class FlatClimateCard extends HTMLElement {
     return d;
   }
 
+  _avgPts(list, trim) {
+    // average bucketed history across entities, aligned by bucket time
+    const byT = new Map();
+    list.forEach(r => (this._hist[r.entity] || []).forEach(p => {
+      if (!byT.has(p.t)) byT.set(p.t, []);
+      byT.get(p.t).push(p.v);
+    }));
+    const out = [];
+    Array.from(byT.keys()).sort((a, b) => a - b).forEach(t => {
+      let vs = byT.get(t);
+      if (trim && vs.length > 1) {
+        const m = Math.min.apply(null, vs);
+        vs = vs.map(v => Math.min(v, m + this._sunCap));
+      }
+      out.push({ t: t, v: vs.reduce((a, b) => a + b, 0) / vs.length });
+    });
+    if (out.length < 2 || !this._t1) return [];
+    out.forEach(p => { p.x = (p.t - this._t0) / (this._t1 - this._t0); });
+    return out;
+  }
+
   _drawHero() {
     const root = this.shadowRoot;
     const hrow = root.getElementById('hrow');
@@ -514,7 +564,11 @@ class FlatClimateCard extends HTMLElement {
     const w = hrow.clientWidth || 500;
     svg.setAttribute('viewBox', '0 0 ' + w + ' ' + HERO_G);
     const lists = this._series.map(s => this._hist[s.entity] || []);
-    if (!this._scaleY(lists.filter(l => l.length), HERO_G, 50, 30)) { svg.innerHTML = ''; return; }
+    const inList = this._indoor.concat(this._hall && this._hall.in_average ? [this._hall] : []);
+    const avgIn = this._avgOp > 0 ? this._avgPts(inList, false) : [];
+    const avgOut = this._avgOp > 0 ? this._avgPts(this._outdoor, true) : [];
+    const all = lists.filter(l => l.length).concat([avgIn, avgOut].filter(l => l.length));
+    if (!this._scaleY(all, HERO_G, 50, 30)) { svg.innerHTML = ''; return; }
     let paths = '', labels = '';
     this._series.forEach((s, i) => {
       const pts = lists[i];
@@ -535,7 +589,24 @@ class FlatClimateCard extends HTMLElement {
     };
     if (this._outdoor[0]) labels += lab(this._outdoor[0], true);
     if (this._outdoor[1]) labels += lab(this._outdoor[1], false);
-    svg.innerHTML = paths + labels;
+    // translucent dashed averages (dashed = computed, solid = measured)
+    let avgs = '';
+    if (avgIn.length && avgOut.length) {
+      const op = this._avgOp;
+      avgs += '<path d="' + this._path(avgIn, w) + '" fill="none" stroke="' + AVG_IN +
+        '" stroke-width="2" opacity="' + op + '" stroke-dasharray="6 5" stroke-linecap="round"></path>';
+      avgs += '<path d="' + this._path(avgOut, w) + '" fill="none" stroke="' + AVG_OUT +
+        '" stroke-width="2" opacity="' + op + '" stroke-dasharray="6 5" stroke-linecap="round"></path>';
+      // end labels, pushed apart if the two lines converge at the right edge
+      let yi = avgIn[avgIn.length - 1].y - 7, yo = avgOut[avgOut.length - 1].y + 14;
+      if (Math.abs(yi - yo) < 14) { if (yi <= yo) yo = yi + 14; else yi = yo + 14; }
+      yi = Math.min(HERO_G - 34, Math.max(14, yi));
+      yo = Math.min(HERO_G - 34, Math.max(14, yo));
+      const albl = (y, txt, c) => '<text class="dlab" x="' + (w - 6) + '" y="' + y.toFixed(1) +
+        '" fill="' + c + '" opacity="' + Math.min(1, op + .25) + '" text-anchor="end">' + txt + '</text>';
+      avgs += albl(yi, 'in avg', AVG_IN) + albl(yo, 'out avg', AVG_OUT);
+    }
+    svg.innerHTML = paths + avgs + labels;
   }
 
   _drawHum() {

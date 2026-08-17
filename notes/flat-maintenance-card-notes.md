@@ -1,0 +1,98 @@
+# flat-maintenance-card — notes (sanitized repo copy)
+
+Device maintenance card: connectivity + battery levels + purifier filter life, in
+the flat-* house style. Renamed from flat-health-card at v1.2. The full working
+notes (live YAML, household watch lists, incident history) live in the private
+project; this copy documents the card itself.
+
+## Concept
+One quiet collapsed row when everything is healthy (green is boring). An alert
+strip (red first, then amber) shows even while collapsed. Expanding reveals three
+sections: Connectivity, Batteries, Filters. Rows and alerts tap through to
+more-info; the header toggles expand/collapse (grid-rows animation, hover wash).
+
+Card-only by design: it sends NO notifications and creates NO helper entities —
+everything is computed client-side from the frontend state cache on each hass
+push. Removing the card removes everything.
+
+## Auto-discovery (v1.1+)
+The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
+`hass.areas`):
+
+- **Connectivity:** every device owning at least one entity whose registry
+  platform is in `platforms` (default `[matter]`) joins the watch. Display name
+  and area come from the device registry (area renders as a dim suffix in rows
+  and parenthesized in alerts). New pairings appear with zero YAML edits.
+- **Batteries:** every `sensor.*` with `device_class: battery` and unit `%`
+  (one per device). Non-numeric values (text states, unavailable) are skipped
+  silently in auto mode.
+- **Curation:** `exclude:` — case-insensitive substrings matched against device
+  names AND entity_ids (for e.g. bulbs on a switched circuit, phones, devices
+  another card owns); `rename:` — exact device name to display label.
+- **Manual mode / extras:** a `devices:` list (name + `entity` canary and/or
+  `battery`) works standalone (`auto: false`) or merged on top of auto. Manual
+  entries get a red "entity not found" row on typos and a dim "no data" row for
+  battery-only entries with no numeric value.
+
+## Detection semantics (the honest model)
+- Only state `unavailable` counts as unreachable. `unknown` is normal (event
+  entities reset on restart) and never alarmed.
+- A device is down only when ALL of its present entities are unavailable — a
+  single orphaned entity cannot false-flag a healthy device.
+- `debounce_minutes` (default 15): unavailable younger than this renders as a
+  grey "settling" count, not an alert — controller restarts produce transient
+  unavailable storms that drain in ~10 minutes.
+- `banner_threshold` (default 5): at this many simultaneous downs the alert
+  strip collapses to a single "widespread outage" banner (header goes red, the
+  footer swaps to recovery advice) — but the body ALWAYS lists every down
+  device individually (v1.2; suppression was tried in v1.0/v1.1 and removed).
+- Sleepy battery devices can die silently while still showing available; that
+  failure mode is not passively detectable (validated: their battery sensors'
+  last_reported pins to restart time, so staleness heuristics don't work). The
+  card footer states this instead of pretending.
+- Battery thresholds are tiered: amber at `battery_warn` (default 20), red at
+  `battery_crit` (default 10). Filters amber at `filter_warn` (default 30).
+  Non-numeric values are never coerced to 0.
+
+## Example YAML
+```yaml
+type: custom:flat-maintenance-card
+title: Devices
+collapsed_default: true
+auto: true
+platforms:
+  - matter
+exclude:
+  - my track light      # switched circuit - routinely unpowered
+  - my phone            # battery cycles daily
+  - my ups              # another card's territory
+rename:
+  "Vendor Remote (B) Red": B Red (spare)
+battery_warn: 20
+battery_crit: 10
+filter_warn: 30
+debounce_minutes: 15
+banner_threshold: 5
+filters:
+  - name: Purifier Living Room
+    entity: sensor.my_purifier_filter_life
+devices:                # optional manual extras
+  - name: Extra Device
+    entity: sensor.my_extra_canary
+    battery: sensor.my_extra_battery
+```
+
+## Version history
+- v1.0 (2026-08-17, 21,154 B, FNV-1a a11649cf; never installed): manual device
+  list; banner suppressed rows.
+- v1.1 (27,559 B, 64d55e4b): registry auto-discovery, exclude/rename,
+  all-entities-unavailable device logic, text-battery skip.
+- v1.2 (2026-08-17, 28,629 B, FNV-1a 76efb15f, CURRENT): renamed
+  flat-health-card -> flat-maintenance-card; registry areas shown by default;
+  banner row-suppression removed; header geometry aligned to native tiles
+  (painted circle 10px / title 56px from the border-box edge).
+
+Verification per house checklist: node --check, zero-non-ASCII scan, headless-
+Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,
+excludes, rename, banner threshold, typo net) with rendered screenshots at the
+dashboard's column width and a header-geometry assert.

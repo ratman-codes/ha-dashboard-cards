@@ -1,4 +1,4 @@
-/* flat-cat-card v1.20
+/* flat-cat-card v1.22
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
@@ -199,6 +199,43 @@
  * (and any open meal editor), so both always reopen fresh. Unsaved
  * schedule edits survive in the local model (dirty flag persists) -
  * only the panel's open state resets.
+ * v1.21: FEEDING PRESETS (mockup v7). Card YAML may define
+ * `feeding_presets`: a list of {name, plans} where plans maps a
+ * feeder PREFIX to its full meal list [{time, name, amount, days?}].
+ * time = "9:00a"/"5:00p" style or 24h "HH:MM"; days = list of
+ * mon..sun (default all 7). A PRESET row renders at the top of the
+ * schedule panel (above the tabs - presets span feeders): one chip
+ * per preset + a state readout. The ACTIVE chip is detected by
+ * comparing each feeder's LIVE parsed plan against the preset's
+ * definition (set equality on time+name+amount+days) - app-side or
+ * editor edits flip the readout to "custom", the highlight never
+ * lies. Tapping an inactive preset opens an amber confirm bar
+ * (replaces BOTH weekly plans; discards any unsaved local edit);
+ * Apply fires one set_feeding_schedule per feeder in the preset.
+ * After apply the chip holds an optimistic "applied - syncing" state
+ * (up to 10 min) until the cloud-polled raw sensor catches up and
+ * live comparison takes over. Presets whose prefixes don't match a
+ * configured feeder are ignored.
+ * v1.22: the schedule UI moves from an inline panel to a POPUP MODAL
+ * (mockup v9; house precedent: the vacuum card's profile popups).
+ * Plan opens a fixed-overlay modal in the card's shadow root: header
+ * (title + always-visible truth readout + close X), PLAN chip row =
+ * VIEW SWITCHER (Current + one chip per preset; highlight = what you
+ * are viewing, a check suffix marks the ACTIVE preset - independent
+ * signals, so v1.21's blind confirm bar is gone). With modal width,
+ * BOTH feeders render as color-keyed stacked sections (color from the
+ * owning cat's configured color) - the feeder tabs are removed.
+ * Preset views are READ-ONLY previews (no carets/editors/add-meal,
+ * inert day dots) with a dashed banner naming the view; Apply (shown
+ * only on inactive presets) writes both feeders in one tap - you are
+ * looking at exactly what will be applied. LOAD INTO EDITOR (any
+ * preset view, active included) copies the preset's meals for its
+ * feeders into the Current draft (dirty, amber "loaded from X" tag),
+ * jumps to Current, and nothing touches hardware until Save plans -
+ * which writes ONLY feeders whose drafts are dirty; Discard reverts
+ * to live. Modal closes via X, scrim tap, or Escape; the v1.20
+ * parent-reset rules still apply (card collapse closes it). The
+ * inline schedule panel is gone; the Settings panel remains inline.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -242,10 +279,19 @@
       this._optSet = {};           // entity_id -> {state, until} optimistic overlay
       this._delayPend = null;      // pending cleaning-delay value while debouncing
       this._delayTimer = null;
-      this._schedOpen = false;     // feeder schedule panel open
-      this._schedTab = 0;          // which feeder tab is active
+      this._schedOpen = false;     // schedule modal open
+      this._schedView = 'current'; // 'current' or preset index (number)
       this._sched = {};            // per-feeder {model, dirty, saving, doneUntil}
-      this._schedEdit = null;      // meal key with editor open
+      this._schedEdit = null;      // meal key with editor open ("fi:idx")
+      this._schedLoaded = null;    // preset name loaded into the draft, or null
+      this._schedSaving = false;   // save-all in flight
+      this._schedDone = 0;         // saved-flash timestamp
+      this._presetOpt = null;      // {idx, until} optimistic applied state
+      this._presetBusy = false;    // apply in flight
+    }
+
+    disconnectedCallback() {
+      if (this._escHandler) window.removeEventListener('keydown', this._escHandler);
     }
 
     /* ---------------- config ---------------- */
@@ -326,6 +372,47 @@
           raw: 'sensor.' + p + '_raw_distribution_data'
         };
       });
+      // feeding presets (v1.21): normalize to per-feeder-index meal lists
+      const DAYNAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+      const parseTime = (t) => {
+        if (typeof t === 'number') return t;
+        const s = String(t).trim().toLowerCase();
+        let m = s.match(/^(\d{1,2}):(\d{2})\s*(a|p)m?$/);
+        if (m) {
+          let h = Number(m[1]) % 12;
+          if (m[3] === 'p') h += 12;
+          return h * 3600 + Number(m[2]) * 60;
+        }
+        m = s.match(/^(\d{1,2}):(\d{2})$/);
+        if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60;
+        return null;
+      };
+      this._presets = (config.feeding_presets || []).map((p) => {
+        const plans = {};
+        Object.keys(p.plans || {}).forEach((prefix) => {
+          const fi = config.feeders.findIndex((f) => f.prefix === prefix);
+          if (fi === -1) return;
+          const meals = (p.plans[prefix] || []).map((mm) => {
+            const time = parseTime(mm.time);
+            const days = [false, false, false, false, false, false, false];
+            if (mm.days && mm.days.length) {
+              mm.days.forEach((d) => {
+                const di = DAYNAMES.indexOf(String(d).toLowerCase().slice(0, 3));
+                if (di !== -1) days[di] = true;
+              });
+            } else {
+              days.fill(true);
+            }
+            return {
+              time, name: mm.name || 'Meal',
+              amount: Number(mm.amount) || 0, days
+            };
+          }).filter((mm) => mm.time != null && mm.amount > 0)
+            .sort((a, b) => a.time - b.time);
+          plans[fi] = meals;
+        });
+        return { name: p.name || 'Preset', plans };
+      }).filter((p) => Object.keys(p.plans).length);
       this._portions = (config.portions && config.portions.length)
         ? config.portions.slice(0, 4) : [5, 10, 20];
       const def = config.default_portion != null
@@ -740,7 +827,54 @@
           padding-top: 10px; border-top: 1px solid var(--divider-color, rgba(255,255,255,.08));
         }
         .savebar .snote { font-size: 10px; color: rgba(160,160,160,.7); line-height: 1.3; }
-        .fdrtabs { display: flex; gap: 5px; margin-bottom: 8px; }
+        .scrim {
+          position: fixed; inset: 0; background: rgba(0,0,0,.55);
+          display: none; align-items: center; justify-content: center;
+          z-index: 9; padding: 16px;
+        }
+        .scrim.open { display: flex; }
+        .modal {
+          width: 480px; max-width: 94vw; max-height: 86vh; overflow-y: auto;
+          background: var(--ha-card-background, var(--card-background-color, #1c1c1c));
+          border: 1px solid var(--ha-card-border-color, #343434);
+          border-radius: var(--ha-card-border-radius, 12px);
+          padding: 14px 16px 16px;
+        }
+        .mhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .mtitle { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+        .xbtn {
+          width: 28px; height: 28px; border-radius: 14px; flex: 0 0 auto;
+          background: rgba(255,255,255,.06); color: #bdbdbd; border: none;
+          cursor: pointer; font-size: 13px; font-family: inherit;
+        }
+        .planbar {
+          display: flex; align-items: center; gap: 10px;
+          padding-bottom: 10px; margin-bottom: 10px;
+          border-bottom: 1px solid var(--divider-color, rgba(255,255,255,.08));
+        }
+        .previewbar {
+          margin-bottom: 10px; padding: 8px 11px; border-radius: 8px;
+          border: 1px dashed rgba(255,255,255,.2);
+        }
+        .previewbar .pnote { font-size: 9.5px; color: rgba(160,160,160,.7); margin-top: 5px; }
+        .loadbtn {
+          height: 26px; padding: 0 12px; border-radius: 13px;
+          background: rgba(255,255,255,.06); color: var(--primary-text-color);
+          font-size: 12px; border: 1px solid rgba(255,255,255,.15); cursor: pointer;
+          font-family: inherit; white-space: nowrap;
+        }
+        .fdrhead {
+          display: flex; align-items: center; gap: 8px;
+          font-size: 10.5px; font-weight: 600; letter-spacing: .4px;
+          margin: 12px 0 2px;
+        }
+        .fdrhead .fdot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+        .fdrhead .fsub { font-weight: 400; letter-spacing: 0; color: rgba(160,160,160,.7); font-size: 10px; }
+        .loadedtag {
+          display: inline-flex; align-items: center; height: 18px; padding: 0 8px;
+          border-radius: 9px; background: rgba(255,193,7,.12); color: ${AMBER_TXT};
+          font-size: 9.5px; font-weight: 600; margin-bottom: 6px;
+        }
         .medcaret { color: rgba(160,160,160,.45); font-size: 10px; cursor: pointer; border: none; background: none; font-family: inherit; padding: 4px 2px 4px 6px; }
       </style>
       <ha-card id="card">
@@ -800,12 +934,14 @@
               <div class="tert grow" id="schedsum">--</div>
               <button class="ghostbtn" id="planbtn">&#9201; Plan</button>
             </div>
-            <div class="setpanel" id="schedpanel" data-noexpand="1"></div>
           </div>
           </div>
         </div>
         <div class="camstrip" id="camstrip">
           ${camTiles}
+        </div>
+        <div class="scrim" id="schedscrim" data-noexpand="1">
+          <div class="modal" id="schedmodal"></div>
         </div>
       </ha-card>`;
 
@@ -1037,35 +1173,54 @@
         else if (t.dataset.lt) this._selOption(this._setEnts.litterType, t.dataset.lt);
       });
 
-      // feeder schedule panel toggle + delegated controls (v1.19)
+      // feeding-plans modal (v1.22): open/close + delegated controls
       this.$.planbtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._schedOpen = !this._schedOpen;
         if (!this._schedOpen) this._schedEdit = null;
         this._update();
       });
-      this.$.schedpanel.addEventListener('click', (e) => {
+      this.$.schedscrim.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.target === this.$.schedscrim) {
+          this._schedOpen = false; this._schedEdit = null; this._update();
+        }
+      });
+      this._escHandler = (e) => {
+        if (e.key === 'Escape' && this._schedOpen) {
+          this._schedOpen = false; this._schedEdit = null; this._update();
+        }
+      };
+      window.addEventListener('keydown', this._escHandler);
+      this.$.schedmodal.addEventListener('click', (e) => {
         e.stopPropagation();
         const t = e.target.closest(
-          '[data-tab],[data-medit],[data-mstep],[data-mday],[data-mdel],[data-madd],[data-msave],[data-mcancel]');
+          '[data-view],[data-vapply],[data-pload],[data-pclose],[data-medit],[data-mstep],[data-mday],[data-mdel],[data-madd],[data-msaveall],[data-mdiscard]');
         if (!t) return;
         const d = t.dataset;
-        if (d.tab !== undefined) {
-          this._schedTab = Number(d.tab); this._schedEdit = null;
+        if (d.view !== undefined) {
+          this._schedView = d.view === 'current' ? 'current' : Number(d.view);
+          this._schedEdit = null;
+        } else if (d.vapply !== undefined) {
+          this._presetApply();
+        } else if (d.pload !== undefined) {
+          this._loadPreset();
+        } else if (d.pclose !== undefined) {
+          this._schedOpen = false; this._schedEdit = null;
         } else if (d.medit !== undefined) {
           this._schedEdit = this._schedEdit === d.medit ? null : d.medit;
         } else if (d.mstep !== undefined) {
-          this._mealStep(d.mstep, Number(d.idx), Number(d.d));
+          this._mealStep(d.mstep, Number(d.fi), Number(d.idx), Number(d.d));
         } else if (d.mday !== undefined) {
-          this._mealDay(Number(d.idx), Number(d.mday));
+          this._mealDay(Number(d.fi), Number(d.idx), Number(d.mday));
         } else if (d.mdel !== undefined) {
-          this._mealDel(Number(d.idx));
+          this._mealDel(Number(d.fi), Number(d.idx));
         } else if (d.madd !== undefined) {
-          this._mealAdd();
-        } else if (d.msave !== undefined) {
-          this._schedSave();
-        } else if (d.mcancel !== undefined) {
-          this._schedCancel();
+          this._mealAdd(Number(d.fi));
+        } else if (d.msaveall !== undefined) {
+          this._schedSaveAll();
+        } else if (d.mdiscard !== undefined) {
+          this._schedDiscard();
         }
         this._update();
       });
@@ -1259,8 +1414,8 @@
       return n + 'd/wk';
     }
 
-    _mealStep(which, idx, d) {
-      const s = this._sched[this._schedTab];
+    _mealStep(which, fi, idx, d) {
+      const s = this._sched[fi];
       if (!s || !s.model || !s.model[idx]) return;
       const m = s.model[idx];
       if (which === 'time') m.time = (m.time + d * 900 + 86400) % 86400;
@@ -1268,8 +1423,8 @@
       s.dirty = true;
     }
 
-    _mealDay(idx, day) {
-      const s = this._sched[this._schedTab];
+    _mealDay(fi, idx, day) {
+      const s = this._sched[fi];
       if (!s || !s.model || !s.model[idx]) return;
       const m = s.model[idx];
       const n = m.days.filter(Boolean).length;
@@ -1278,126 +1433,336 @@
       s.dirty = true;
     }
 
-    _mealDel(idx) {
-      const s = this._sched[this._schedTab];
+    _mealDel(fi, idx) {
+      const s = this._sched[fi];
       if (!s || !s.model) return;
       s.model.splice(idx, 1);
       s.dirty = true;
       this._schedEdit = null;
     }
 
-    _mealAdd() {
-      const s = this._schedLocal(this._schedTab);
+    _mealAdd(fi) {
+      const s = this._schedLocal(fi);
       if (!s.model) s.model = [];
       s.model.push({
         time: 28800, name: 'Meal', amount: 10,
         days: [true, true, true, true, true, true, true]
       });
       s.dirty = true;
-      this._schedEdit = this._schedTab + ':' + (s.model.length - 1);
+      this._schedEdit = fi + ':' + (s.model.length - 1);
     }
 
-    _schedCancel() {
-      const i = this._schedTab;
-      this._sched[i] = null;
+    _schedDiscard() {
+      this._sched = {};
       this._schedEdit = null;
-      this._schedLocal(i);
+      this._schedLoaded = null;
+      this._schedErr = null;
     }
 
-    _schedSave() {
-      const i = this._schedTab;
-      const s = this._sched[i];
-      if (!s || !s.model || s.saving || s.deviceId == null) return;
-      const list = [];
-      for (let d = 1; d <= 7; d++) {
-        list.push({
-          repeats: d, suspended: 0,
-          items: s.model.filter((m) => m.days[d - 1])
-            .sort((a, b) => a.time - b.time)
-            .map((m) => ({ time: m.time, name: m.name, amount: m.amount }))
-        });
-      }
-      s.saving = true;
-      this._hass.callService('petkit', 'set_feeding_schedule', {
-        device_id: Number(s.deviceId), feed_daily_list: list
-      }).then(() => {
-        s.saving = false; s.dirty = false;
-        s.doneUntil = Date.now() + 1500;
+    _anyDirty() {
+      return this._fdrs.some((f, i) => this._sched[i] && this._sched[i].dirty);
+    }
+
+    _schedSaveAll() {
+      if (this._schedSaving) return;
+      const jobs = [];
+      this._fdrs.forEach((f, i) => {
+        const s = this._sched[i];
+        if (!s || !s.dirty || !s.model || s.deviceId == null) return;
+        const list = [];
+        for (let d = 1; d <= 7; d++) {
+          list.push({
+            repeats: d, suspended: 0,
+            items: s.model.filter((m) => m.days[d - 1])
+              .sort((a, b) => a.time - b.time)
+              .map((m) => ({ time: m.time, name: m.name, amount: m.amount }))
+          });
+        }
+        jobs.push({ s, call: () => this._hass.callService('petkit', 'set_feeding_schedule', {
+          device_id: Number(s.deviceId), feed_daily_list: list
+        }) });
+      });
+      if (!jobs.length) return;
+      this._schedSaving = true;
+      this._schedErr = null;
+      this._update();
+      Promise.all(jobs.map((j) => j.call())).then(() => {
+        jobs.forEach((j) => { j.s.dirty = false; });
+        this._schedSaving = false;
+        this._schedDone = Date.now() + 1500;
+        this._schedLoaded = null;
         this._schedEdit = null;
         setTimeout(() => this._update(), 1600);
         this._update();
       }).catch(() => {
-        s.saving = false;
-        s.error = 'save failed';
+        this._schedSaving = false;
+        this._schedErr = 'save failed';
         this._update();
       });
+    }
+
+    _loadPreset() {
+      const pi = this._schedView;
+      const preset = this._presets[pi];
+      if (typeof pi !== 'number' || !preset) return;
+      Object.keys(preset.plans).forEach((fiStr) => {
+        const fi = Number(fiStr);
+        const live = this._parseSched(fi);
+        this._sched[fi] = {
+          model: preset.plans[fi].map((m) => ({
+            time: m.time, name: m.name, amount: m.amount, days: m.days.slice()
+          })),
+          deviceId: live ? live.deviceId : null,
+          dirty: true, saving: false, doneUntil: 0
+        };
+      });
+      this._schedLoaded = preset.name;
+      this._schedEdit = null;
+      this._schedView = 'current';
+    }
+
+    _mealKey(m) {
+      return m.time + '|' + m.name + '|' + m.amount + '|' +
+        m.days.map((d) => (d ? 1 : 0)).join('');
+    }
+
+    _presetActive() {
+      // optimistic window after an apply, until live data catches up
+      if (this._presetOpt && Date.now() < this._presetOpt.until) {
+        if (this._presetMatchesLive(this._presetOpt.idx)) {
+          this._presetOpt = null; // live caught up - genuine from here
+          return this._presetMatchesLiveIdx();
+        }
+        return this._presetOpt.idx;
+      }
+      return this._presetMatchesLiveIdx();
+    }
+
+    _presetMatchesLiveIdx() {
+      for (let p = 0; p < this._presets.length; p++) {
+        if (this._presetMatchesLive(p)) return p;
+      }
+      return -1;
+    }
+
+    _presetMatchesLive(p) {
+      const preset = this._presets[p];
+      if (!preset) return false;
+      const idxs = Object.keys(preset.plans);
+      for (const fi of idxs) {
+        const live = this._parseSched(Number(fi));
+        if (!live) return false;
+        const a = live.meals.map((m) => this._mealKey(m)).sort();
+        const b = preset.plans[fi].map((m) => this._mealKey(m)).sort();
+        if (a.length !== b.length) return false;
+        for (let j = 0; j < a.length; j++) if (a[j] !== b[j]) return false;
+      }
+      return true;
+    }
+
+    _presetApply() {
+      const pi = this._schedView;
+      const preset = this._presets[pi];
+      if (typeof pi !== 'number' || !preset || this._presetBusy) return;
+      const jobs = [];
+      Object.keys(preset.plans).forEach((fiStr) => {
+        const fi = Number(fiStr);
+        const live = this._parseSched(fi);
+        if (!live || live.deviceId == null) return;
+        const list = [];
+        for (let d = 1; d <= 7; d++) {
+          list.push({
+            repeats: d, suspended: 0,
+            items: preset.plans[fi].filter((m) => m.days[d - 1])
+              .map((m) => ({ time: m.time, name: m.name, amount: m.amount }))
+          });
+        }
+        jobs.push(this._hass.callService('petkit', 'set_feeding_schedule', {
+          device_id: Number(live.deviceId), feed_daily_list: list
+        }));
+      });
+      if (!jobs.length) { this._update(); return; }
+      this._presetBusy = true;
       this._update();
+      Promise.all(jobs).then(() => {
+        this._presetBusy = false;
+        this._presetOpt = { idx: pi, until: Date.now() + 600000 };
+        // discard local schedule edits - the preset replaced the plans
+        this._sched = {};
+        this._schedEdit = null;
+        this._schedLoaded = null;
+        this._update();
+      }).catch(() => {
+        this._presetBusy = false;
+        this._presetErr = 'preset apply failed';
+        this._update();
+      });
+    }
+
+    _catColorFor(f) {
+      const c = this._cfg.cats.find((cc) =>
+        f.owner && cc.name.toLowerCase() === f.owner.toLowerCase());
+      return (c && c.color) || AMBER_TXT;
+    }
+
+    _mealRowsHtml(meals, fi, editable) {
+      const DL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+      if (!meals || !meals.length) {
+        return '<div class="mealrow first"><div class="mealmeta">no meals scheduled</div></div>';
+      }
+      return meals.map((m, idx) => {
+        const ek = fi + ':' + idx;
+        const dots = '<div class="daydots"' + (editable ? '' : ' style="opacity:.75;"') + '>' +
+          m.days.map((on, d) =>
+            (editable && this._schedEdit === ek)
+              ? '<button class="ddot' + (on ? ' on' : '') + '" data-mday="' + d +
+                '" data-fi="' + fi + '" data-idx="' + idx + '">' + DL[d] + '</button>'
+              : '<span class="ddot' + (on ? ' on' : '') + '">' + DL[d] + '</span>'
+          ).join('') + '</div>';
+        let ed = '';
+        if (editable && this._schedEdit === ek) {
+          ed = '<div class="mealed">' +
+            '<div class="row" style="margin-bottom:8px;"><div class="edlabel">TIME</div>' +
+            '<div class="stepper">' +
+            '<button class="stepbtn" data-mstep="time" data-fi="' + fi + '" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
+            '<div class="stepval" style="min-width:56px;">' + this._fmtSec(m.time) + '</div>' +
+            '<button class="stepbtn" data-mstep="time" data-fi="' + fi + '" data-idx="' + idx + '" data-d="1">+</button></div>' +
+            '<div class="tert">15-min steps</div></div>' +
+            '<div class="row"><div class="edlabel">GRAMS</div>' +
+            '<div class="stepper">' +
+            '<button class="stepbtn" data-mstep="grams" data-fi="' + fi + '" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
+            '<div class="stepval">' + m.amount + ' <span>g</span></div>' +
+            '<button class="stepbtn" data-mstep="grams" data-fi="' + fi + '" data-idx="' + idx + '" data-d="1">+</button></div>' +
+            '<div class="grow"></div>' +
+            '<button class="dangerbtn" data-mdel="1" data-fi="' + fi + '" data-idx="' + idx + '">Remove</button></div>' +
+            '</div>';
+        }
+        return '<div class="mealrow' + (idx === 0 ? ' first' : '') + '">' +
+          '<div class="row">' +
+          '<div class="mealtime">' + this._fmtSec(m.time) + '</div>' +
+          '<div class="grow"><div class="mealmeta">' + this._esc(m.name) + ' &middot; ' +
+          m.amount + ' g &middot; ' + this._daysSum(m.days) + '</div></div>' +
+          dots +
+          (editable ? '<button class="medcaret" data-medit="' + ek + '">' +
+            (this._schedEdit === ek ? '&#9652;' : '&#9662;') + '</button>' : '') +
+          '</div>' + ed + '</div>';
+      }).join('');
     }
 
     _renderSched() {
       const $ = this.$;
-      const i = this._schedTab;
-      const s = this._schedLocal(i);
-      const key = JSON.stringify([i, this._schedEdit, s.dirty, s.saving,
-        s.doneUntil > Date.now(), s.error || '', s.model]);
-      if ($.schedpanel.dataset.render === key) return;
-      $.schedpanel.dataset.render = key;
-      const tabs = '<div class="fdrtabs">' + this._fdrs.map((f, j) =>
-        '<button class="pchip' + (j === i ? ' sel' : '') + '" data-tab="' + j + '">' +
-        this._esc(f.owner ? f.owner + "'s" : f.label) + '</button>').join('') + '</div>';
-      let body;
-      if (!s.model) {
-        body = '<div class="histhead" style="margin:0;">schedule unavailable &middot; raw sensor missing</div>';
-      } else {
-        const DL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-        body = s.model.map((m, idx) => {
-          const ek = i + ':' + idx;
-          const dots = '<div class="daydots">' + m.days.map((on, d) =>
-            '<button class="ddot' + (on ? ' on' : '') + '" data-mday="' + d +
-            '" data-idx="' + idx + '">' + DL[d] + '</button>').join('') + '</div>';
-          let ed = '';
-          if (this._schedEdit === ek) {
-            ed = '<div class="mealed">' +
-              '<div class="row" style="margin-bottom:8px;"><div class="edlabel">TIME</div>' +
-              '<div class="stepper">' +
-              '<button class="stepbtn" data-mstep="time" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
-              '<div class="stepval" style="min-width:56px;">' + this._fmtSec(m.time) + '</div>' +
-              '<button class="stepbtn" data-mstep="time" data-idx="' + idx + '" data-d="1">+</button></div>' +
-              '<div class="tert">15-min steps</div></div>' +
-              '<div class="row"><div class="edlabel">GRAMS</div>' +
-              '<div class="stepper">' +
-              '<button class="stepbtn" data-mstep="grams" data-idx="' + idx + '" data-d="-1">&#8722;</button>' +
-              '<div class="stepval">' + m.amount + ' <span>g</span></div>' +
-              '<button class="stepbtn" data-mstep="grams" data-idx="' + idx + '" data-d="1">+</button></div>' +
-              '<div class="grow"></div>' +
-              '<button class="dangerbtn" data-mdel="1" data-idx="' + idx + '">Remove</button></div>' +
-              '</div>';
-          }
-          return '<div class="mealrow' + (idx === 0 ? ' first' : '') + '">' +
-            '<div class="row">' +
-            '<div class="mealtime">' + this._fmtSec(m.time) + '</div>' +
-            '<div class="grow"><div class="mealmeta">' + this._esc(m.name) + ' &middot; ' +
-            m.amount + ' g &middot; ' + this._daysSum(m.days) + '</div></div>' +
-            dots +
-            '<button class="medcaret" data-medit="' + ek + '">' +
-            (this._schedEdit === ek ? '&#9652;' : '&#9662;') + '</button>' +
-            '</div>' + ed + '</div>';
-        }).join('') +
-        '<button class="addmeal" data-madd="1">+ Add meal</button>';
-        if (s.dirty || s.saving || s.doneUntil > Date.now() || s.error) {
-          const note = s.error ? s.error
-            : 'saving replaces this feeder\'s full weekly plan';
-          const btnTxt = s.saving ? 'Saving&hellip;'
-            : (s.doneUntil > Date.now() ? 'Saved &#10003;' : 'Save plan');
-          body += '<div class="savebar">' +
-            '<div class="snote grow">' + note + '</div>' +
-            (s.dirty && !s.saving
-              ? '<button class="ghostbtn" data-mcancel="1">Cancel</button>' : '') +
-            '<button class="feedbtn" data-msave="1"' +
-            ((s.saving || !s.dirty) ? ' disabled' : '') + '>' + btnTxt + '</button></div>';
-        }
+      const view = this._schedView;
+      const active = this._presets.length ? this._presetActive() : -1;
+      const modelsKey = this._fdrs.map((f, i) => {
+        const s = this._sched[i];
+        return s ? JSON.stringify([s.model, s.dirty]) : 'live:' +
+          JSON.stringify((this._parseSched(i) || {}).meals || null);
+      }).join('~');
+      const key = JSON.stringify([view, active, this._schedEdit, modelsKey,
+        this._schedLoaded, this._schedSaving, this._schedDone > Date.now(),
+        this._schedErr || '', this._presetBusy, this._presetErr || '']);
+      if ($.schedmodal.dataset.render === key) return;
+      $.schedmodal.dataset.render = key;
+
+      const syncing = this._presetOpt && Date.now() < this._presetOpt.until &&
+        !this._presetMatchesLive(this._presetOpt.idx);
+      const stateTxt = this._presetErr ? this._presetErr
+        : (this._schedErr ? this._schedErr
+          : (active === -1
+            ? 'custom'
+            : this._esc(this._presets[active].name) +
+              (syncing ? ' applied \u00b7 syncing' : ' active')));
+      const stateFull = stateTxt +
+        (this._anyDirty() && !this._schedSaving ? ' \u00b7 draft pending' : '');
+
+      const head = '<div class="mhead">' +
+        '<div class="mtitle">Feeding plans</div><div class="grow"></div>' +
+        '<div class="tert">' + stateFull + '</div>' +
+        '<button class="xbtn" data-pclose="1">&#10005;</button></div>';
+
+      let planbar = '';
+      if (this._presets.length) {
+        planbar = '<div class="planbar">' +
+          '<div class="grouphead" style="margin:0; flex:0 0 auto;">PLAN</div>' +
+          '<div class="chips">' +
+          '<button class="pchip' + (view === 'current' ? ' sel' : '') +
+          '" data-view="current">Current</button>' +
+          this._presets.map((p, j) =>
+            '<button class="pchip' + (j === view ? ' sel' : '') + '" data-view="' + j + '">' +
+            this._esc(p.name) + (j === active ? ' &#10003;' : '') + '</button>').join('') +
+          '</div></div>';
       }
-      $.schedpanel.innerHTML = tabs + body;
+
+      let previewbar = '';
+      if (typeof view === 'number' && this._presets[view]) {
+        const pname = this._esc(this._presets[view].name);
+        const isActive = view === active;
+        previewbar = '<div class="previewbar">' +
+          '<div class="row">' +
+          '<div class="tert grow">Previewing <b style="color:var(--primary-text-color);">' +
+          pname + '</b>' + (isActive ? ' \u00b7 ACTIVE \u2014 live plans match'
+            : ' \u00b7 read-only') + '</div>' +
+          '<button class="loadbtn" data-pload="1">&#9998; Load into editor</button>' +
+          (isActive ? '' :
+            '<button class="feedbtn" data-vapply="1"' + (this._presetBusy ? ' disabled' : '') +
+            '>' + (this._presetBusy ? 'Applying&hellip;' : 'Apply') + '</button>') +
+          '</div>' +
+          '<div class="pnote">' + (isActive
+            ? 'Load copies these meals into Current for tweaking'
+            : 'Apply replaces BOTH feeders\' weekly plans' +
+              (this._anyDirty() ? ' \u00b7 discards unsaved edits' : '') +
+              ' \u00b7 Load copies these meals into Current for tweaking without applying') +
+          '</div></div>';
+      }
+
+      let body = '';
+      if (view === 'current' && this._schedLoaded) {
+        body += '<div><span class="loadedtag">loaded from ' + this._esc(this._schedLoaded) +
+          ' \u2014 not yet on feeders</span></div>';
+      }
+      this._fdrs.forEach((f, fi) => {
+        const col = this._catColorFor(f);
+        const ownerTxt = f.owner ? this._esc(f.owner.toUpperCase()) : this._esc(f.label.toUpperCase());
+        body += '<div class="fdrhead"><span class="fdot" style="background:' + col + ';"></span>' +
+          '<span style="color:' + col + ';">' + ownerTxt + '</span>' +
+          '<span class="fsub">\u00b7 ' + this._esc(f.label) + '</span></div>';
+        if (view === 'current') {
+          const s = this._schedLocal(fi);
+          if (!s.model) {
+            body += '<div class="mealrow first"><div class="mealmeta">schedule unavailable \u00b7 raw sensor missing</div></div>';
+          } else {
+            body += this._mealRowsHtml(s.model, fi, true) +
+              '<button class="addmeal" data-madd="1" data-fi="' + fi + '">+ Add meal</button>';
+          }
+        } else {
+          const preset = this._presets[view];
+          const meals = preset.plans[fi];
+          if (!meals) {
+            body += '<div class="mealrow first"><div class="mealmeta">not in this preset \u2014 unchanged</div></div>';
+          } else {
+            body += this._mealRowsHtml(meals, fi, false);
+          }
+        }
+      });
+
+      let savebar = '';
+      if (view === 'current' &&
+          (this._anyDirty() || this._schedSaving || this._schedDone > Date.now() || this._schedErr)) {
+        const note = this._schedErr ? this._schedErr
+          : (this._schedLoaded
+            ? 'Loaded from ' + this._esc(this._schedLoaded) + ' \u2014 saving writes both feeders\' weekly plans'
+            : 'Saving replaces each edited feeder\'s full weekly plan');
+        const btnTxt = this._schedSaving ? 'Saving&hellip;'
+          : (this._schedDone > Date.now() ? 'Saved &#10003;' : 'Save plans');
+        savebar = '<div class="savebar">' +
+          '<div class="snote grow">' + note + '</div>' +
+          (this._anyDirty() && !this._schedSaving
+            ? '<button class="ghostbtn" data-mdiscard="1">Discard</button>' : '') +
+          '<button class="feedbtn" data-msaveall="1"' +
+          ((this._schedSaving || !this._anyDirty()) ? ' disabled' : '') + '>' + btnTxt + '</button></div>';
+      }
+
+      $.schedmodal.innerHTML = head + planbar + previewbar + body + savebar;
     }
 
     /* ---------------- feeding + undo ---------------- */
@@ -1964,10 +2329,9 @@
         return (f.owner || f.label) + ' ' + todays.length + 'x/' + g + 'g';
       }).join(' \u00b7 ');
       if ($.schedsum.textContent !== sumTxt) $.schedsum.textContent = sumTxt;
-      const spv = this._schedOpen ? 'block' : 'none';
-      if ($.schedpanel.style.display !== spv) $.schedpanel.style.display = spv;
+      $.schedscrim.classList.toggle('open', this._schedOpen);
       $.planbtn.classList.toggle('open', this._schedOpen);
-      if (spv === 'block') this._renderSched();
+      if (this._schedOpen) this._renderSched();
 
       /* alerts */
       const alerts = [];

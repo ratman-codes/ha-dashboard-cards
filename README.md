@@ -15,13 +15,13 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.5.5. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.5.6. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
   writes in eco), a daily HVAC runtime chip (today's ACTIVE compressor/furnace
-  hours from daily runtime meter entities; shows in off mode too when something
-  ran), and a tap-to-expand in-card 14-day runtime graph fed by HA long-term
+  hours from daily runtime meter entities; never hides - off mode with zero
+  runtime shows all configured meters at 0m), and a tap-to-expand in-card 14-day runtime graph fed by HA long-term
   statistics (live today bar, 7-day average line, per-bar tooltips, summary
   tiles that tap through to more-info; zero dependencies). Used as
   `type: custom:flat-thermostat-card` with a climate entity + optional
@@ -54,7 +54,7 @@ header.)*
   header, room-pick clean flow, full cleaning profiles (Away/Default popup
   editors), maintenance counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `flat-cat-card.js` — v1.20. Consolidated cats card (pet-tech litter box + two
+- `flat-cat-card.js` — v1.22. Consolidated cats card (pet-tech litter box + two
   feeders + per-cat rows): header-zone expand/collapse with hover strip and
   animated height (grid-rows technique), per-cat litter history panels (tap a cat
   row: visits-per-day bars with day filtering, recent-visit log with duration +
@@ -68,15 +68,21 @@ header.)*
   `deep_deo_suffix` config override for integrations exposing duplicate
   deep-deodorizing switches), feeder rows with dispensed-vs-planned grams
   and portion-chip manual feeds (single or both feeders) with a 5s undo window,
-  per-feeder SCHEDULE panel (weekly meal plan parsed from the raw distribution
-  sensor; meal editor with 15-min time steps, gram steps, weekday dots;
-  local-until-Save editing — Save replaces the feeder's full weekly plan via
-  the integration's set_feeding_schedule service; Cancel reverts to live),
+  FEEDING PLANS POPUP (fixed-overlay modal, theme-var chrome; weekly meal
+  plans parsed from the raw distribution sensor, both feeders stacked as
+  color-keyed sections; meal editor with 15-min time steps, gram steps,
+  weekday dots; local-until-Save editing — Save writes only edited feeders
+  via the integration's set_feeding_schedule service, Discard reverts),
+  YAML-defined FEEDING PRESETS with a view-switcher chip row (highlight =
+  viewing, check = active, detected by honest live-plan comparison;
+  read-only previews; one-tap Apply writes both feeders; Load-into-editor
+  copies a preset into the draft for tweaking before saving),
   configurable event-snapshot camera tiles (camera_image: eat | visit | feed,
   tap for live), amber alert strip (litter low, bin full, hopper empty, offline,
   frequent-use health flag), pulsing occupied dot. Child panels reset with
   their parents (closing More closes Settings; collapsing the card closes
-  Settings + Plan). All entities via YAML config (cat list + entity prefixes).
+  Settings + the plans popup; Escape/scrim also close it). All entities via
+  YAML config (cat list + entity prefixes).
   Used as `type: custom:flat-cat-card` (see notes for the YAML shape).
   HA resource id: `6de3dc9ee5524b81a702ecbabae6e156`.
 - `flat-music-card.js` — v1.26. Whole-home music control card for Music Assistant
@@ -102,18 +108,23 @@ header.)*
   from the theme's card variables. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
-- `flat-climate-card.js` — v1.4. Whole-house climate card for a fleet of BLE
-  temperature/humidity meters: an indoor-vs-outdoor delta headline ("5.8 F
-  cooler outside") with an OPEN WINDOWS chip (temperature-delta-only with
-  hysteresis; a moisture gate was deliberately removed after historical
-  dew-point analysis — reasoning in the source header) over a 24h all-rooms
-  temperature overlay (5 series, CVD-validated palette, outdoor pair
-  direct-labeled), expanding to an out-vs-in humidity row and a per-room
-  now-strip. Includes a sun-spike trim (`sun_cap`) so an outdoor sensor heated
-  by reflected sun can't distort the headline (graph lines stay raw), hover/tap
-  scrubbing with an all-series tooltip, and availability-honest '--' handling.
-  Default entities are this dashboard's meters; override via indoor:/outdoor:
-  YAML lists. Used as `type: custom:flat-climate-card`. HA resource id:
+- `flat-climate-card.js` — v1.5. Whole-house climate card for a fleet of BLE
+  temperature/humidity meters plus the thermostat's own thermometer: an
+  indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
+  WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
+  deliberately removed after historical dew-point analysis — reasoning in the
+  source header) over a 24h temperature overlay (six solid series in
+  grouped-by-meaning legend order, indoor rooms + hall then outdoor, outdoor
+  pair direct-labeled) with translucent dashed average lines (dashed =
+  computed, solid = measured; the out-avg dash is exactly the sun-trimmed
+  headline value; opacity via `avg_opacity`), expanding to an out-vs-in
+  humidity row and a per-room now-strip. Includes a sun-spike trim
+  (`sun_cap`) so an outdoor sensor heated by reflected sun can't distort the
+  headline (graph lines stay raw), an optional in-average hall toggle
+  (`hall: {in_average}`; display-only by default), hover/tap scrubbing with
+  an all-series tooltip, and availability-honest '--' handling. Default
+  entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
+  YAML. Used as `type: custom:flat-climate-card`. HA resource id:
   `f8f2966083af4b31b2588016c24dcc19`.
 - `flat-server-card.js` — v1.5. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
@@ -130,6 +141,23 @@ header.)*
   YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
+- `flat-maintenance-card.js` — v1.2. Device maintenance card (connectivity +
+  batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
+  collapsed header + alert strip, expanding to Connectivity (unreachable devices
+  with outage duration and registry area, a 15-min debounce that shows restart
+  storms as a grey "settling" count instead of alarms, and a widespread-outage
+  banner when many devices drop at once — the body still lists every down device
+  individually), Batteries (tiered amber/red thresholds with bars and a quiet
+  "all > N%" summary) and Filters (purifier filter life, hidden until low;
+  no-data rows stay dim). AUTO-DISCOVERING: reads the frontend entity/device/area
+  registries, so every device owned by the configured integrations (default:
+  matter) and every battery-% sensor is watched with zero YAML upkeep — new
+  pairings appear automatically; curation via `exclude` substrings and a `rename`
+  map, with an optional manual devices list. Card-only by design: no
+  notifications and no helper entities; a device counts as unreachable only when
+  ALL of its entities read unavailable (single orphaned entities can't false-flag
+  a device). Used as `type: custom:flat-maintenance-card` (see notes for the
+  YAML shape). HA resource id: `3d1d66cbc6d14336b43358bde2782a91`.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -150,7 +178,8 @@ header.)*
   `notes/flat-weather-card-notes.md`, `notes/flat-scoreboard-card-notes.md`,
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
   `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
-  `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md` —
+  `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md`,
+  `notes/flat-maintenance-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 

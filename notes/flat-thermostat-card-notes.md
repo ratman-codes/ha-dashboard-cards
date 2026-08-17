@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.5.5 (runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.5.6 (never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -12,8 +12,9 @@ behind the daily meters). Eco (v2.3): Nest `none|eco` preset as a detached leaf
 button beside the mode strip; while on, track renders the entity-reported eco
 setpoints green and read-only. Runtime chip (v2.4.x): today's ACTIVE
 compressor/furnace hours in a fixed-width slot under the temp block; mode picks
-the meter (cool/heat), heat_cool shows both rows, off mode shows whichever ran
-today (v2.5); transparent at rest, hover highlight only. Runtime graph (v2.5):
+the meter (cool/heat), heat_cool shows both rows, and the chip NEVER hides: off mode prefers
+whichever ran today, showing all configured meters at 0m when nothing ran
+(v2.5.6); transparent at rest, hover highlight only. Runtime graph (v2.5):
 tap the chip and the card expands in place (grid-rows animation, no popups, no
 dependencies) into a 14-day daily-runtime bar chart pulled from HA long-term
 statistics over the card's own websocket (`recorder/statistics_during_period`,

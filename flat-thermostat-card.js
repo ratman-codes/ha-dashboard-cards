@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.5.5 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.5.6 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -80,10 +80,12 @@
    strip left edge == track left edge (C + 8 gap == C + 8 padding),
    track and eco flush right.
 
-   OFF MODE (v2.5, owner request): the chip now stays visible in off
-   mode, showing any meter with runtime today (cooling and/or heating);
-   it hides only when both are zero - "the AC still ran today" must not
-   vanish when the thermostat is switched off.
+   OFF MODE (v2.5.6, owner-final: the chip NEVER hides): in off mode
+   it prefers the meters that ran today (one or both rows); when
+   NOTHING ran it shows ALL configured meters at "0m" (both rows, so a
+   bare zero is not ambiguous about which meter it is). v2.5's
+   hide-when-zero behavior is dead - the only things that hide the
+   chip are: no runtime_* config, or the climate entity unavailable.
 
    RUNTIME GRAPH (v2.5, owner request + mockup-approved): tapping the
    chip no longer opens more-info - it expands an IN-CARD graph panel
@@ -416,8 +418,11 @@ class FlatThermostatCard extends HTMLElement {
       // active modes always show their configured meters ("0m" included, v2.4.1); '--' when unavailable
       rows.push({ ent: ent, icon: d.icon, color: d.color, v: v, def: d });
     }
-    // off mode (v2.5): only meters that actually ran today - hide when nothing ran
-    if (mode === 'off') rows = rows.filter(r => r.v != null && r.v > 0);
+    // off mode (v2.5.6): NEVER hide - prefer meters that ran today; when none ran, keep all configured rows at 0m
+    if (mode === 'off') {
+      const ran = rows.filter(r => r.v != null && r.v > 0);
+      if (ran.length) rows = ran;
+    }
     if (unavailable || !rows.length) {
       el.classList.add('gone');
       this._gDef = null;
