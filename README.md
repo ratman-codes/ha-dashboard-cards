@@ -108,24 +108,30 @@ header.)*
   from the theme's card variables. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
-- `flat-climate-card.js` — v1.5. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v1.6.4. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
   deliberately removed after historical dew-point analysis — reasoning in the
   source header) over a 24h temperature overlay (six solid series in
-  grouped-by-meaning legend order, indoor rooms + hall then outdoor, outdoor
-  pair direct-labeled) with translucent dashed average lines (dashed =
-  computed, solid = measured; the out-avg dash is exactly the sun-trimmed
-  headline value; opacity via `avg_opacity`), expanding to an out-vs-in
-  humidity row and a per-room now-strip. Includes a sun-spike trim
+  grouped-by-meaning legend order, indoor rooms + hall then outdoor; the
+  chart itself is text-free — series identity lives in the legend, the scrub
+  tooltip, and legend tap-to-spotlight, which draws one series full-strength
+  with a name+value label while the rest dim) with translucent dashed
+  average lines (dashed = computed, solid = measured; the out-avg dash is
+  exactly the sun-trimmed headline value; opacity via `avg_opacity`),
+  expanding to an averages row with live in/out/delta readings, an out-vs-in
+  humidity row, and a per-room now-strip. Includes a sun-spike trim
   (`sun_cap`) so an outdoor sensor heated by reflected sun can't distort the
   headline (graph lines stay raw), an optional in-average hall toggle
-  (`hall: {in_average}`; display-only by default), hover/tap scrubbing with
-  an all-series tooltip, and availability-honest '--' handling. Default
-  entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
-  YAML. Used as `type: custom:flat-climate-card`. HA resource id:
-  `f8f2966083af4b31b2588016c24dcc19`.
+  (`hall: {in_average}`; display-only by default), band-gated hover/tap
+  scrubbing with viewport-fixed graph-anchored tooltips (never clipped by
+  the card edge) and series-colored on-curve dots whose position and values
+  interpolate between history points, so sparse reporters stay on the
+  hairline (`scrub_dots: false` removes the dots), and availability-honest
+  '--' handling. Default entities are this dashboard's sensors; override via
+  indoor:/outdoor:/hall: YAML. Used as `type: custom:flat-climate-card`.
+  HA resource id: `f8f2966083af4b31b2588016c24dcc19`.
 - `flat-server-card.js` — v1.5. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
   quiet row; problems surface as a red-first alert strip even collapsed) that

@@ -1,4 +1,4 @@
-/* flat-climate-card v1.5 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v1.6.4 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an OPEN WINDOWS action chip
@@ -61,6 +61,52 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v1.6: READABILITY PASS (owner feedback off the live v1.5 render).
+     (a) TOOLTIP UNCLIPPED: the scrub tooltip is now viewport-anchored
+     (position: fixed, clamped to screen edges, flips sides near the right
+     edge) so it floats OVER the card instead of being cut by the card's
+     overflow:hidden. Tooltips live at the ha-card level, outside the rows,
+     so the humidity row's press-transform cannot break fixed positioning.
+     (b) CALMER HERO: ALL on-chart text removed (Patio/Front direct labels
+     + the avg end labels are gone) - headline, pill, legend only.
+     (c) LEGEND TAP = SPOTLIGHT: legend items are tappable; tap a room to
+     draw its line full-strength (2.5px) with a single on-chart label
+     (name + current value) while every other line drops to 18% and the
+     avg dashes to 12%; tap again (or another room) to release. Scrubbing
+     is unaffected and works during spotlight.
+     (d) AVERAGES ROW (expansion, between hero and humidity): in-avg and
+     out-avg drawn full-visibility dashed with their own scrub, and REAL
+     NUMBERS in the reading ("76.9 in - 75.1 out - D 1.8"); the D equals
+     the headline by construction (same inT/outT/delta values). The hero
+     keeps its quiet dashes as a hint.
+     (e) The hero scrub tooltip gains "in avg"/"out avg" rows at the
+     bottom, so the derived values are readable at any time point.
+     (v1.6.1) Scrub is SCOPED to the graph band: it only arms while the
+     pointer is vertically inside the zone where the lines live (hero:
+     below the headline/chip, above the legend; rows: below the reading),
+     so hovering the headline/legend/pill no longer summons the tooltip.
+     (v1.6.2) GRAPH-ANCHORED READOUT (owner: the v1.6 cursor-chasing panel
+     lost the pre-v1.6 feel): the tooltip is anchored to the top of the
+     row's graph and slides only HORIZONTALLY with the scrub position
+     (still viewport-fixed = unclipped, still flips near the screen edge),
+     and every solid line gains a SCRUB DOT riding the curve at the read
+     position - the flat-sensor-stack card's dot language, so the readout
+     is visually tied to the lines, not the pointer.
+     (v1.6.3) Dots restyled after the live render: 7px and COLORED to match
+     their own line (six white 9px dots merged into a blob where the lines
+     converge, and the raw-bucket placement visibly missed the SMOOTHED
+     curve on spike edges - same-color dots absorb that ~1-2px deviation);
+     during spotlight only the focused line keeps its dot.
+     (v1.6.4) SCRUB INTERPOLATES instead of snapping to the nearest bucket.
+     Root cause of the "dots don't align" report: sparse reporters (the
+     Nest only posts on meaningful changes) leave hour-plus bucket gaps,
+     so nearest-point snapping parked a dot far from the hairline AND fed
+     the tooltip a value from that distant bucket. Now both the dot and
+     the tooltip value are linearly interpolated between the two bracketing
+     points at the hairline's exact time - every dot sits ON the hairline,
+     on its line; a dot hides when the hairline is outside its line's data
+     range. Config: scrub_dots: false removes the dots entirely (tooltip +
+     hairline + interpolation stay).
    - v1.5: HALL (thermostat) LINE + TRANSLUCENT AVERAGE DASHES.
      (a) The thermostat's own temperature joins the overlay as a solid sixth
      line, seated IN THE INDOOR GROUP (legend/strip/tooltip order: indoor
@@ -132,9 +178,11 @@ class FlatClimateCard extends HTMLElement {
     this._sunCap = (config.sun_cap != null) ? Number(config.sun_cap) : DEF_SUN_CAP;
     this._hall = (config.hall === false) ? null : Object.assign({}, DEF_HALL, config.hall || {});
     this._avgOp = (config.avg_opacity != null) ? Number(config.avg_opacity) : DEF_AVG_OP;
+    this._scrubDots = config.scrub_dots !== false;
     // display order: indoor rooms, Hall (indoor group), then outdoor
     this._series = this._indoor.concat(this._hall ? [this._hall] : [], this._outdoor);
     this._open = false;
+    this._focus = null;       // v1.6 legend spotlight state
     this._chipOn = false;
     this._chipShown = null;   // last applied visibility (idempotent display writes)
     this._hist = {};          // entity -> [{t, v, x, y}]
@@ -175,6 +223,7 @@ class FlatClimateCard extends HTMLElement {
         .row.pressed { transform: scale(.985); background: rgba(70,70,70,.22); }
         .row.unavailable .reading, .row.unavailable svg.g { opacity: .4; }
         .hero { height: ${HERO_H}px; cursor: default; }
+        #avgrow { cursor: default; }
         .hrow { height: ${ROW_H}px; }
         svg.g { position: absolute; left: 0; right: 0; bottom: 0; width: 100%;
           display: block; pointer-events: none; }
@@ -192,12 +241,15 @@ class FlatClimateCard extends HTMLElement {
           color: ${GOOD}; font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
           background: color-mix(in srgb, var(--card-background-color) 75%, transparent); }
         .chip .cdot { width: 7px; height: 7px; border-radius: 50%; background: ${GOOD}; }
-        .legend { position: absolute; left: 12px; right: 8px; bottom: 8px; z-index: 1;
-          display: flex; align-items: center; gap: 9px; flex-wrap: nowrap;
-          overflow: hidden; pointer-events: none; }
+        .legend { position: absolute; left: 8px; right: 8px; bottom: 4px; z-index: 2;
+          display: flex; align-items: center; gap: 2px; flex-wrap: nowrap;
+          overflow: hidden; }
         .legend .it { display: flex; align-items: center; gap: 4px; font-size: 11px; flex: none;
-          color: var(--secondary-text-color);
+          color: var(--secondary-text-color); padding: 4px 5px; border-radius: 6px;
+          cursor: pointer; transition: background .15s;
           -webkit-text-stroke: 2px var(--card-background-color); paint-order: stroke fill; }
+        @media (hover: hover) { .legend .it:hover { background: rgba(255,255,255,.07); } }
+        .legend .it.on { background: rgba(255,255,255,.10); color: var(--primary-text-color); }
         .legend .dot { width: 7px; height: 7px; border-radius: 50%; -webkit-text-stroke: 0; }
         .label { position: absolute; top: 12px; right: 16px; z-index: 1;
           font-size: 16px; font-weight: 500; color: var(--secondary-text-color);
@@ -211,16 +263,21 @@ class FlatClimateCard extends HTMLElement {
           transition: background .15s, transform .12s ease; }
         @media (hover: hover) { .toggle:hover { background: rgba(255,255,255,.08); } }
         .toggle.pressed { transform: scale(.96); background: rgba(70,70,70,.3); }
+        .sdot { position: absolute; width: 7px; height: 7px; border-radius: 50%;
+          border: 1.5px solid var(--card-background-color);
+          transform: translate(-50%,-50%); z-index: 2; pointer-events: none;
+          visibility: hidden; }
         .xline { position: absolute; top: 0; bottom: 0; width: 1px;
           background: rgba(255,255,255,.25); z-index: 2; pointer-events: none;
           visibility: hidden; }
-        .tip { position: absolute; z-index: 3; padding: 6px 10px; border-radius: 6px;
-          background: rgba(0,0,0,.88); font-size: 12px; color: var(--primary-text-color);
+        .tip { position: fixed; left: 0; top: 0; z-index: 7; padding: 6px 10px; border-radius: 6px;
+          background: rgba(0,0,0,.9); font-size: 12px; color: var(--primary-text-color);
           pointer-events: none; white-space: nowrap; visibility: hidden; }
+        .tip .sep { border-top: 1px solid rgba(255,255,255,.15); margin: 4px 0 3px; }
         .tip .tt { color: var(--secondary-text-color); font-size: 11px; margin-bottom: 3px; }
         .tip .tr { display: flex; align-items: center; gap: 6px; line-height: 1.5; }
         .tip .td { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-        .tip .tn { color: var(--secondary-text-color); min-width: 46px; }
+        .tip .tn { color: var(--secondary-text-color); min-width: 52px; }
         .tip .tv { margin-left: auto; padding-left: 10px; }
         .kids { display: grid; grid-template-rows: 0fr;
           transition: grid-template-rows .35s cubic-bezier(.4,0,.2,1); }
@@ -245,20 +302,24 @@ class FlatClimateCard extends HTMLElement {
       <ha-card>
         <div id="hero"></div>
         <div class="kids" id="kids"><div class="kidsin" id="kidsin"></div></div>
+        <div id="tips"></div>
       </ha-card>
     `;
     this._el = { hero: root.getElementById('hero'), kids: root.getElementById('kids'),
-                 kidsin: root.getElementById('kidsin') };
+                 kidsin: root.getElementById('kidsin'), tips: root.getElementById('tips') };
     this._buildDom();
   }
 
   _buildDom() {
     if (!this._el) return;
-    const legend = this._series.map(s =>
-      `<span class="it"><span class="dot" style="background:${s.color}"></span>${s.name}</span>`).join('');
+    const legend = this._series.map((s, i) =>
+      `<span class="it" data-n="${s.name}"><span class="dot" style="background:${s.color}"></span>${s.name}</span>`).join('');
     const tipRows = (list) => list.map((s, i) =>
+      (s.sep ? '<div class="sep"></div>' : '') +
       `<div class="tr"><span class="td" style="background:${s.color}"></span>` +
       `<span class="tn">${s.name}</span><span class="tv" data-i="${i}">--</span></div>`).join('');
+    this._heroTipList = this._series.map(s => ({ name: s.name, color: s.color }))
+      .concat([{ name: 'in avg', color: AVG_IN, sep: true }, { name: 'out avg', color: AVG_OUT }]);
     this._el.hero.innerHTML = `
       <div class="row hero" id="hrow">
         <svg class="g" preserveAspectRatio="none"></svg>
@@ -267,10 +328,9 @@ class FlatClimateCard extends HTMLElement {
         </div>
         <div class="chipwrap"><span class="chip" id="chip" style="display:none">
           <span class="cdot"></span><span id="chiplab"></span></span></div>
-        <div class="legend">${legend}</div>
+        <div class="legend" id="legend">${legend}</div>
         <div class="toggle" id="pill"></div>
         <div class="xline"></div>
-        <div class="tip"><div class="tt"></div>${tipRows(this._series)}</div>
       </div>`;
     const humPair = this._humPair();
     const cells = this._series.map((s, i) =>
@@ -279,6 +339,14 @@ class FlatClimateCard extends HTMLElement {
         <div class="cn">${s.name}</div><div class="ch">--</div>
       </div>`).join('');
     this._el.kidsin.innerHTML = `
+      <div class="row hrow" id="avgrow">
+        <svg class="g" preserveAspectRatio="none"></svg>
+        <div class="reading">
+          <div class="val"><span id="avi">--</span><span class="uom" id="avw"></span></div>
+        </div>
+        <div class="label">Averages &mdash; 24h</div>
+        <div class="xline"></div>
+      </div>
       <div class="row hrow" id="hum">
         <svg class="g" preserveAspectRatio="none"></svg>
         <div class="reading">
@@ -286,9 +354,16 @@ class FlatClimateCard extends HTMLElement {
         </div>
         <div class="label">Humidity &mdash; 24h</div>
         <div class="xline"></div>
-        <div class="tip"><div class="tt"></div>${tipRows(humPair)}</div>
       </div>
       <div class="strip" id="strip">${cells}</div>`;
+    // v1.6: tooltips are viewport-fixed and live at ha-card level (outside the
+    // rows) so overflow:hidden cannot clip them and press-transforms cannot
+    // break their positioning
+    const avgPair = [{ name: 'in avg', color: AVG_IN }, { name: 'out avg', color: AVG_OUT }];
+    this._el.tips.innerHTML = `
+      <div class="tip" id="tip-hero"><div class="tt"></div>${tipRows(this._heroTipList)}</div>
+      <div class="tip" id="tip-avg"><div class="tt"></div>${tipRows(avgPair)}</div>
+      <div class="tip" id="tip-hum"><div class="tt"></div>${tipRows(humPair)}</div>`;
     this._wire();
     this._renderStates();
   }
@@ -333,44 +408,113 @@ class FlatClimateCard extends HTMLElement {
         info(this._series[+cell.dataset.i].entity);
       });
     });
-    // scrub layers
-    this._bindScrub(hrow, this._series, HERO_H, HERO_G);
-    this._bindScrub(hum, this._humPair(), ROW_H, ROW_G);
+    // legend tap = spotlight (v1.6)
+    const legendEl = root.getElementById('legend');
+    legendEl.querySelectorAll('.it').forEach(it => {
+      it.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const n = it.dataset.n;
+        this._focus = (this._focus === n) ? null : n;
+        legendEl.querySelectorAll('.it').forEach(el =>
+          el.classList.toggle('on', el.dataset.n === this._focus));
+        this._drawHero();
+      });
+    });
+    // scrub layers (v1.6: resolver-based, viewport-fixed tooltips)
+    this._bindScrub(hrow, root.getElementById('tip-hero'),
+      () => this._series.map(s => this._hist[s.entity] || [])
+        .concat([(this._avgHist && this._avgHist.i) || [], (this._avgHist && this._avgHist.o) || []]),
+      { top: 52, bottom: HERO_H - 28, rowH: HERO_H, gH: HERO_G,
+        dots: this._series.length, colors: this._series.map(s => s.color),
+        dotOn: (i) => !this._focus || this._series[i].name === this._focus });
+    this._bindScrub(root.getElementById('avgrow'), root.getElementById('tip-avg'),
+      () => [(this._avgRowPts && this._avgRowPts.i) || [], (this._avgRowPts && this._avgRowPts.o) || []],
+      { top: 42, bottom: ROW_H - 2, rowH: ROW_H, gH: ROW_G,
+        dots: 2, colors: [AVG_IN, AVG_OUT] });
+    this._bindScrub(hum, root.getElementById('tip-hum'),
+      () => this._humPair().map(s => this._hist[s.entity] || []),
+      { top: 42, bottom: ROW_H - 2, rowH: ROW_H, gH: ROW_G,
+        dots: 2, colors: this._humPair().map(s => s.color) });
   }
 
-  _bindScrub(rowEl, list, rowH, gH) {
+  _bindScrub(rowEl, tip, getLists, band) {
     const xline = rowEl.querySelector('.xline');
-    const tip = rowEl.querySelector('.tip');
     const tt = tip.querySelector('.tt');
     const tvs = tip.querySelectorAll('.tv');
+    // scrub dots riding the curves (stack-card language), one per plotted line
+    const dots = [];
+    for (let i = 0; i < (this._scrubDots ? band.dots : 0); i++) {
+      const d = document.createElement('div');
+      d.className = 'sdot';
+      d.style.background = (band.colors && band.colors[i]) || '#fff';
+      rowEl.appendChild(d);
+      dots.push(d);
+    }
+    const hide = () => {
+      xline.style.visibility = 'hidden';
+      tip.style.visibility = 'hidden';
+      dots.forEach(d => { d.style.visibility = 'hidden'; });
+    };
     rowEl.addEventListener('pointermove', (e) => {
       const rect = rowEl.getBoundingClientRect();
+      // v1.6.1: only arm inside the graph band (where the lines live)
+      const oy = e.clientY - rect.top;
+      if (oy < band.top || oy > band.bottom) { hide(); return; }
       const f = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       let anyT = null;
-      list.forEach((s, i) => {
-        const pts = this._hist[s.entity] || [];
-        if (!pts.length) { tvs[i].textContent = '--'; return; }
-        let best = 0, bd = Infinity;
-        for (let k = 0; k < pts.length; k++) {
-          const d = Math.abs(pts[k].x - f);
-          if (d < bd) { bd = d; best = k; }
+      getLists().forEach((pts, i) => {
+        if (!tvs[i]) return;
+        const dot = dots[i];
+        if (!pts.length) {
+          tvs[i].textContent = '--';
+          if (dot) dot.style.visibility = 'hidden';
+          return;
         }
-        tvs[i].textContent = this._fmt(pts[best].v, 1);
-        if (anyT == null) anyT = pts[best].t;
+        // v1.6.4: interpolate between the bracketing points at the hairline
+        const inRange = f >= pts[0].x && f <= pts[pts.length - 1].x;
+        const fc = Math.max(pts[0].x, Math.min(pts[pts.length - 1].x, f));
+        let k = 0;
+        while (k < pts.length - 2 && pts[k + 1].x < fc) k++;
+        const a = pts[k], b = pts[Math.min(k + 1, pts.length - 1)];
+        const span = b.x - a.x;
+        const t = span > 1e-9 ? (fc - a.x) / span : 0;
+        const v = a.v + (b.v - a.v) * t;
+        const y = (a.y != null && b.y != null) ? a.y + (b.y - a.y) * t : null;
+        tvs[i].textContent = this._fmt(v, 1);
+        if (dot) {
+          const show = inRange && y != null && (!band.dotOn || band.dotOn(i));
+          if (show) {
+            dot.style.left = (fc * 100) + '%';
+            dot.style.top = (band.rowH - band.gH + y) + 'px';
+          }
+          dot.style.visibility = show ? 'visible' : 'hidden';
+        }
+        if (anyT == null) anyT = a.t + (b.t - a.t) * t;
       });
       if (anyT == null) return;
       tt.textContent = this._fmtTime(anyT);
       const px = f * rect.width;
       xline.style.left = px + 'px';
       xline.style.visibility = 'visible';
-      tip.style.left = Math.max(8, Math.min(rect.width - 150, px + 14)) + 'px';
-      tip.style.top = '38px';
+      // v1.6.2: GRAPH-ANCHORED panel - fixed to the top of the row's graph,
+      // sliding only horizontally with the scrub; viewport-fixed = unclipped,
+      // flips to the left side of the scrub near the screen edge
+      tip.style.visibility = 'hidden';
+      const tw = tip.offsetWidth || 150, th = tip.offsetHeight || 60;
+      let x = rect.left + px + 16;
+      if (x + tw > window.innerWidth - 8) x = rect.left + px - 16 - tw;
+      x = Math.max(8, x);
+      let y = rect.top + band.top - 4;
+      y = Math.max(8, Math.min(window.innerHeight - th - 8, y));
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
       tip.style.visibility = 'visible';
     });
-    rowEl.addEventListener('pointerleave', () => {
-      xline.style.visibility = 'hidden';
-      tip.style.visibility = 'hidden';
-    });
+    ['pointerleave', 'pointercancel', 'pointerup'].forEach(ev =>
+      rowEl.addEventListener(ev, (e) => {
+        if (ev === 'pointerup' && e.pointerType === 'mouse') return; // mouse keeps hover
+        hide();
+      }));
   }
 
   _toggle() {
@@ -424,6 +568,18 @@ class FlatClimateCard extends HTMLElement {
       root.getElementById('chiplab').textContent = c.label;
       chip.style.display = this._chipOn ? 'inline-flex' : 'none';
       this._chipShown = this._chipOn;
+    }
+    // averages-row reading (v1.6): same inT/outT/delta as the headline
+    const avgrow = root.getElementById('avgrow');
+    if (inT == null || outT == null) {
+      root.getElementById('avi').textContent = '--';
+      root.getElementById('avw').textContent = '';
+      avgrow.classList.add('unavailable');
+    } else {
+      avgrow.classList.remove('unavailable');
+      root.getElementById('avi').textContent = this._fmt(inT, 1);
+      root.getElementById('avw').textContent =
+        '\u00b0 in \u00b7 ' + this._fmt(outT, 1) + '\u00b0 out \u00b7 \u0394 ' + this._fmt(delta, 1);
     }
     // humidity reading
     const hp = this._humPair();
@@ -483,7 +639,8 @@ class FlatClimateCard extends HTMLElement {
     ids.forEach(id => {
       this._hist[id] = this._bucket(result[id] || [], start.getTime(), end.getTime(), hours, id);
     });
-    this._drawHero(hours);
+    this._drawHero();
+    this._drawAvg();
     this._drawHum();
   }
 
@@ -567,46 +724,67 @@ class FlatClimateCard extends HTMLElement {
     const inList = this._indoor.concat(this._hall && this._hall.in_average ? [this._hall] : []);
     const avgIn = this._avgOp > 0 ? this._avgPts(inList, false) : [];
     const avgOut = this._avgOp > 0 ? this._avgPts(this._outdoor, true) : [];
+    // averages always computed for the tooltip + averages row, drawn per avg_opacity
+    this._avgHist = { i: avgIn, o: avgOut };
     const all = lists.filter(l => l.length).concat([avgIn, avgOut].filter(l => l.length));
     if (!this._scaleY(all, HERO_G, 50, 30)) { svg.innerHTML = ''; return; }
+    // v1.6: no on-chart text at rest; legend tap spotlights one line
+    const focus = this._focus;
     let paths = '', labels = '';
     this._series.forEach((s, i) => {
       const pts = lists[i];
       if (!pts.length) return;
+      const op = focus ? (s.name === focus ? 1 : 0.18) : 1;
+      const wd = (focus && s.name === focus) ? 2.5 : 2;
       paths += '<path d="' + this._path(pts, w) + '" fill="none" stroke="' + s.color +
-        '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>';
+        '" stroke-width="' + wd + '" opacity="' + op +
+        '" stroke-linecap="round" stroke-linejoin="round"></path>';
+      if (focus && s.name === focus) {
+        // single label on the spotlighted line: name + current value at its max
+        let best = pts[0];
+        pts.forEach(p => { if (p.v > best.v) best = p; });
+        const live = this._num(s.entity);
+        const txt = s.name + (live != null ? ' ' + this._fmt(live, 1) : '');
+        const x = Math.max(30, Math.min(w - 30, best.x * w));
+        const y = Math.min(HERO_G - 30, Math.max(58, best.y - 9));
+        labels += '<text class="dlab" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) +
+          '" fill="' + s.color + '" text-anchor="middle">' + txt + '</text>';
+      }
     });
-    // direct labels on the outdoor pair: Patio above its max, Front above its min
-    const lab = (s, pickMax) => {
-      const pts = this._hist[s.entity] || [];
-      if (!pts.length) return '';
-      let best = pts[0];
-      pts.forEach(p => { if (pickMax ? p.v > best.v : p.v < best.v) best = p; });
-      const x = Math.max(26, Math.min(w - 26, best.x * w));
-      const y = Math.min(HERO_G - 34, Math.max(58, best.y - 9));
-      return '<text class="dlab" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) +
-        '" fill="' + s.color + '" text-anchor="middle">' + s.name + '</text>';
-    };
-    if (this._outdoor[0]) labels += lab(this._outdoor[0], true);
-    if (this._outdoor[1]) labels += lab(this._outdoor[1], false);
-    // translucent dashed averages (dashed = computed, solid = measured)
+    // quiet dashed averages (hint only; the numbers live in the Averages row)
     let avgs = '';
-    if (avgIn.length && avgOut.length) {
-      const op = this._avgOp;
+    if (avgIn.length && avgOut.length && this._avgOp > 0) {
+      const op = focus ? Math.min(this._avgOp, 0.12) : this._avgOp;
       avgs += '<path d="' + this._path(avgIn, w) + '" fill="none" stroke="' + AVG_IN +
         '" stroke-width="2" opacity="' + op + '" stroke-dasharray="6 5" stroke-linecap="round"></path>';
       avgs += '<path d="' + this._path(avgOut, w) + '" fill="none" stroke="' + AVG_OUT +
         '" stroke-width="2" opacity="' + op + '" stroke-dasharray="6 5" stroke-linecap="round"></path>';
-      // end labels, pushed apart if the two lines converge at the right edge
-      let yi = avgIn[avgIn.length - 1].y - 7, yo = avgOut[avgOut.length - 1].y + 14;
-      if (Math.abs(yi - yo) < 14) { if (yi <= yo) yo = yi + 14; else yi = yo + 14; }
-      yi = Math.min(HERO_G - 34, Math.max(14, yi));
-      yo = Math.min(HERO_G - 34, Math.max(14, yo));
-      const albl = (y, txt, c) => '<text class="dlab" x="' + (w - 6) + '" y="' + y.toFixed(1) +
-        '" fill="' + c + '" opacity="' + Math.min(1, op + .25) + '" text-anchor="end">' + txt + '</text>';
-      avgs += albl(yi, 'in avg', AVG_IN) + albl(yo, 'out avg', AVG_OUT);
     }
     svg.innerHTML = paths + avgs + labels;
+  }
+
+  _drawAvg() {
+    const root = this.shadowRoot;
+    const row = root.getElementById('avgrow');
+    const svg = row.querySelector('svg.g');
+    const w = row.clientWidth || 500;
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + ROW_G);
+    if (!this._avgHist) { svg.innerHTML = ''; return; }
+    // fresh copies: the hero's scale pass owns the y of the shared arrays
+    const cp = pts => pts.map(p => ({ t: p.t, v: p.v, x: p.x }));
+    const ai = cp(this._avgHist.i), ao = cp(this._avgHist.o);
+    if (!this._scaleY([ai, ao].filter(l => l.length), ROW_G, 26, 6)) { svg.innerHTML = ''; return; }
+    this._avgRowPts = { i: ai, o: ao };  // row-scaled copies for the avg-row scrub dots
+    let out = '';
+    [[ai, AVG_IN, 'in', -6], [ao, AVG_OUT, 'out', 15]].forEach(([pts, c, txt, dy]) => {
+      if (!pts.length) return;
+      out += '<path d="' + this._path(pts, w) + '" fill="none" stroke="' + c +
+        '" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>';
+      const y = Math.min(ROW_G - 6, Math.max(13, pts[pts.length - 1].y + dy));
+      out += '<text class="dlab" x="' + (w - 6) + '" y="' + y.toFixed(1) +
+        '" fill="' + c + '" text-anchor="end">' + txt + '</text>';
+    });
+    svg.innerHTML = out;
   }
 
   _drawHum() {
