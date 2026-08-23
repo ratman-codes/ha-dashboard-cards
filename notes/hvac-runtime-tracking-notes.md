@@ -27,3 +27,13 @@ where the synthetic backfilled odometer meets the real sensor (born at 0) —
 the statistics **sum/change** series is continuous across the seam, which is
 what every change-per-day view consumes. Method details in the private
 project notes.
+
+Run once - "off after this run" (2026-08-23): a toggle helper + one small
+automation turn a manually-started run into a one-shot. While the helper is
+on, `hvac_action` cooling/heating -> idle sustained 1 min (blip guard) turns
+the climate entity off and clears the helper; the climate entity going off
+manually (any UI) also clears it. Arming while idle means the NEXT completed
+run turns it off. The flat-thermostat-card arms/disarms the helper via a
+long-press on its power button (`run_once_entity` config key) and shows an
+orbiting standby-amber arc while armed - but the automation is the engine,
+so the one-shot works with every dashboard closed.

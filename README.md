@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.6.11. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.7.2. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -23,22 +23,26 @@ header.)*
   hours from daily runtime meter entities; never hides - off mode with zero
   runtime shows all configured meters at 0m), a tap-to-expand in-card 14-day
   runtime graph fed by HA long-term statistics (live today bar, avg line,
-  per-bar tooltips clamped inside the plot; zero dependencies), and — v2.6 —
-  three tile-switched RUNTIME VIEWS swapped into the graph slot: TODAY (exact
+  per-bar tooltips clamped inside the plot; zero dependencies), three
+  tile-switched RUNTIME VIEWS (v2.6) swapped into the graph slot: TODAY (exact
   on/off ribbon from the 0/1 signal sensors' recorder history + minutes-per-hour
   bars from hourly statistics, day pager with native calendar picker),
   PERIOD explorer (7d/14d/30d/60d/season/custom chips, totals + vs-previous,
   daily bars auto-aggregating weekly past 35 days, transposed time-of-day
   heatmap: 8 fixed 3-hour columns, dates down as rows newest-first), and
   RECORDS (top-5 days, runtime-vs-outdoor-high scatter with a least-squares
-  trend line that hides when the fit is noise). Used as
-  `type: custom:flat-thermostat-card` with a climate entity + optional
+  trend line that hides when the fit is noise) — and a RUN-ONCE arm (v2.7):
+  long-press the power button while running to schedule "off after this run"
+  (a standby-amber arc orbits the power glyph while armed; the actual
+  turn-off lives in a paired input_boolean + automation in HA so it fires
+  with every dashboard closed — see notes/hvac-runtime-tracking-notes.md).
+  Used as `type: custom:flat-thermostat-card` with a climate entity + optional
   runtime_cooling/runtime_heating (daily meters),
   runtime_cooling_stats/runtime_heating_stats (long-term stats sources),
   runtime_cooling_signal/runtime_heating_signal (0/1 signal sensors for the
   ribbon), outdoor_high_stats (outdoor temperature entity for the scatter),
-  and period_default (7d|14d|30d|60d|season).
-  HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
+  period_default (7d|14d|30d|60d|season), and run_once_entity (the arming
+  input_boolean). HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`

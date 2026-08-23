@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.6.11 (runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.7.2 (run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -11,7 +11,8 @@ Slim flat replica of the native HA thermostat dial. Source:
 meters) + `runtime_cooling_signal`/`runtime_heating_signal` (the pipeline's 0/1
 template signal sensors, v2.6: exact on/off ribbon) + `outdoor_high_stats`
 (an outdoor temperature entity with long-term statistics, v2.6: records
-scatter) + `period_default: 7d|14d|30d|60d|season` (v2.6.11, default 14d).
+scatter) + `period_default: 7d|14d|30d|60d|season` (v2.6.11, default 14d) +
+`run_once_entity` (an input_boolean, v2.7: one-shot arming).
 Eco (v2.3): Nest `none|eco` preset as a detached leaf button beside the mode
 strip; while on, track renders the entity-reported eco setpoints green and
 read-only. Runtime chip (v2.4.x): today's ACTIVE compressor/furnace hours in a
@@ -42,7 +43,18 @@ drill into that day's TODAY view), and a runtime-vs-outdoor-high scatter of
 the last 60 days with a dashed least-squares trend line that hides itself when
 r-squared < 0.1. The middle summary tile tracks the selected window ("14d
 avg"), persisting after the view closes; larger-than-14d defaults self-fill
-via one quiet stats fetch. Layout/centering rule (v2.5.2–v2.5.4, owner-final):
+via one quiet stats fetch. Run once (v2.7-v2.7.2): long-press (550ms) the
+power mode button while the mode is active to arm "off after this run" -
+armed state = a standby-amber quarter-arc orbiting the power glyph (5s/lap,
+pure CSS; static ring under prefers-reduced-motion) with the glyph tinted to
+match; short-tap power stays "off now", the click trailing a long-press is
+swallowed, off mode ignores the gesture. The card only toggles/displays the
+paired input_boolean; a small HA automation does the actual work (hvac_action
+cooling/heating -> idle for 1 min while armed -> set_hvac_mode off + disarm;
+manual off from any UI just disarms) so the one-shot fires with every
+dashboard closed. Amber is deliberately mode-agnostic (the pending off is
+neither a cooling nor a heating thing) and a paler sibling of the heat_cool
+accent - thin ring vs solid fill keeps them distinct. Layout/centering rule (v2.5.2–v2.5.4, owner-final):
 the left column is fixed-width; the empty region spans from the card's visible
 edge (card padding counts as empty space) to the track's left edge, and the
 temp digits, status text, and chip all sit on that region's center axis — the

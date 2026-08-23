@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.6.11 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.7.2 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -212,7 +212,53 @@
    (v2.6.3, read left-weighted). Labels half-count, in effect. Also fixed:
    bar hover TOOLTIPS now clamp inside the plot so first/last-bar
    values are never cut off at the card edge (both the default 14-day
-   graph and all view plots). */
+   graph and all view plots).
+
+   RUN ONCE / "OFF AFTER THIS RUN" (v2.7, owner request, mockup option A
+   chosen 2026-08-23): LONG-PRESS (550ms, house convention) the POWER
+   button while the mode is active to arm a one-shot - when the current
+   cooling/heating run satisfies, the thermostat turns off instead of
+   idling armed. THE CARD IS ONLY THE SWITCH AND THE STATUS: the engine
+   is an input_boolean helper + a tiny HA automation (documented in
+   claude/hvac-runtime-tracking-notes.md) that watches hvac_action
+   cooling/heating -> idle while the helper is on, then calls
+   climate.set_hvac_mode off and disarms; manually turning the
+   thermostat off also disarms (automation-side). This lives in HA so
+   it fires with every dashboard closed - card-side logic would only
+   run while a browser shows the card. Config:
+     run_once_entity: <input_boolean>   (absent = feature invisible)
+   Card behavior: long-press toggles the helper (8s optimistic hold,
+   same pattern as eco); only honored while the mode is ACTIVE (off
+   mode: long-press is a no-op - nothing to complete). Short-tap on
+   power is UNCHANGED ("off now"); the click that trails a long-press
+   is swallowed. Armed visuals: power button gets an inset ring +
+   "1x" badge in the active series accent (cool blue / heat amber),
+   and the status column shows a small dim "then off" line under the
+   action word - a deliberate second LINE, centered on the column
+   axis like everything else (76px is too narrow for one line, and a
+   wrapped middot read as misalignment in the mockup round). The line
+   is ABSOLUTELY POSITIONED off the status text's bottom edge
+   (v2.7.1, owner: arming must not nudge ANY element or grow the
+   card) - it hangs into the column's existing blank space and
+   occupies zero layout height, so the card geometry is byte-identical
+   armed and disarmed. Armed +
+   mode off (stale helper): no visuals - the automation clears it.
+   Arming while idle means "the NEXT completed run turns it off".
+   v2.7.2 (owner rounds on the armed VISUAL, final): the ring + "1x"
+   badge read as clutter -> replaced by an ORBITING ARC: a quarter-
+   circle ring slowly orbiting the power glyph (5s/lap, pure CSS,
+   zero cost disarmed; prefers-reduced-motion gets a static full
+   ring) - "standing watch until the run ends", motion with meaning,
+   no false progress claim. COLOR = STANDBY AMBER #ffd54f, the
+   owner's instinct over my lavender pitch: amber-standby is the
+   hardware-LED idiom for "waiting to act" and the correct TENSE
+   (green says done; nothing is done yet). Deliberately a PALER
+   SIBLING of heat_cool's #ffc107 - thin ring vs solid fill keeps
+   them distinct, and the owner rarely runs heat_cool. The color is
+   MODE-AGNOSTIC (the pending off is not a cooling/heating thing).
+   The "then off" status line is REMOVED (owner: crowded the runtime
+   chip and added nothing over the lit button) - the arc + tinted
+   glyph are the entire armed signal. */
 
 const ICONS = { off: 'mdi:power', cool: 'mdi:snowflake', heat: 'mdi:fire', heat_cool: 'mdi:sun-snowflake-variant' };
 const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107', eco: '#4caf50' };
@@ -235,6 +281,10 @@ class FlatThermostatCard extends HTMLElement {
     this._optModeUntil = 0;
     this._optEco = null;
     this._optEcoUntil = 0;
+    this._optOnce = null;
+    this._optOnceUntil = 0;
+    this._lpFired = false;
+    this._armedShow = false;
     this._rtHtml = '';
     this._gOpen = false;
     this._gDef = null;
@@ -312,9 +362,21 @@ class FlatThermostatCard extends HTMLElement {
         .bottom { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
         .chipslot { flex: 0 0 76px; box-sizing: border-box; padding-right: 6px; display: flex; align-items: center; justify-content: center; }
         .modes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); height: 42px;
-          border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden; }
+          border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden;
+          user-select: none; -webkit-user-select: none; }
         .mode { display: flex; align-items: center; justify-content: center; border-radius: 12px;
-          cursor: pointer; transition: background .15s; }
+          cursor: pointer; transition: background .15s; position: relative; }
+        .mode.armed ha-icon { color: #ffd54f; }
+        .oncearc { display: none; position: absolute; left: 50%; top: 50%; width: 32px; height: 32px;
+          margin: -16px 0 0 -16px; pointer-events: none; }
+        .oncearc circle { fill: none; stroke: #ffd54f; stroke-width: 2; stroke-linecap: round;
+          stroke-dasharray: 24 70; }
+        .mode.armed .oncearc { display: block; animation: oncespin 5s linear infinite; }
+        @keyframes oncespin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+          .mode.armed .oncearc { animation: none; }
+          .mode.armed .oncearc circle { stroke-dasharray: none; }
+        }
         .mode:hover { background: rgba(255,255,255,.07); }
         .mode ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
           align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
@@ -543,6 +605,26 @@ class FlatThermostatCard extends HTMLElement {
     return this._attrs().preset_mode === 'eco';
   }
 
+  /* ---------- run once (v2.7) ---------- */
+  _onceEnt() { return this._config.run_once_entity; }
+
+  _onceOn() {
+    if (!this._onceEnt()) return false;
+    if (Date.now() < this._optOnceUntil) return this._optOnce;
+    const st = this._hass && this._hass.states[this._onceEnt()];
+    return !!st && st.state === 'on';
+  }
+
+  _toggleOnce() {
+    const ent = this._onceEnt();
+    if (!ent || !this._hass) return;
+    const on = this._onceOn();
+    this._optOnce = !on;
+    this._optOnceUntil = Date.now() + 8000;
+    this._render();
+    this._hass.callService('input_boolean', on ? 'turn_off' : 'turn_on', { entity_id: ent });
+  }
+
   /* ---------- rendering ---------- */
   _render() {
     const s = this._stateObj();
@@ -572,6 +654,9 @@ class FlatThermostatCard extends HTMLElement {
     el.ecobtn.classList.toggle('gone', !this._ecoSupported());
     el.ecobtn.classList.toggle('on', eco);
     el.bar.classList.toggle('ecolock', eco);
+
+    // run-once armed visuals (v2.7; arc-only since v2.7.2): only while a run can complete
+    this._armedShow = this._onceOn() && mode !== 'off' && !unavailable;
 
     this._buildModes();
     this._updateModes(mode);
@@ -1543,7 +1628,36 @@ class FlatThermostatCard extends HTMLElement {
       const ic = document.createElement('ha-icon');
       ic.setAttribute('icon', this._config['icon_' + m] || ICONS[m] || 'mdi:thermostat');
       d.appendChild(ic);
-      d.addEventListener('click', () => this._setMode(m));
+      if (m === 'off') {
+        // v2.7: long-press (550ms) arms/disarms "off after this run"; the
+        // trailing click is swallowed so short-tap semantics stay untouched
+        const NS2 = 'http://www.w3.org/2000/svg';
+        const arc = document.createElementNS(NS2, 'svg');
+        arc.setAttribute('viewBox', '0 0 32 32');
+        arc.setAttribute('class', 'oncearc');
+        const ac = document.createElementNS(NS2, 'circle');
+        ac.setAttribute('cx', '16'); ac.setAttribute('cy', '16'); ac.setAttribute('r', '14');
+        arc.appendChild(ac);
+        d.appendChild(arc);
+        let lpt = null;
+        const clearT = () => { if (lpt) { clearTimeout(lpt); lpt = null; } };
+        d.addEventListener('pointerdown', () => {
+          this._lpFired = false;
+          if (!this._onceEnt()) return;
+          lpt = setTimeout(() => {
+            lpt = null;
+            if (this._mode() !== 'off') { this._lpFired = true; this._toggleOnce(); }
+          }, 550);
+        });
+        d.addEventListener('pointerup', clearT);
+        d.addEventListener('pointerleave', clearT);
+        d.addEventListener('pointercancel', clearT);
+        d.addEventListener('contextmenu', (e) => { if (this._onceEnt()) e.preventDefault(); });
+        d.addEventListener('click', (e) => {
+          if (this._lpFired) { this._lpFired = false; e.stopPropagation(); return; }
+          this._setMode(m);
+        });
+      } else d.addEventListener('click', () => this._setMode(m));
       this._el.modes.appendChild(d);
     });
     this._modesBuilt = true;
@@ -1553,6 +1667,7 @@ class FlatThermostatCard extends HTMLElement {
     this._el.modes.querySelectorAll('.mode').forEach(d => {
       const active = d.dataset.mode === mode;
       d.classList.toggle('active', active);
+      d.classList.toggle('armed', d.dataset.mode === 'off' && this._armedShow);
       d.style.background = active ? (COLORS[d.dataset.mode] || 'var(--primary-color)') : '';
     });
   }
@@ -1730,5 +1845,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-thermostat-card',
   name: 'Flat Thermostat Card',
-  description: 'Slim flat thermostat with dual-handle temperature track, native-style mode strip, eco toggle, and daily HVAC runtime chip with expanding runtime graph + today/period/records views',
+  description: 'Slim flat thermostat with dual-handle temperature track, native-style mode strip, eco toggle, one-shot off-after-this-run arming, and daily HVAC runtime chip with expanding runtime graph + today/period/records views',
 });
