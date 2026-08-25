@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.7.2. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.9.3. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -36,6 +36,15 @@ header.)*
   (a standby-amber arc orbits the power glyph while armed; the actual
   turn-off lives in a paired input_boolean + automation in HA so it fires
   with every dashboard closed — see notes/hvac-runtime-tracking-notes.md).
+  The TODAY ribbon (v2.8–v2.9.3) also tells the mode story: a faint band marks
+  when the thermostat was ON (gray = purposely off, faint = on but idle, solid
+  = running), setpoint ticks with values mark every turn-on and every change
+  (rapid dial-turn bursts settle into one tick with the settled value; when
+  labels collide, the value that held longest wins and the loser keeps a quiet
+  notch), a scrub tooltip gives the exact time/mode/setpoint/running state,
+  and the same ribbon also renders on the default expanded panel between the
+  stat tiles and the 14-day bars — all read from existing recorder history of
+  the climate entity itself, zero new configuration.
   Used as `type: custom:flat-thermostat-card` with a climate entity + optional
   runtime_cooling/runtime_heating (daily meters),
   runtime_cooling_stats/runtime_heating_stats (long-term stats sources),

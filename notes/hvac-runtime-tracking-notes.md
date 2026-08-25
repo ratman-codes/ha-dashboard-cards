@@ -37,3 +37,9 @@ run turns it off. The flat-thermostat-card arms/disarms the helper via a
 long-press on its power button (`run_once_entity` config key) and shows an
 orbiting standby-amber arc while armed - but the automation is the engine,
 so the one-shot works with every dashboard closed.
+
+The card's ran-during ribbon (v2.8+) additionally reads the climate entity's
+OWN recorder history (state + attributes) for a mode on/off band and setpoint
+tick marks - no pipeline entities involved, zero new helpers; noted here only
+because the ribbon renders alongside the pipeline-fed run segments and shares
+their recorder-retention limit.

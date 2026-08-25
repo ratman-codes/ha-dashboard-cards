@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.7.2 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.9.3 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -118,6 +118,39 @@
      recorder retention, ribbon quietly drops out beyond that); hourly
      bars from LTS hour-period stats (work for ANY day, forever); a
      "now" line on today; and a < date > pager to walk previous days.
+     ON-BAND (v2.8, owner-approved mockup variant A): the ribbon also
+     paints the thermostat's MODE-ON span (climate entity state != off,
+     from the same recorder history API) as a faint series-tinted band
+     UNDER the solid run segments - gray = purposely off, faint tint =
+     on but idle/satisfied, solid = actually running. Chosen over a
+     separate band row (zero added height) and over an "on Xh" hero
+     stat (the band already says it). Same ~10-day retention as the run
+     ribbon; no config needed - it reads the main climate entity, and
+     "on" means ANY non-off mode, tinted with the viewed series' color.
+     SETPOINT TICKS (v2.9, owner-designed rule after mockup rounds): a
+     thin label row sits ABOVE the ribbon; every time the thermostat
+     comes ON there is a tick (a 1px line climbing out of the band into
+     the label row) with the setpoint value just RIGHT of it - even at
+     midnight when the day starts already-on - and every setpoint
+     change while on gets its own tick + value beside it. NOTHING is
+     centered: a label always marks "from this moment: this value"
+     (owner rejected centered labels as illogical). A label is skipped
+     (tick kept) only when it would overlap the previous label; the
+     scrub TOOLTIP always has the exact values: press/hover anywhere on
+     the ribbon for "time - mode - set X - running/idle". The "above"
+     style was chosen over inline-in-band after a comparison mockup:
+     inline text collides with solid run segments (a change mid-run is
+     the common case) and inline ticks drown among 15-min run slivers.
+     Data: ONE attribute-bearing history fetch of the climate entity
+     (heavier than the v2.8 minimal fetch - climate rows are chatty -
+     but it serves mode band + setpoints together; heat_cool renders
+     "lo-hi"). Same ~10-day recorder reach as the ribbon.
+     DEFAULT-LAYER RIBBON (v2.9, owner request): the same full ribbon
+     (band + ticks + labels + tooltip) ALSO renders on the default
+     expanded panel - "Ran during - today" - between the three stat
+     tiles and the 14-day bars, so today's story is visible without
+     entering the TODAY view. Both placements share one renderer
+     (_renderRibbon) and refresh on the panel's 15-min fetch cadence.
    - PERIOD view (tile 2): range explorer. Chips 7d/14d/30d/60d/Season/
      Custom (Season = since Jun 1 for cooling, Nov 1 for heating;
      Custom = two native date inputs); stat row total / avg per day /
@@ -462,6 +495,17 @@ class FlatThermostatCard extends HTMLElement {
           opacity: .85; margin: 14px 2px 6px; font-weight: 600; }
         .vrib { position: relative; height: 14px; border-radius: 4px; background: rgba(255,255,255,.05); margin: 6px 2px 0; }
         .vrib .seg { position: absolute; top: 0; bottom: 0; border-radius: 3px; min-width: 2px; }
+        .vrib .onband { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+        /* v2.9 setpoint ticks + labels + scrub tooltip */
+        .sprow { position: relative; height: 12px; margin: 2px 2px 0; }
+        .sprow .splab { position: absolute; top: 0; height: 12px; display: flex; align-items: center;
+          font-size: 9px; font-weight: 600; letter-spacing: .3px; color: var(--primary-text-color);
+          opacity: .75; white-space: nowrap; }
+        .vrib .sptick { position: absolute; top: -13px; bottom: 0; width: 1px; background: rgba(255,255,255,.55); }
+        .vrib .sptick.quiet { top: 1px; background: rgba(255,255,255,.35); }
+        .ribwrap { position: relative; }
+        .ribwrap .rscrub { position: absolute; top: -3px; bottom: -3px; width: 1px;
+          background: rgba(255,255,255,.55); display: none; pointer-events: none; }
         .vrib .vnow { position: absolute; top: -4px; bottom: -4px; width: 2px; border-radius: 1px;
           background: var(--primary-text-color); }
         .vxax { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--secondary-text-color);
@@ -534,6 +578,8 @@ class FlatThermostatCard extends HTMLElement {
             <div class="gtitle-row"><span id="gtitle"></span><span id="gright">hours/day</span></div>
             <div class="gstats" id="gstats"></div>
             <div id="gdef">
+              <div id="grib"></div>
+              <div class="vsect" id="glab"></div>
               <div class="gplot" id="gplot"></div>
               <div class="gxrow" id="gxrow"></div>
             </div>
@@ -543,7 +589,7 @@ class FlatThermostatCard extends HTMLElement {
       </ha-card>
     `;
     this._el = {};
-    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','gwrap','gtitle','gright','gplot','gxrow','gstats','gdef','gview','curval','unit','state']
+    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','gwrap','gtitle','gright','grib','glab','gplot','gxrow','gstats','gdef','gview','curval','unit','state']
       .forEach(id => this._el[id] = root.getElementById(id));
     this._el.bfheat.style.background = COLORS.heat;
     this._el.bfcool.style.background = COLORS.cool;
@@ -760,15 +806,25 @@ class FlatThermostatCard extends HTMLElement {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     start.setDate(start.getDate() - (GRAPH_DAYS - 1));
-    this._hass.callWS({
-      type: 'recorder/statistics_during_period',
-      start_time: start.toISOString(),
-      statistic_ids: [ent],
-      period: 'day',
-      types: ['change'],
-    }).then((resp) => {
+    // v2.9: the default layer also shows today's ran-during ribbon - fetch
+    // today's signal + climate history alongside the 14-day stats (non-fatal)
+    const sigEnt = this._config[this._gDef.key + '_signal'];
+    const a0 = new Date(); a0.setHours(0, 0, 0, 0);
+    const hEnd = new Date();
+    Promise.all([
+      this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start.toISOString(),
+        statistic_ids: [ent],
+        period: 'day',
+        types: ['change'],
+      }),
+      sigEnt ? this._histFetch(sigEnt, a0, hEnd).catch(() => null) : Promise.resolve(null),
+      this._histAttrFetch(this._config.entity, a0, hEnd).catch(() => null),
+    ]).then((res) => {
       this._gLoading = false;
-      this._gRows = (resp && resp[ent]) || [];
+      this._gRows = (res[0] && res[0][ent]) || [];
+      this._gRib = { hist: res[1], modeHist: res[2], aT: a0.getTime() };
       this._gFetched = Date.now();
       this._gCache = '';
       this._renderGraph();
@@ -776,6 +832,7 @@ class FlatThermostatCard extends HTMLElement {
     }).catch(() => {
       this._gLoading = false;
       this._gRows = null;
+      this._gRib = null;
       this._graphMsg('History unavailable');
     });
   }
@@ -785,6 +842,8 @@ class FlatThermostatCard extends HTMLElement {
     this._el.gplot.innerHTML = '<div class="gmsg">' + text + '</div>';
     this._el.gxrow.innerHTML = '';
     this._el.gstats.innerHTML = '';
+    this._el.grib.innerHTML = '';
+    this._el.glab.innerHTML = '';
     this._gCache = '';
   }
 
@@ -825,12 +884,18 @@ class FlatThermostatCard extends HTMLElement {
       el.gdef.style.display = 'none';
       el.gview.style.display = '';
     } else {
-      el.gtitle.innerHTML = '<b>' + this._gDef.name + ' runtime</b> &middot; last ' + GRAPH_DAYS + ' days';
-      el.gright.innerHTML = 'hours/day';
+      // v2.9.2 layout fix (owner): with the ribbon between the tiles and the
+      // bars, "last 14 days / hours-day" no longer belongs in the panel
+      // header - the header names the whole panel, and each section carries
+      // its own matching vsect label ("Ran during - today", "Last 14 days -
+      // hours/day")
+      el.gtitle.innerHTML = '<b>' + this._gDef.name + ' runtime</b>';
+      el.gright.innerHTML = '';
       el.gright.className = '';
       el.gdef.style.display = '';
       el.gview.style.display = 'none';
     }
+    el.glab.innerHTML = 'Last ' + GRAPH_DAYS + ' days \u00b7 hours/day';
 
     const H = 96;
     const maxV = Math.max.apply(null, days.map((x) => x.v));
@@ -886,6 +951,18 @@ class FlatThermostatCard extends HTMLElement {
       bars.appendChild(b);
     });
     el.gxrow.innerHTML = days.map((x, i) => '<span>' + (i % 2 === 0 ? x.d.getDate() : '') + '</span>').join('');
+    // v2.9: today's ran-during ribbon on the default layer, between the
+    // tiles and the 14-day bars (owner request; hidden with gdef in views)
+    const rd = this._gRib;
+    if (rd && (rd.hist || rd.modeHist)) {
+      const rEnd = Math.min(Date.now(), rd.aT + 86400000);
+      this._renderRibbon(el.grib, {
+        aT: rd.aT, endLive: rEnd,
+        segs: this._foldSignal(rd.hist, rd.aT, rEnd),
+        clim: this._climParse(rd.modeHist, rd.aT, rEnd),
+        sect: 'Ran during \u00b7 today', isToday: true,
+      });
+    } else el.grib.innerHTML = '';
     const todayD = days[days.length - 1];
     const peak = peakIdx >= 0 ? days[peakIdx] : null;
     // tiles (ABOVE the plot, v2.6): tab switcher into the views; active tile
@@ -1124,6 +1201,305 @@ class FlatThermostatCard extends HTMLElement {
     host.appendChild(plot);
   }
 
+  /* --- ran-during ribbon (shared: TODAY view + default layer, v2.9) --- */
+  _histAttrFetch(ent, start, end) {
+    // full (attribute-bearing) history - needed for setpoints, which live in
+    // attributes and are stripped by the minimal fetch
+    return this._hass.callWS({
+      type: 'history/history_during_period',
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      entity_ids: [ent],
+      significant_changes_only: false,
+    }).then((r) => (r && r[ent]) || []);
+  }
+
+  _foldSignal(hist, aT, endLive) {
+    // 0/1 signal history -> [[on,off]] run segments clamped to the day
+    if (!hist || !hist.length) return null;
+    const pts = hist.map((p) => ({
+      t: p.lu != null ? p.lu * 1000 : Date.parse(p.last_updated || p.last_changed),
+      on: parseFloat(p.s != null ? p.s : p.state) > 0,
+    })).filter((p) => !isNaN(p.t)).sort((x, y) => x.t - y.t);
+    const segs = [];
+    let run = null;
+    pts.forEach((p) => {
+      if (p.on && run == null) run = Math.max(p.t, aT);
+      else if (!p.on && run != null) { segs.push([run, Math.min(p.t, endLive)]); run = null; }
+    });
+    if (run != null) segs.push([run, endLive]);
+    return segs.filter((s) => s[1] > s[0]);
+  }
+
+  _climParse(modeHist, aT, endLive) {
+    // climate entity history (WITH attributes) -> mode-on segments, setpoint
+    // ticks (owner rule: tick + value at every on-start - even midnight - and
+    // at every setpoint change while on; value always AT its tick), and the
+    // raw points for the scrub tooltip
+    if (!modeHist || !modeHist.length) return null;
+    const fmt1 = (v) => {
+      if (v == null || isNaN(v)) return null;
+      const r = Math.round(v * 10) / 10;
+      return r % 1 ? r.toFixed(1) : String(Math.round(r));
+    };
+    const fmtSet = (attrs, mode) => {
+      if (!attrs) return null;
+      if (mode === 'heat_cool') {
+        const lo = fmt1(parseFloat(attrs.target_temp_low));
+        const hi = fmt1(parseFloat(attrs.target_temp_high));
+        return lo != null && hi != null ? lo + '\u2013' + hi + '\u00b0' : null;
+      }
+      const t = fmt1(parseFloat(attrs.temperature));
+      return t != null ? t + '\u00b0' : null;
+    };
+    // the WS history API returns COMPRESSED rows: state=s, attributes=a,
+    // last_updated=lu (seconds). v2.9.1: read `a` (the live format - v2.9
+    // only read the REST-style `attributes` key, so labels never showed on
+    // real data); carry attributes forward across rows that omit them.
+    let carryA = null;
+    const pts = modeHist.map((p) => {
+      const mode = (p.s != null ? p.s : p.state) || '';
+      const attrs = p.a != null ? p.a : (p.attributes != null ? p.attributes : null);
+      if (attrs) carryA = attrs;
+      return {
+        t: p.lu != null ? p.lu * 1000 : Date.parse(p.last_updated || p.last_changed),
+        mode: mode,
+        on: mode !== 'off' && mode !== 'unavailable' && mode !== 'unknown' && mode !== '',
+        set: fmtSet(attrs || carryA, mode),
+      };
+    }).filter((p) => !isNaN(p.t)).sort((x, y) => x.t - y.t);
+    // SETTLE rule (v2.9.2, from live data): a Nest setpoint change is a
+    // burst - on-at-76 then 77 two seconds later, or 78->79->78 in five
+    // seconds of dial-turning. Change events chaining within SETTLE ms
+    // collapse into ONE tick at the chain's start carrying the SETTLED
+    // value; a chain that settles back to the previous value emits no
+    // tick at all (78->79->78 = nothing happened). On-start chains always
+    // emit (owner rule: every on-start has its tick + value).
+    const SETTLE = 120000;
+    const onSegs = [];
+    const ticks = [];
+    let run = null;
+    let pend = null;      // pending chain {t, lab, start}
+    let pendLast = 0;     // raw time of the chain's latest event
+    let emitted = null;   // last emitted label
+    let prevSet = null;   // last raw setpoint seen (change detection)
+    const flush = () => {
+      if (!pend) return;
+      if (pend.start || (pend.lab != null && pend.lab !== emitted)) {
+        ticks.push({ t: pend.t, lab: pend.lab });
+        if (pend.lab != null) emitted = pend.lab;
+      }
+      pend = null;
+    };
+    pts.forEach((p) => {
+      const t = Math.max(p.t, aT);
+      if (p.on && run == null) {
+        if (t < endLive) {
+          run = t;
+          flush();
+          pend = { t: t, lab: p.set, start: true };
+          pendLast = p.t;
+          if (p.set != null) prevSet = p.set;
+        }
+      } else if (p.on && run != null) {
+        if (p.set != null && p.set !== prevSet && t < endLive) {
+          if (pend && p.t - pendLast <= SETTLE) {
+            pend.lab = p.set;
+            pendLast = p.t;
+          } else {
+            flush();
+            pend = { t: t, lab: p.set, start: false };
+            pendLast = p.t;
+          }
+          prevSet = p.set;
+        }
+      } else if (!p.on && run != null) {
+        flush();
+        onSegs.push([run, Math.min(p.t, endLive)]);
+        run = null;
+        prevSet = null;
+      }
+    });
+    flush();
+    if (run != null) onSegs.push([run, endLive]);
+    return { onSegs: onSegs.filter((s) => s[1] > s[0]), ticks: ticks, pts: pts };
+  }
+
+  _climSig(clim) {
+    // cache-key fragment for a _climParse result
+    if (!clim) return 'x';
+    return clim.onSegs.map((s) => Math.round(s[0] / 60000) + ':' + Math.round(s[1] / 60000)).join(',') +
+      ';' + clim.ticks.map((k) => Math.round(k.t / 60000) + '=' + (k.lab || '')).join(',');
+  }
+
+  _fmtClock(t) {
+    const d = new Date(t);
+    let h = d.getHours();
+    const m = d.getMinutes();
+    const ap = h >= 12 ? 'p' : 'a';
+    h = h % 12; if (h === 0) h = 12;
+    return h + ':' + (m < 10 ? '0' : '') + m + ap;
+  }
+
+  _renderRibbon(host, o) {
+    // o: { aT, endLive, segs, clim, sect, isToday }
+    host.innerHTML = '';
+    if (!o.segs && !o.clim) return;
+    const pctf = (t) => ((t - o.aT) / 864000) + '%';
+    const sect = document.createElement('div');
+    sect.className = 'vsect';
+    sect.innerHTML = o.sect;
+    host.appendChild(sect);
+    let row = null;
+    if (o.clim && o.clim.ticks.length) {
+      row = document.createElement('div');
+      row.className = 'sprow';
+      host.appendChild(row);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'ribwrap';
+    const rib = document.createElement('div');
+    rib.className = 'vrib';
+    wrap.appendChild(rib);
+    host.appendChild(wrap);
+    const ax = document.createElement('div');
+    ax.className = 'vxax';
+    ax.innerHTML = '<span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>12a</span>';
+    host.appendChild(ax);
+
+    if (o.clim) o.clim.onSegs.forEach((s) => {
+      const ob = document.createElement('div');
+      ob.className = 'onband';
+      ob.style.background = this._gDef.bar + '29';
+      ob.style.left = pctf(s[0]);
+      ob.style.width = ((s[1] - s[0]) / 864000) + '%';
+      rib.appendChild(ob);
+    });
+    const pairs = [];
+    if (o.clim) o.clim.ticks.forEach((k, i) => {
+      const tk = document.createElement('div');
+      tk.className = 'sptick';
+      tk.style.left = pctf(k.t);
+      rib.appendChild(tk);
+      let lb = null;
+      if (row && k.lab != null) {
+        lb = document.createElement('div');
+        lb.className = 'splab';
+        lb.style.left = 'calc(' + pctf(k.t) + ' + 4px)';
+        lb.textContent = k.lab;
+        row.appendChild(lb);
+      }
+      // span = how long this value governed: until the next tick, else the
+      // end of its on-segment (else end of data) - used to pick collision
+      // winners (v2.9.3)
+      const next = o.clim.ticks[i + 1];
+      let end = next ? next.t : o.endLive;
+      if (!next) {
+        const seg = o.clim.onSegs.find((s2) => k.t >= s2[0] && k.t <= s2[1]);
+        if (seg) end = seg[1];
+      }
+      pairs.push({ tk: tk, lb: lb, span: Math.max(0, end - k.t) });
+    });
+    if (o.segs) o.segs.forEach((s) => {
+      const sg = document.createElement('div');
+      sg.className = 'seg';
+      sg.style.background = this._gDef.bar;
+      sg.style.left = pctf(s[0]);
+      sg.style.width = ((s[1] - s[0]) / 864000) + '%';
+      rib.appendChild(sg);
+    });
+    if (o.isToday) {
+      const now = document.createElement('div');
+      now.className = 'vnow';
+      now.style.left = pctf(Date.now());
+      rib.appendChild(now);
+    }
+    // label collision pass (needs layout: host is already in the document).
+    // Colliding labels are grouped into overlap chains and the chain's
+    // WINNER is the tick whose value GOVERNED THE LONGEST - not simply the
+    // earliest (v2.9.3: the old earlier-wins rule labeled a day "77" when
+    // 77 held 18 minutes and the colliding 78 held the rest of the day).
+    // Losers hide their label and go QUIET: band-only notch, no ascender,
+    // so a tick never slices through another tick's text. Every tick stays;
+    // the tooltip always has the exact values.
+    if (row) {
+      const rr = row.getBoundingClientRect();
+      if (rr.width > 0) {
+        const groups = [];
+        let cur = null;
+        pairs.forEach((pr) => {
+          if (!pr.lb) { pr.tk.classList.add('quiet'); return; }
+          const r2 = pr.lb.getBoundingClientRect();
+          if (cur && r2.left < cur.right + 3) {
+            cur.items.push(pr);
+            cur.right = Math.max(cur.right, r2.right);
+          } else {
+            cur = { items: [pr], right: r2.right };
+            groups.push(cur);
+          }
+        });
+        groups.forEach((g) => {
+          let win = g.items[0];
+          g.items.forEach((pr) => { if (pr.span > win.span) win = pr; });
+          g.items.forEach((pr) => {
+            if (pr === win) {
+              if (pr.lb.getBoundingClientRect().right > rr.right) {
+                pr.lb.style.left = 'auto';
+                pr.lb.style.right = '0';
+              }
+            } else {
+              pr.lb.style.display = 'none';
+              pr.tk.classList.add('quiet');
+            }
+          });
+        });
+      }
+    } else pairs.forEach((pr) => pr.tk.classList.add('quiet'));
+    // scrub tooltip: time - mode - setpoint - running/idle, from the raw points
+    const tip = document.createElement('div');
+    tip.className = 'gtip';
+    wrap.appendChild(tip);
+    const scrub = document.createElement('div');
+    scrub.className = 'rscrub';
+    rib.appendChild(scrub);
+    const MODE_TXT = { cool: 'cool', heat: 'heat', heat_cool: 'heat/cool', off: 'off', unavailable: 'off', unknown: 'off' };
+    const show = (clientX) => {
+      // frac comes from the RIBBON's own rect (segments are positioned in it);
+      // the wrap rect only anchors the tooltip pixel position
+      const wr = wrap.getBoundingClientRect();
+      const rr = rib.getBoundingClientRect();
+      if (rr.width <= 0) return;
+      const frac = Math.max(0, Math.min(1, (clientX - rr.left) / rr.width));
+      const t = o.aT + frac * 86400000;
+      if (t > o.endLive) { hide(); return; }
+      let parts = [this._fmtClock(t)];
+      if (o.clim) {
+        let cur = null;
+        o.clim.pts.forEach((p) => { if (p.t <= t) cur = p; });
+        const mode = cur ? (MODE_TXT[cur.mode] || cur.mode) : null;
+        if (mode) parts.push(mode);
+        if (cur && cur.on && cur.set != null) parts.push('set <b style="color:' + this._gDef.color + '">' + cur.set + '</b>');
+        if (o.segs && o.segs.some((s) => t >= s[0] && t < s[1])) parts.push('running');
+        else if (cur && cur.on) parts.push('idle');
+      } else if (o.segs) {
+        parts.push(o.segs.some((s) => t >= s[0] && t < s[1]) ? 'running' : 'not running');
+      }
+      tip.innerHTML = parts.join(' \u00b7 ');
+      tip.style.display = 'block';
+      const half = tip.offsetWidth / 2;
+      let lx = (rr.left - wr.left) + frac * rr.width;
+      lx = Math.max(half + 2, Math.min(wr.width - half - 2, lx));
+      tip.style.left = lx + 'px';
+      tip.style.top = '0px';
+      scrub.style.display = 'block';
+      scrub.style.left = (frac * 100) + '%';
+    };
+    const hide = () => { tip.style.display = 'none'; scrub.style.display = 'none'; };
+    rib.addEventListener('pointermove', (e) => show(e.clientX));
+    rib.addEventListener('pointerleave', hide);
+    rib.addEventListener('click', (e) => { e.stopPropagation(); show(e.clientX); });
+  }
+
   /* --- TODAY view --- */
   _loadToday(done, fail) {
     const statsEnt = this._statsEntity();
@@ -1134,7 +1510,9 @@ class FlatThermostatCard extends HTMLElement {
     Promise.all([
       this._statsFetch(statsEnt, a, b, 'hour', ['change']),
       sigEnt ? this._histFetch(sigEnt, a, hEnd).catch(() => null) : Promise.resolve(null),
-    ]).then((res) => done({ hours: res[0] || [], hist: res[1] })).catch(fail);
+      // v2.8 on-band / v2.9 setpoints: climate history WITH attributes
+      this._histAttrFetch(this._config.entity, a, hEnd).catch(() => null),
+    ]).then((res) => done({ hours: res[0] || [], hist: res[1], modeHist: res[2] })).catch(fail);
   }
 
   _renderToday() {
@@ -1152,21 +1530,9 @@ class FlatThermostatCard extends HTMLElement {
       if (rT >= aT && rT < aT + 86400000) { mins[h] += r.change * 60; daySum += r.change; }
     });
     // exact on/off segments from the signal sensor's recorder history (~10 days)
-    let segs = null;
-    if (d.hist && d.hist.length) {
-      const pts = d.hist.map((p) => ({
-        t: p.lu != null ? p.lu * 1000 : Date.parse(p.last_updated || p.last_changed),
-        on: parseFloat(p.s != null ? p.s : p.state) > 0,
-      })).filter((p) => !isNaN(p.t)).sort((x, y) => x.t - y.t);
-      segs = [];
-      let run = null;
-      pts.forEach((p) => {
-        if (p.on && run == null) run = Math.max(p.t, aT);
-        else if (!p.on && run != null) { segs.push([run, Math.min(p.t, endLive)]); run = null; }
-      });
-      if (run != null) segs.push([run, endLive]);
-      segs = segs.filter((s) => s[1] > s[0]);
-    }
+    const segs = this._foldSignal(d.hist, aT, endLive);
+    // v2.8 on-band / v2.9 setpoint ticks from the climate entity's history
+    const clim = this._climParse(d.modeHist, aT, endLive);
     let total = daySum;
     if (isToday) {
       const st = this._hass.states[this._config[this._gDef.key]];
@@ -1174,7 +1540,8 @@ class FlatThermostatCard extends HTMLElement {
       if (!isNaN(live)) total = live;
     }
     const cache = 'today|' + this._vDay + '|' + total.toFixed(3) + '|' + mins.map((m) => m.toFixed(1)).join(',') +
-      '|' + (segs ? segs.map((s) => Math.round(s[0] / 60000) + ':' + Math.round(s[1] / 60000)).join(',') : 'x');
+      '|' + (segs ? segs.map((s) => Math.round(s[0] / 60000) + ':' + Math.round(s[1] / 60000)).join(',') : 'x') +
+      '|' + this._climSig(clim);
     if (cache === this._vCache) return;
     this._vCache = cache;
 
@@ -1194,26 +1561,12 @@ class FlatThermostatCard extends HTMLElement {
         '<span class="vpg' + (isToday ? ' off' : '') + '" id="vnext">&#8250;</span>' +
         '<span class="vpg' + (isToday ? ' off' : '') + '" id="vskip" title="Jump to today">&#187;</span></span></div>' +
       '<div class="vsub">' + sub + '</div>' +
-      (segs ? '<div class="vsect">Ran during</div><div class="vrib" id="vrib"></div>' + ax : '') +
+      '<div id="vribhost"></div>' +
       '<div class="vsect">Minutes per hour</div><div id="vhb"></div>' +
       '<div style="margin-right:26px">' + ax + '</div>';
-    if (segs) {
-      const rib = gv.querySelector('#vrib');
-      segs.forEach((s) => {
-        const seg = document.createElement('div');
-        seg.className = 'seg';
-        seg.style.background = this._gDef.bar;
-        seg.style.left = ((s[0] - aT) / 864000) + '%';
-        seg.style.width = ((s[1] - s[0]) / 864000) + '%';
-        rib.appendChild(seg);
-      });
-      if (isToday) {
-        const now = document.createElement('div');
-        now.className = 'vnow';
-        now.style.left = ((Date.now() - aT) / 864000) + '%';
-        rib.appendChild(now);
-      }
-    }
+    // v2.9: shared ribbon renderer (band + setpoint ticks/labels + tooltip)
+    this._renderRibbon(gv.querySelector('#vribhost'),
+      { aT: aT, endLive: endLive, segs: segs, clim: clim, sect: 'Ran during', isToday: isToday });
     const nowH = new Date().getHours();
     const items = mins.map((m, h) => ({
       v: m,

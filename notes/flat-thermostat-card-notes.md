@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.7.2 (run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.9.3 (ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -54,7 +54,29 @@ cooling/heating -> idle for 1 min while armed -> set_hvac_mode off + disarm;
 manual off from any UI just disarms) so the one-shot fires with every
 dashboard closed. Amber is deliberately mode-agnostic (the pending off is
 neither a cooling nor a heating thing) and a paler sibling of the heat_cool
-accent - thin ring vs solid fill keeps them distinct. Layout/centering rule (v2.5.2–v2.5.4, owner-final):
+accent - thin ring vs solid fill keeps them distinct.
+Ran-during ribbon (v2.8-v2.9.3): the TODAY ribbon paints the thermostat's
+mode-on span as a faint series-tinted band UNDER the solid run segments (gray
+= purposely off, faint = on but idle, solid = running; read from the climate
+entity's own recorder history, so it shares the ribbon's retention limit and
+needs zero configuration), and a thin label row above it carries SETPOINT
+TICKS: every turn-on and every setpoint change gets a 1px tick climbing out of
+the band with the value just right of it - never centered, a label always
+marks "from this moment, this value". Rapid dial-turn bursts (a real Nest
+emits 76 then 77 two seconds apart, or 78-79-78 in five seconds) settle: change
+events chaining within 120s collapse into one tick carrying the settled value,
+and a chain that lands back where it started emits no tick at all. When labels
+collide, the visible label goes to the value that GOVERNED THE LONGEST (not
+the earliest); losing ticks drop to a quiet band-only notch so a tick never
+slices through another label's text. A scrub tooltip (hover/press anywhere on
+the ribbon) gives the exact time, mode, setpoint, and running/idle state.
+Since v2.9 the same full ribbon also renders on the DEFAULT expanded panel -
+"Ran during - today" between the summary tiles and the 14-day bars - and the
+panel header simplified to just the series name with each section carrying its
+own label. Implementation note: the websocket history API returns COMPRESSED
+rows (state=s, attributes=a, last_updated=lu seconds) - attribute-derived
+features must read `a`, not the REST-style `attributes` key, and should carry
+attributes forward across rows that omit them. Layout/centering rule (v2.5.2–v2.5.4, owner-final):
 the left column is fixed-width; the empty region spans from the card's visible
 edge (card padding counts as empty space) to the track's left edge, and the
 temp digits, status text, and chip all sit on that region's center axis — the
