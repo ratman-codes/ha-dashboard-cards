@@ -174,14 +174,18 @@ header.)*
   YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.3. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.5. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
   drops out of the alert strip but still lists each one as a named dim
   "settling" row (v1.3 — a bare count told you nothing), and a widespread-outage
   banner when many devices drop at once — the body still lists every down device
-  individually), Batteries (tiered amber/red thresholds with bars and a quiet
+  individually), LAST 24H (v1.4: one recorder-history call on expand draws a
+  timeline lane per device that was unavailable in the window — red = outage,
+  grey sliver = blip, an amber "Network event" lane when many drop together,
+  tap to list its members; worst-first, capped, absent when the day was clean),
+  Batteries (tiered amber/red thresholds with bars and a quiet
   "all > N%" summary) and Filters (purifier filter life, hidden until low;
   no-data rows stay dim). AUTO-DISCOVERING: reads the frontend entity/device/area
   registries, so every device owned by the configured integrations (default:
@@ -190,7 +194,8 @@ header.)*
   map, with an optional manual devices list. Card-only by design: no
   notifications and no helper entities; a device counts as unreachable only when
   ALL of its entities read unavailable (single orphaned entities can't false-flag
-  a device). Used as `type: custom:flat-maintenance-card` (see notes for the
+  a device). Device rows, alerts and lanes open the HA device page (v1.5);
+  battery/filter/manual rows open more-info. Used as `type: custom:flat-maintenance-card` (see notes for the
   YAML shape). HA resource id: `3d1d66cbc6d14336b43358bde2782a91`.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header

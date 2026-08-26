@@ -82,6 +82,9 @@ battery_crit: 10
 filter_warn: 30
 debounce_minutes: 15
 banner_threshold: 5
+history_hours: 24         # LAST 24H lanes; 0 disables the section
+history_max_lanes: 6
+history_event_window_s: 120
 filters:
   - name: Purifier Living Room
     entity: sensor.my_purifier_filter_life
@@ -100,13 +103,35 @@ devices:                # optional manual extras
   flat-health-card -> flat-maintenance-card; registry areas shown by default;
   banner row-suppression removed; header geometry aligned to native tiles
   (painted circle 10px / title 56px from the border-box edge).
-- v1.3 (2026-08-25, 29,379 B, FNV-1a b52e80b1, CURRENT): settling devices are
+- v1.3 (2026-08-25, 29,379 B, FNV-1a b52e80b1): settling devices are
   NAMED — per-device dim rows ("settling - 4m", tap = more-info) replace the
   bare count; header names a lone settling device; render signature includes
   settling names. Debounce/alert semantics unchanged. Motivated by an HA
   restart that left the card saying "1 settling" for 15 minutes without saying
   what. Same day the live config widened `platforms` from matter-only to six
   integrations (YAML only, no card change).
+- v1.4 (2026-08-25, 44,674 B, FNV-1a 9033f11f): LAST 24H section —
+  on expand, one `history/history_during_period` call (compressed rows;
+  `lc`/`lu` epoch seconds, full-row fallback) over one canary entity per
+  watched device; timeline lanes for devices that were unavailable in the
+  window (red = past the debounce, grey sliver = blip, 3px minimum so a
+  2-minute blip stays visible), an amber "Network event" lane when
+  `banner_threshold` devices drop within `history_event_window_s` (tap to list
+  members), right column = count + total downtime ("all day" for an outage that
+  spans the whole window), worst-first, capped at `history_max_lanes` with a
+  "+N more" row; header gains "24h: N outages"; refreshes every 5 min while
+  open; absent when the window is clean; micro-blips under 30 s (integration
+  reloads) dropped. New YAML: `history_hours` (24; 0 disables),
+  `history_max_lanes` (6), `history_event_window_s` (120). Still zero HA
+  entities. Verified: jsdom (event grouping, blip class, cap, disabled, error
+  row, lazy fetch only on expand) + headless-Chromium render at the
+  dashboard's column width.
+- v1.5 (2026-08-25, 46,011 B, FNV-1a e2bc03ad, CURRENT): device-level taps
+  (Connectivity rows, unreachable alerts, 24h lanes, network-event members)
+  navigate to the HA device page (`/config/devices/device/<id>` via
+  pushState + `location-changed`) instead of more-info on one arbitrary
+  canary entity — tapping a camera's lane had opened its IR-light toggle.
+  Manual `devices:` entries, battery and filter rows keep more-info.
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,
