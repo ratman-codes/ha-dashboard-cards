@@ -39,9 +39,13 @@ The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
   entities reset on restart) and never alarmed.
 - A device is down only when ALL of its present entities are unavailable — a
   single orphaned entity cannot false-flag a healthy device.
-- `debounce_minutes` (default 15): unavailable younger than this renders as a
-  grey "settling" count, not an alert — controller restarts produce transient
-  unavailable storms that drain in ~10 minutes.
+- `debounce_minutes` (default 15): unavailable younger than this is "settling"
+  — kept out of the alert strip, but (v1.3) listed in the body as a named dim
+  row with its age and a more-info tap-through, and named in the collapsed
+  header when exactly one device is settling. Controller restarts produce
+  transient unavailable storms that drain in ~10 minutes; an HA restart resets
+  every device's clock, so a long-dead device re-enters "settling" for one
+  debounce window after each restart.
 - `banner_threshold` (default 5): at this many simultaneous downs the alert
   strip collapses to a single "widespread outage" banner (header goes red, the
   footer swaps to recovery advice) — but the body ALWAYS lists every down
@@ -60,8 +64,13 @@ type: custom:flat-maintenance-card
 title: Devices
 collapsed_default: true
 auto: true
-platforms:
+platforms:              # any integration domains; one device per registry device
   - matter
+  - esphome
+  - homekit_controller
+  - switchbot
+  - reolink
+  - roborock
 exclude:
   - my track light      # switched circuit - routinely unpowered
   - my phone            # battery cycles daily
@@ -87,10 +96,17 @@ devices:                # optional manual extras
   list; banner suppressed rows.
 - v1.1 (27,559 B, 64d55e4b): registry auto-discovery, exclude/rename,
   all-entities-unavailable device logic, text-battery skip.
-- v1.2 (2026-08-17, 28,629 B, FNV-1a 76efb15f, CURRENT): renamed
+- v1.2 (2026-08-17, 28,629 B, FNV-1a 76efb15f): renamed
   flat-health-card -> flat-maintenance-card; registry areas shown by default;
   banner row-suppression removed; header geometry aligned to native tiles
   (painted circle 10px / title 56px from the border-box edge).
+- v1.3 (2026-08-25, 29,379 B, FNV-1a b52e80b1, CURRENT): settling devices are
+  NAMED — per-device dim rows ("settling - 4m", tap = more-info) replace the
+  bare count; header names a lone settling device; render signature includes
+  settling names. Debounce/alert semantics unchanged. Motivated by an HA
+  restart that left the card saying "1 settling" for 15 minutes without saying
+  what. Same day the live config widened `platforms` from matter-only to six
+  integrations (YAML only, no card change).
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

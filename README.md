@@ -156,7 +156,7 @@ header.)*
   '--' handling. Default entities are this dashboard's sensors; override via
   indoor:/outdoor:/hall: YAML. Used as `type: custom:flat-climate-card`.
   HA resource id: `f8f2966083af4b31b2588016c24dcc19`.
-- `flat-server-card.js` — v1.5. NAS health + backup confidence card ("is the
+- `flat-server-card.js` — v1.6. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
   quiet row; problems surface as a red-first alert strip even collapsed) that
   expands to Storage (array state/fill, parity age with next-due countdown from
@@ -165,17 +165,21 @@ header.)*
   guard), Services (torrent-client WebUI truth, container count, quiet updates
   row), System (host RAM, HA-VM RAM and HA-VM disk with unit-converted
   "used / total GB" labels, uptime with reboot amber), Power (UPS status /
-  battery bar / runtime / load) and Backups (client + HA age rows). Row
-  tap-throughs to the server / torrent / backup web UIs; long-press = more-info;
+  battery bar / runtime / load), Backups (client + HA age rows) and, since v1.6,
+  Outside (what an off-site Uptime Kuma instance sees, via the core Uptime Kuma
+  integration: "VPS ok - Cloud ok - 40s ago", amber when a monitor is down, no
+  data, or stale; tap opens the Kuma dashboard). Row
+  tap-throughs to the server / torrent / backup / Kuma web UIs; long-press = more-info;
   alert-only server-notification and CPU-temp checks; every threshold is card
   YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.2. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.3. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
-  with outage duration and registry area, a 15-min debounce that shows restart
-  storms as a grey "settling" count instead of alarms, and a widespread-outage
+  with outage duration and registry area, a 15-min debounce that keeps fresh
+  drops out of the alert strip but still lists each one as a named dim
+  "settling" row (v1.3 — a bare count told you nothing), and a widespread-outage
   banner when many devices drop at once — the body still lists every down device
   individually), Batteries (tiered amber/red thresholds with bars and a quiet
   "all > N%" summary) and Filters (purifier filter life, hidden until low;

@@ -1,4 +1,4 @@
-/* flat-maintenance-card v1.2
+/* flat-maintenance-card v1.3
  *
  * (Renamed from flat-health-card in v1.2 - same card, owner preferred the name.)
  * Device maintenance card: Matter connectivity + battery levels + purifier filter
@@ -8,6 +8,13 @@
  * individually (v1.2: row suppression removed, owner call); 15-min debounce so
  * restart storms raise nothing. Device rows and battery rows show the device's
  * registry AREA as a dim suffix (v1.2).
+ *
+ * v1.3: SETTLING DEVICES ARE NAMED. The debounce still keeps a fresh
+ * 'unavailable' out of the alert strip, but the body now lists each settling
+ * device by name (dim row, "settling - 4m", tap = more-info) instead of a bare
+ * count, and the collapsed header names it when there is exactly one. Owner
+ * call after an HA restart reset every device's clock and the card said
+ * "1 settling" for 15 minutes without saying WHAT.
  *
  * AUTO-DISCOVERY (v1.1, default ON): the card reads the frontend entity/device
  * registries (hass.entities / hass.devices) and discovers, by itself:
@@ -56,7 +63,8 @@
  * Row semantics:
  *   - Only state 'unavailable' counts as unreachable ('unknown' is normal for
  *     event entities after restarts and is NOT alarmed).
- *   - unavailable < debounce_minutes -> grey "settling" (restart storms drain ~10 min).
+ *   - unavailable < debounce_minutes -> dim named "settling" row (no alert;
+ *     restart storms drain ~10 min).
  *   - A manually-configured entity missing from HA -> red "not found" row (typo net).
  *   - Auto-discovered batteries with non-numeric values are skipped silently;
  *     manual battery-only entries get a dim "no data" row instead (so do filters).
@@ -174,6 +182,7 @@
     .row.err .k .dim{ color:#f4511e; opacity:.65; }
     .row.warn .k .dim{ color:#6f6f6f; }
     .row.dim .k, .row.dim .v{ color:#6f6f6f; }
+    .row.dim .k .dim{ color:#555; }
     .row.warn .k{ color: var(--primary-text-color, #e1e1e1); }
     .row.warn .v{ color:#ffc107; }
     .row.err .k, .row.err .v{ color:#f4511e; }
@@ -512,6 +521,7 @@
       }
 
       conn.down.sort((a, b) => b.age - a.age);
+      conn.settling.sort((a, b) => b.age - a.age);
       bats.low.sort((a, b) => a.v - b.v);
       filt.low.sort((a, b) => a.v - b.v);
 
@@ -526,7 +536,7 @@
         m.banner, m.issues,
         m.conn.total, m.conn.up,
         m.conn.down.map((x) => [x.name, x.area, fmtDur(x.age)]),
-        m.conn.settling.length,
+        m.conn.settling.map((x) => [x.name, x.area, fmtDur(x.age)]),
         m.conn.missing.map((x) => x.name),
         m.bats.total, m.bats.lowest,
         m.bats.low.map((x) => [x.name, x.area, x.v, x.crit]),
@@ -554,10 +564,14 @@
         el.s.textContent =
           m.issues + (m.issues === 1 ? " issue" : " issues") +
           " - " + conn.up + " / " + conn.total + " reachable";
+      } else if (conn.settling.length === 1) {
+        el.s.textContent =
+          "All quiet - " + conn.up + " reachable - " + conn.settling[0].name + " settling";
+      } else if (conn.settling.length) {
+        el.s.textContent =
+          "All quiet - " + conn.up + " reachable - " + conn.settling.length + " settling";
       } else {
-        el.s.textContent = conn.settling.length
-          ? "All quiet - " + conn.up + " reachable - " + conn.settling.length + " settling"
-          : "All quiet - " + conn.up + " reachable - batteries OK - filters OK";
+        el.s.textContent = "All quiet - " + conn.up + " reachable - batteries OK - filters OK";
       }
 
       el.alerts.innerHTML = this._alertsHtml(m);
@@ -630,8 +644,8 @@
       for (const x of conn.missing) {
         h += this._row("err", esc(x.name), "entity not found", null);
       }
-      if (conn.settling.length) {
-        h += this._row("dim", "Settling", conn.settling.length + " - unavailable &lt; " + C.debounce_minutes + "m", null);
+      for (const x of conn.settling) {
+        h += this._row("dim", this._kName(x), "settling - " + fmtDur(x.age), x.ent);
       }
       if (conn.down.length || conn.missing.length) {
         h += this._row("", "Everything else", conn.up + " / " + conn.up + " reachable", null);

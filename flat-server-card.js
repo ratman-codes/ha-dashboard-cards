@@ -1,10 +1,11 @@
-/* flat-server-card v1.5
+/* flat-server-card v1.6
  *
  * One-card answer to "is the NAS okay and is my data safe?" for the main
  * dashboard. Green-is-boring: healthy = ONE quiet header row; problems surface
  * as an alert strip even while collapsed. Tap the header to expand the full
- * section list (Storage / Mounts / Services / Power / Backups). Long-press a
- * row to open more-info for its entity. Read-only card: no writes, no controls.
+ * section list (Storage / Mounts / Services / Power / Backups / Outside).
+ * Long-press a row to open more-info for its entity. Read-only card: no
+ * writes, no controls.
  *
  * HOW-TO (maintenance):
  *   This file is deployed as a base64 data: URL module in the dashboard
@@ -23,6 +24,11 @@
  *   - mounts: two input_text helpers fed by a host-side cron User Script
  *     posting {"total":N,"up":N,"fail":["name",...]} to a webhook automation.
  *     The card renders staleness (amber) when the last report ages out.
+ *   - Outside view: the core Uptime Kuma integration (HA 2025.8+) pointed at
+ *     an off-site Uptime Kuma instance. Its per-monitor "Status" sensors read
+ *     up / down / pending / maintenance; when HA cannot reach Kuma at all they
+ *     go unavailable, which the card reports as "no data" -- that is the
+ *     "the outside observer itself died" signal.
  *
  * NOTE on Unraid binary sensors: health/valid sensors are device_class
  * "problem" -- state "on" means PROBLEM, "off" means healthy. The first polls
@@ -88,7 +94,22 @@
  *     System Monitor integration to get these; usage %, used GB)
  *   ha_disk_usage / ha_disk_used: the HA VM's own disk (System Monitor
  *     "Disk usage /" + "Disk use /"; pool thresholds)
+ *   outside_monitors: what an OFF-SITE monitor sees (Uptime Kuma "Status"
+ *     sensors). One "Outside" row: "VPS ok - HA Cloud ok - 40s ago"; tap opens
+ *     outside_url (the Kuma dashboard). Alerts (amber): a monitor down, a
+ *     monitor with no data, all monitors unavailable ("Outside monitor
+ *     unreachable"), or the last check older than thresholds.outside_stale_min.
+ *       outside_url: https://kuma.example.net/
+ *       outside_monitors:
+ *         - { name: VPS,      entity: sensor.internet_status }
+ *         - { name: HA Cloud, entity: sensor.ha_cloud_status }
+ *       outside_checked: sensor.internet_response_time   # any sensor Kuma
+ *         # re-reports every poll; its last_updated = "checked N ago"
+ *       thresholds: { outside_stale_min: 5 }
  *
+ * v1.6: Outside section (outside_monitors / outside_url / outside_checked,
+ *   outside_stale_min threshold) -- the off-site view pulled back in through
+ *   the core Uptime Kuma integration; seconds-resolution age formatter for it.
  * v1.5: HA disk row (ha_disk_usage / ha_disk_used, pool thresholds) -- the
  *   recorder-bloat watch; data_size sensors unit-converted (B..TiB) to GiB
  *   for the "used / total" labels instead of assuming GB.
@@ -216,7 +237,8 @@ const DEF_TH = {
   batt_amber: 50,
   batt_red: 20,
   ram_amber: 90,
-  ram_red: 97
+  ram_red: 97,
+  outside_stale_min: 5
 };
 
 class FlatServerCard extends HTMLElement {
@@ -282,6 +304,11 @@ class FlatServerCard extends HTMLElement {
     const h = Math.floor(ms / 3600000);
     if (h < 48) return h + 'h';
     return Math.floor(h / 24) + 'd';
+  }
+  _fmtAgeS(ms) {
+    if (ms === null) return '--';
+    if (ms < 60000) return Math.max(0, Math.floor(ms / 1000)) + 's';
+    return this._fmtAge(ms);
   }
   _esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -472,6 +499,36 @@ class FlatServerCard extends HTMLElement {
       else if (age > th.backup_ha_amber_h * 3600000) push('amber', 'HA backup stale', this._fmtAge(age));
     }
 
+    // Outside view (off-site Uptime Kuma via the core integration)
+    let outside = null;
+    if (c.outside_monitors && c.outside_monitors.length) {
+      const mons = c.outside_monitors.map(o => {
+        const v = this._val(o.entity);
+        const st = v === null ? null : String(v).toLowerCase();
+        return {
+          name: o.name || o.entity, entity: o.entity, state: st,
+          up: st === 'up', down: st === 'down', na: st === null
+        };
+      });
+      let ageMs = null;
+      if (c.outside_checked) {
+        const s = this._st(c.outside_checked);
+        if (s && s.state !== 'unavailable' && s.state !== 'unknown') {
+          const t = Date.parse(s.last_updated);
+          if (!isNaN(t)) ageMs = Math.max(0, Date.now() - t);
+        }
+      }
+      const allNa = mons.every(x => x.na);
+      const stale = !allNa && ageMs !== null && ageMs > th.outside_stale_min * 60000;
+      outside = { mons, ageMs, allNa, stale };
+      if (allNa) push('amber', 'Outside monitor unreachable');
+      else {
+        mons.filter(x => x.down).forEach(x => push('amber', 'Outside: ' + x.name + ' down'));
+        mons.filter(x => x.na).forEach(x => push('amber', 'Outside: ' + x.name + ' no data'));
+        if (stale) push('amber', 'Outside: last check', this._fmtAgeS(ageMs) + ' ago');
+      }
+    }
+
     issues.sort((a, b) => (a.sev === b.sev) ? 0 : (a.sev === 'red' ? -1 : 1));
     // Unraid notifications (alert-only)
     const notifN = this._num(c.notifications);
@@ -502,7 +559,8 @@ class FlatServerCard extends HTMLElement {
     return {
       issues, sev,
       arrState, arrPct, parityRunning, parityProg, parityBad, parityDays, parityDue,
-      disks, flagged, diskNa, pools, mounts, qbit, cont, ups, upMs, bkClient, bkHa, updates, ramPct, ramLabel, haRam, haDisk
+      disks, flagged, diskNa, pools, mounts, qbit, cont, ups, upMs, bkClient, bkHa, updates, ramPct, ramLabel, haRam, haDisk,
+      outside
     };
   }
 
@@ -783,6 +841,28 @@ class FlatServerCard extends HTMLElement {
         H.push(row(warn ? 'warn' : '', kv('Home Assistant'),
           vv(m.bkHa.age === null ? '--' : this._fmtAge(m.bkHa.age) + ' ago'), c.backup_ha));
       }
+    }
+
+    // OUTSIDE (what the off-site monitor sees; tap -> Kuma dashboard)
+    if (m.outside) {
+      H.push('<div class="sname">Outside</div>');
+      const o = m.outside;
+      let oval, ocls = '', dot = 'dot';
+      if (o.allNa) {
+        oval = 'no data';
+        ocls = 'warn'; dot = 'dot na';
+      } else {
+        oval = o.mons.map(x =>
+          esc(x.name) + ' ' + (x.up ? 'ok' : (x.na ? '?' : esc(x.state)))
+        ).join(' &middot; ');
+        if (o.mons.some(x => x.down)) { ocls = 'warn'; dot = 'dot off'; }
+        else if (o.mons.some(x => x.na) || o.stale) { ocls = 'warn'; }
+        if (o.ageMs !== null) {
+          oval += ' <span class="dim">&middot; ' + this._fmtAgeS(o.ageMs) + ' ago</span>';
+        }
+      }
+      H.push(row(ocls, '<span class="' + dot + '"></span>' + kv('Outside'), vv(oval),
+        c.outside_monitors[0].entity, c.outside_url));
     }
 
     this.shadowRoot.getElementById('body').innerHTML = H.join('');
