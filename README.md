@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.11.2. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.12. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -59,7 +59,15 @@ header.)*
   automation flips the thermostat to native eco, sends an actionable
   notification with an "Exit Eco" button, and auto-restores on return (a latch
   ensures manually-enabled eco is never touched) — see
-  notes/hvac-runtime-tracking-notes.md for the whole engine.
+  notes/hvac-runtime-tracking-notes.md for the whole engine. v2.12 rounds it
+  out: the rule's automations also engage instantly when the home alarm is
+  armed away (and restore on disarm), and the card flags the mismatch state —
+  eco active while someone is home — by washing the leaf amber with a small
+  home-glyph badge overhanging its corner plus an amber panel line (config
+  presence_entity; pure flag, no behavior). The summary tiles sharpened too:
+  the middle tile now shows the selected period's TOTAL runtime (avg per day
+  stays one tap away in the period view), and the peak tile follows the
+  period selector instead of being pinned to the 14-day window.
   Used as `type: custom:flat-thermostat-card` with a climate entity + optional
   runtime_cooling/runtime_heating (daily meters),
   runtime_cooling_stats/runtime_heating_stats (long-term stats sources),
@@ -69,7 +77,9 @@ header.)*
   input_boolean), mode_stats/setpoint_stats (the permanence mirror sensors),
   eco_away_entity/eco_away_delay_entity (the eco-when-away rule + delay), and
   eco_low_entity/eco_high_entity (the eco-bound helpers; numeric
-  eco_low/eco_high accepted as a fallback). HA resource id:
+  eco_low/eco_high accepted as a fallback), and presence_entity (the
+  household-away binary sensor powering the eco-while-home warning).
+  HA resource id:
   `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target

@@ -62,6 +62,19 @@ delay, rule armed, mode active, not already eco -> latch on, set native eco
 preset, actionable notification with an "Exit Eco" button; edge-triggered =
 once per departure) and RESTORE (presence home OR the notification action;
 latch-gated; exits eco only if still in eco; clears latch + notification).
+v2.12 adds an ALARM PATH: the engage automation also triggers the moment the
+home alarm panel reaches armed-away (no presence delay - arming is an
+explicit departure; same conditions/latch/notification, message templated
+per path), and the restore automation also triggers on alarm disarm. A
+thermostat that is OFF at departure engages neither path (deliberate). The
+card side gained an eco-while-home warning (`presence_entity` key): eco
+active while the presence sensor reads home turns the leaf amber with a
+home-glyph badge and an amber panel line - a pure flag covering restore
+failure, alarm-armed-while-home, and forgotten manual eco. YAML-authoring
+lesson: quote automation aliases containing colons - an unquoted
+`alias: X: Y` is invalid YAML, and a recovery paste can land as a duplicate
+automation beside the running original (delete the copy, keep the original
+ids).
 Testable while home: presence lives only in the trigger, so firing the
 engage automation manually exercises the whole loop without touching
 anything else that watches presence.

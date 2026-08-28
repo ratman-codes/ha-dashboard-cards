@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.11.2 (permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.12 (eco-while-home warning + period-total tile + reactive peak 2026-08-28; permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -41,9 +41,12 @@ cells at every range, grid optically centered (panel center nudged a quarter
 of the label column). RECORDS: peak-day hero, top-5 ranked days (tap a rank to
 drill into that day's TODAY view), and a runtime-vs-outdoor-high scatter of
 the last 60 days with a dashed least-squares trend line that hides itself when
-r-squared < 0.1. The middle summary tile tracks the selected window ("14d
-avg"), persisting after the view closes; larger-than-14d defaults self-fill
-via one quiet stats fetch. Run once (v2.7-v2.7.2): long-press (550ms) the
+r-squared < 0.1. The middle summary tile tracks the selected window and shows the
+period TOTAL since v2.12 ("14d total"; avg per day stays one tap away in the
+period view's stat row), persisting after the view closes; larger-than-14d
+windows self-fill via one quiet stats fetch, which since v2.12 also feeds the
+PEAK tile - peak follows the period selector instead of being pinned to the
+14-day window (today always excluded). Run once (v2.7-v2.7.2): long-press (550ms) the
 power mode button while the mode is active to arm "off after this run" -
 armed state = a standby-amber quarter-arc orbiting the power glyph (5s/lap,
 pure CSS; static ring under prefers-reduced-motion) with the glyph tinted to
@@ -118,5 +121,16 @@ departure. The default panel gains an "ECO WHEN AWAY" row: armed shows
 "sets Eco after [-] 30m [+] away" with a debounced stepper writing the delay
 helper; disarmed shows "off - hold the leaf to arm". Config keys:
 `eco_away_entity` (arming input_boolean) + `eco_away_delay_entity` (minutes
-input_number). Version trail: v2.10 2f0cfa12 -> v2.11 745fb705 -> v2.11.1
-1fd75b72 -> v2.11.2 ddd39a78 (118,211 -> 128,182 B).
+input_number). v2.12: the rule's HA-side automations also engage the moment
+the home alarm reaches armed-away (no presence delay - arming is an explicit
+departure) and restore on disarm, with the same latch and notification; and
+the card flags the MISMATCH state - eco active while the presence sensor
+reads home (restore failed, alarm armed while home, or manual eco forgotten)
+- by washing the leaf button amber with a small home-glyph badge overhanging
+its top-right corner and adding an amber line to the panel row ("Eco is
+active but you're home - tap the leaf to exit"). Config key:
+`presence_entity` (the household-away binary_sensor, "on" = away); pure
+flag, zero behavior change, unconfigured = never warns. YAML-authoring
+lesson from the ship: always quote automation aliases containing colons.
+Version trail: v2.10 2f0cfa12 -> v2.11 745fb705 -> v2.11.1
+1fd75b72 -> v2.11.2 ddd39a78 -> v2.12 def53c9c (118,211 -> 133,129 B).

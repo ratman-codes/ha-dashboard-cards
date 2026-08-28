@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.11.2 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.12 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -191,6 +191,27 @@
      input_boolean.hvac_eco_away_engaged_latch,
      input_number.hvac_eco_away_delay, + owner-installed automations
      on binary_sensor.household_all_away.
+     v2.12 (owner, 2026-08-28) three changes:
+     1) ECO-WHILE-HOME WARNING: new config presence_entity (the same
+        binary_sensor.household_all_away; 'on' = away). Whenever eco is
+        ACTIVE but presence reads home - restore failed, the alarm path
+        engaged it, or manual eco was forgotten - the leaf button washes
+        AMBER (#ff9800) with a 20px dark "home" puck overhanging its
+        top-right corner (owner picked this from mockups v1+v2), and the
+        ECO WHEN AWAY panel row gains an amber line "Eco is active but
+        you're home - tap the leaf to exit". Purely a mismatch flag; no
+        behavior change. Pairs with the alarm-armed eco automations
+        (Alarmo armed_away engages eco instantly, disarm restores -
+        automation-side, documented in hvac-runtime-tracking-notes).
+     2) MIDDLE TILE = PERIOD TOTAL (was avg/day): caption "<sel> total".
+        The avg stat still lives in the PERIOD view's stat row, one tap
+        away. 7d/14d totals derive from the graph's own days; larger
+        windows use the same quiet fetch as before (_tileEnsure).
+     3) PEAK TILE FOLLOWS THE PERIOD SELECTOR (was hard-wired to the
+        14d graph): 7d/14d peaks derive from graph days, larger windows
+        ride the _tileEnsure fetch / the open PERIOD view's data. Peak
+        still excludes the still-counting today. The 14d bar-chart
+        highlight stays on the 14d peak (the graph only shows 14 days).
      DEFAULT-LAYER RIBBON (v2.9, owner request): the same full ribbon
      (band + ticks + labels + tooltip) ALSO renders on the default
      expanded panel - "Ran during - today" - between the three stat
@@ -340,8 +361,8 @@
    glyph are the entire armed signal. */
 
 const ICONS = { off: 'mdi:power', cool: 'mdi:snowflake', heat: 'mdi:fire', heat_cool: 'mdi:sun-snowflake-variant' };
-const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107', eco: '#4caf50' };
-const LABEL_COLORS = { heat: '#ff9c4a', cool: '#64b5f6', eco: '#81c784' };
+const COLORS = { off: '#9e9e9e', cool: '#2196f3', heat: '#ff6f22', heat_cool: '#ffc107', eco: '#4caf50', warn: '#ff9800' };
+const LABEL_COLORS = { heat: '#ff9c4a', cool: '#64b5f6', eco: '#81c784', warn: '#ffb74d' };
 const ACTION_TEXT = { cooling: 'Cooling', heating: 'Heating', idle: 'Idle', off: 'Off', fan: 'Fan', drying: 'Drying', preheating: 'Preheating' };
 const GRAPH_DAYS = 14;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -377,8 +398,8 @@ class FlatThermostatCard extends HTMLElement {
     this._vDay = 0;
     const PDEF = ['7d', '14d', '30d', '60d', 'season'];
     this._vpSel = PDEF.indexOf(config.period_default) >= 0 ? config.period_default : '14d';
-    this._vpAvg = null;
-    this._vpAvgLoading = false;
+    this._vpTile = null;
+    this._vpTileLoading = false;
     this._vpA = null;
     this._vpB = null;
     this._vData = null;
@@ -480,6 +501,20 @@ class FlatThermostatCard extends HTMLElement {
           stroke-dasharray: 24 70; transform: rotate(-45deg); transform-origin: center; }
         .ecobtn.armed .ecoarc { display: block; }
         .ecobtn.on .ecoarc circle { stroke: rgba(255,255,255,.85); }
+        /* v2.12 eco-while-home warning (owner mockup pick "amber wash +
+           overhanging puck"): eco is ACTIVE but presence says HOME - the
+           whole button washes amber and a home puck overhangs the corner.
+           Declared after .on so the wash wins while both classes are set. */
+        .ecobtn.warn, .ecobtn.warn:hover { background: ${COLORS.warn}; }
+        .ecobtn.warn ha-icon { color: #fff; }
+        .ecobtn.warn .ecoarc circle { stroke: rgba(255,255,255,.85); }
+        .homepuck { display: none; position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+          box-sizing: border-box; border-radius: 50%; border: 1.5px solid ${COLORS.warn};
+          background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
+          align-items: center; justify-content: center; pointer-events: none; z-index: 2; }
+        .homepuck svg { width: 12px; height: 12px; display: block; }
+        .homepuck path { fill: ${LABEL_COLORS.warn}; }
+        .ecobtn.warn .homepuck { display: flex; }
         .ecoline { display: flex; align-items: center; gap: 8px; font-size: 11px;
           color: var(--secondary-text-color); margin: 4px 2px 0; }
         .ecoline b { color: var(--primary-text-color); font-weight: 600; }
@@ -488,6 +523,10 @@ class FlatThermostatCard extends HTMLElement {
           display: flex; align-items: center; justify-content: center; cursor: pointer;
           font-size: 14px; line-height: 1; color: var(--primary-text-color); user-select: none; }
         @media (hover: hover) { .ecostep .b:hover { background: rgba(255,255,255,.06); } }
+        .ecowarn { display: flex; align-items: center; gap: 6px; margin: 6px 2px 0;
+          font-size: 11px; font-weight: 600; color: ${LABEL_COLORS.warn}; }
+        .ecowarn svg { width: 13px; height: 13px; flex: 0 0 13px; }
+        .ecowarn path { fill: ${LABEL_COLORS.warn}; }
         .rtchip { flex: 0 0 auto; box-sizing: border-box; width: 68px; height: 42px; border-radius: 12px;
           background: transparent; transition: background .15s;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -638,7 +677,7 @@ class FlatThermostatCard extends HTMLElement {
         <div class="bottom">
           <div class="chipslot"><div class="rtchip gone" id="rtchip"></div></div>
           <div class="modes" id="modes"></div>
-          <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon><svg class="ecoarc" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14"/></svg></div>
+          <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon><svg class="ecoarc" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14"/></svg><div class="homepuck"><svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></div></div>
         </div>
         <div class="gwrap" id="gwrap"><div class="gin">
           <div class="gpanel">
@@ -744,6 +783,17 @@ class FlatThermostatCard extends HTMLElement {
     return !!st && st.state === 'on';
   }
 
+  // v2.12: eco ACTIVE while presence says HOME - the mismatch worth flagging
+  // (you came back and it didn't restore, the alarm path engaged it, or you
+  // set eco manually and forgot). presence_entity follows the
+  // household_all_away semantics: 'on' = away, 'off' = someone is home.
+  _ecoHomeWarn() {
+    const ent = this._config.presence_entity;
+    if (!ent || !this._hass || !this._ecoOn()) return false;
+    const st = this._hass.states[ent];
+    return !!st && st.state === 'off';
+  }
+
   _toggleEcoAway() {
     const ent = this._ecoAwayEnt();
     if (!ent) return;
@@ -825,6 +875,7 @@ class FlatThermostatCard extends HTMLElement {
     // v2.11: eco-when-away armed mark (static arc; shows in ANY mode - the
     // rule is standing regardless of what the thermostat is doing now)
     el.ecobtn.classList.toggle('armed', this._ecoAwayOn() && !unavailable);
+    el.ecobtn.classList.toggle('warn', this._ecoHomeWarn() && !unavailable);
 
     // run-once armed visuals (v2.7; arc-only since v2.7.2): only while a run can complete
     this._armedShow = this._onceOn() && mode !== 'off' && !unavailable;
@@ -1003,8 +1054,9 @@ class FlatThermostatCard extends HTMLElement {
     const dSt = dEnt ? this._hass.states[dEnt] : null;
     if (this._ecoDelayDraft != null && dSt && Math.abs(parseFloat(dSt.state) - this._ecoDelayDraft) < 0.01) this._ecoDelayDraft = null;
     const ecoDv = this._ecoDelayDraft != null ? this._ecoDelayDraft : (dSt ? Math.round(parseFloat(dSt.state)) : null);
-    const cache = this._gDef.key + '|' + (this._view || '') + '|' + (this._vpSel || '') + '|' + (this._vpAvg ? this._vpAvg.sel + ':' + this._vpAvg.v.toFixed(3) : '') + '|' + days.map((x) => x.v.toFixed(3)).join(',') +
-      '|eco' + (this._config.eco_away_entity ? (ecoArmed ? 1 : 0) + ':' + ecoDv : 'x');
+    const ecoWarn = this._ecoHomeWarn();
+    const cache = this._gDef.key + '|' + (this._view || '') + '|' + (this._vpSel || '') + '|' + (this._vpTile ? this._vpTile.sel + ':' + this._vpTile.v.toFixed(3) + ':' + (this._vpTile.peak ? this._vpTile.peak.t : 0) : '') + '|' + days.map((x) => x.v.toFixed(3)).join(',') +
+      '|eco' + (this._config.eco_away_entity ? (ecoArmed ? 1 : 0) + ':' + ecoDv : 'x') + '|w' + (ecoWarn ? 1 : 0);
     if (cache === this._gCache) return;
     this._gCache = cache;
 
@@ -1110,14 +1162,18 @@ class FlatThermostatCard extends HTMLElement {
       } else {
         line = '<span>off \u00b7 hold the leaf to arm</span>';
       }
-      el.ecorow.innerHTML = '<div class="vsect">Eco when away</div><div class="ecoline">' + line + '</div>';
+      // v2.12: amber mismatch line while eco is active with someone home
+      const warnLine = ecoWarn
+        ? '<div class="ecowarn"><svg viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13h-15L12 8zm-1 4v4h2v-4h-2zm0 5v2h2v-2h-2z"/></svg>' +
+          '<span>Eco is active but you\u2019re home \u2014 tap the leaf to exit</span></div>'
+        : '';
+      el.ecorow.innerHTML = '<div class="vsect">Eco when away</div><div class="ecoline">' + line + '</div>' + warnLine;
       const up = el.ecorow.querySelector('#ecoup');
       const dn = el.ecorow.querySelector('#ecodn');
       if (up) up.addEventListener('click', (e) => { e.stopPropagation(); this._ecoDelayAdj(1); });
       if (dn) dn.addEventListener('click', (e) => { e.stopPropagation(); this._ecoDelayAdj(-1); });
     } else el.ecorow.innerHTML = '';
     const todayD = days[days.length - 1];
-    const peak = peakIdx >= 0 ? days[peakIdx] : null;
     // tiles (ABOVE the plot, v2.6): tab switcher into the views; active tile
     // tinted with the series color; values still live-update while a view is open
     const tint = 'background:' + this._gDef.bar + '26';
@@ -1127,24 +1183,37 @@ class FlatThermostatCard extends HTMLElement {
         '<div class="gv">' + val + '</div><div class="gc"' + (hot ? ' style="color:' + this._gDef.color + '"' : '') + '>' + cap + '</div></div>';
     };
     const sel = this._vpSel || '14d';
-    let avgV = null, avgCap;
-    if (sel === '7d') { avgV = avg; avgCap = '7-day avg'; }
+    // v2.12 (owner): the middle tile shows the period TOTAL - the avg/day
+    // stat stays one tap away in the period view's stat row. The peak tile
+    // now FOLLOWS the period selector too (was hard-wired to the 14d graph);
+    // larger windows get both numbers from the same quiet fetch.
+    let totV = null, peakV = null, peakT = null;
+    const totCap = (sel === 'season' ? 'season' : sel === 'custom' ? 'custom' : sel) + ' total';
+    const graphPeak = (list) => {
+      let bi = -1;
+      list.forEach((x, i) => { if (i < list.length - 1 && x.v > 0 && (bi < 0 || x.v > list[bi].v)) bi = i; });
+      if (bi >= 0) { peakV = list[bi].v; peakT = list[bi].d.getTime(); }
+    };
+    if (sel === '7d') { totV = last7.reduce((s2, x) => s2 + x.v, 0); graphPeak(last7); }
     else {
-      avgCap = (sel === 'season' ? 'season' : sel === 'custom' ? 'custom' : sel) + ' avg';
-      const st2 = this._vpAvg;
+      const st2 = this._vpTile;
       if (st2 && st2.key === this._gDef.key && st2.sel === sel) {
-        avgV = st2.v;
-        if (Date.now() - (st2.fetched || 0) > 900000 && !this._view) this._tileAvgEnsure(sel);
+        totV = st2.v;
+        if (st2.peak) { peakV = st2.peak.v; peakT = st2.peak.t; }
+        if (Date.now() - (st2.fetched || 0) > 900000 && !this._view) this._tileEnsure(sel);
       } else if (sel === '14d') {
-        avgV = days.reduce((s2, x) => s2 + x.v, 0) / days.length; // derivable from the graph's own 14 days
+        // derivable from the graph's own 14 days
+        totV = days.reduce((s2, x) => s2 + x.v, 0);
+        graphPeak(days);
       } else {
-        this._tileAvgEnsure(sel); // larger window: one quiet fetch fills the tile
+        this._tileEnsure(sel); // larger window: one quiet fetch fills both tiles
       }
     }
+    const peakD = peakT != null ? new Date(peakT) : null;
     el.gstats.innerHTML =
       tile('today', this._fmtRuntime(todayD.v), 'today') +
-      tile('period', avgV == null ? '--' : this._fmtRuntime(avgV), avgCap) +
-      (peak ? tile('records', this._fmtRuntime(peak.v), 'peak &middot; ' + MONTHS[peak.d.getMonth()] + ' ' + peak.d.getDate()) : '');
+      tile('period', totV == null ? '--' : this._fmtRuntime(totV), totCap) +
+      (peakD ? tile('records', this._fmtRuntime(peakV), 'peak &middot; ' + MONTHS[peakD.getMonth()] + ' ' + peakD.getDate()) : '');
   }
 
   /* ---------- runtime views (v2.6) ---------- */
@@ -1208,32 +1277,34 @@ class FlatThermostatCard extends HTMLElement {
     else this._loadRecords(done, fail);
   }
 
-  // one quiet day-stats fetch so the summary tile can show a window the
-  // 14-day graph data cannot derive (30d/60d/season defaults, v2.6.11)
-  _tileAvgEnsure(sel) {
-    if (this._vpAvgLoading || !this._gDef || !this._hass) return;
+  // one quiet day-stats fetch so the summary tiles can show a window the
+  // 14-day graph data cannot derive (30d/60d/season defaults, v2.6.11).
+  // v2.12: yields the period TOTAL plus the window's peak day (peak, like
+  // always, excludes the still-counting today).
+  _tileEnsure(sel) {
+    if (this._vpTileLoading || !this._gDef || !this._hass) return;
     const key = this._gDef.key;
-    this._vpAvgLoading = true;
+    this._vpTileLoading = true;
     const r = this._periodRange();
     this._statsFetch(this._statsEntity(), r.a, r.b, 'day', ['change']).then((rows) => {
-      this._vpAvgLoading = false;
-      const spanDays = Math.max(1, Math.round((r.b - r.a) / 86400000));
+      this._vpTileLoading = false;
       const todayT = this._dayStart(0).getTime();
       const stt = this._hass.states[this._config[key]];
       const live = stt ? parseFloat(stt.state) : NaN;
-      let tot = 0, hadToday = false;
+      let tot = 0, hadToday = false, pk = null;
       (rows || []).forEach((x) => {
         if (x.change == null) return;
         const rd = new Date(x.start); rd.setHours(0, 0, 0, 0);
         let v = x.change > 0 ? x.change : 0;
         if (rd.getTime() === todayT) { hadToday = true; if (!isNaN(live)) v = live; }
+        else if (v > 0 && (!pk || v > pk.v)) pk = { t: rd.getTime(), v: v };
         tot += v;
       });
       if (!hadToday && !isNaN(live)) tot += live;
-      this._vpAvg = { key: key, sel: sel, v: tot / spanDays, fetched: Date.now() };
+      this._vpTile = { key: key, sel: sel, v: tot, peak: pk, fetched: Date.now() };
       this._gCache = '';
       this._renderGraph();
-    }).catch(() => { this._vpAvgLoading = false; });
+    }).catch(() => { this._vpTileLoading = false; });
   }
 
   _renderView() {
@@ -1957,8 +2028,10 @@ class FlatThermostatCard extends HTMLElement {
       days.map((x) => x.v.toFixed(2)).join(',') + '|' + (d.hours || []).length + '|' + prevTxt;
     if (cache === this._vCache) return;
     this._vCache = cache;
-    // feed the summary tile (v2.6.10): it mirrors the selected window's avg/day
-    this._vpAvg = { key: this._gDef.key, sel: this._vpSel, v: avgDay, fetched: Date.now() };
+    // feed the summary tiles (v2.6.10, total + window peak since v2.12)
+    let tpk = null;
+    days.forEach((x) => { if (x.t !== todayT && x.v > 0 && (!tpk || x.v > tpk.v)) tpk = { t: x.t, v: x.v }; });
+    this._vpTile = { key: this._gDef.key, sel: this._vpSel, v: total, peak: tpk, fetched: Date.now() };
     this._gCache = '';
     this._renderGraph();
 
