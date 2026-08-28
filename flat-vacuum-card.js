@@ -1,4 +1,11 @@
-/* flat-vacuum-card v2.7 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.7rev4 - custom Lovelace card for the main dashboard.
+   v2.7rev4 (2026-08-27): HISTORY FIX - the begin/end pairing window in
+   _parseHist widens 6h -> 12h. An away run with a mid-run recharge stall
+   ran 6h15m wall clock (2026-08-27: leave 15:05 -> stall 17:08-19:35 ->
+   end 21:21), so beginT stayed null: the row showed NO duration, the END
+   time as its time, and the trigger fell back to 'manual' despite a
+   correct leave record (attribution is skipped when beginT is null).
+   12h covers any single run; begins must still precede the end.
    v2.7: EDGE 2 MIGRATION - all entities remapped to the qx_revo_ultra_2
    prefix (Roborock Qrevo Edge 2, Costco "QX Revo Ultra 2"). Start command
    is now the native vacuum.start service (the old full_cleaning button
@@ -1379,7 +1386,7 @@ class FlatVacuumCard extends HTMLElement {
       let beginT = null;
       begins.forEach((b) => {
         const bt = Date.parse(b.s);
-        if (!isNaN(bt) && bt <= endT + 5e3 && endT - bt < 6 * 3600e3 && (beginT == null || bt > beginT)) beginT = bt;
+        if (!isNaN(bt) && bt <= endT + 5e3 && endT - bt < 12 * 3600e3 && (beginT == null || bt > beginT)) beginT = bt;
       });
       if (beginT != null && endT < beginT) beginT = null;
       let area = null;

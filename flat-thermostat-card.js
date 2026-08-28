@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.9.3 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.11.2 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -145,6 +145,52 @@
      (heavier than the v2.8 minimal fetch - climate rows are chatty -
      but it serves mode band + setpoints together; heat_cool renders
      "lo-hi"). Same ~10-day recorder reach as the ribbon.
+     PERMANENT FALLBACK (v2.10, owner: "I need my thermostat card to all
+     be permanent data"): recorder purges raw history at ~10 days, so two
+     numeric MIRROR SENSORS now exist (the LTS best-practice pattern that
+     already made runtime permanent): sensor.nest_mode_on_signal (0/1,
+     mode != off) + sensor.nest_setpoint (temperature attr, F). Their
+     hourly long-term statistics never purge. New config keys mode_stats
+     + setpoint_stats point at them; for a day recorder no longer has,
+     the TODAY ribbon falls back to HOUR RESOLUTION from those stats:
+     on-band = hours whose mode-on mean > 0; runtime-shaded HOUR CELLS
+     replace exact run segments (opacity ~ fraction of the hour that
+     ran, 1px gaps make the quantization visible - an honest resolution
+     cue); setpoint ticks at hour boundaries (stable hour = min==max ->
+     label; transition hour -> quiet tick, next stable hour labels -
+     mirrors the settle rule); section label reads "Ran during - hourly";
+     tooltip gives the hour range + on-minutes + set (or lo-hi across a
+     transition) + ran-minutes. Minute-exact rendering still wins
+     whenever raw history exists. History older than the sensors'
+     creation (2026-08-28) was rescued by importing ~10 days of hourly
+     stats computed from recorder into both sensors via
+     recorder/import_statistics (floor: 2026-08-17 16:00Z).
+     ECO WHEN AWAY (v2.11, owner request; owner picked engine A = native
+     Nest eco + armed-mark B from mockups): LONG-PRESS (550ms) the ECO
+     leaf button arms/disarms a STANDING RULE - when the household
+     presence sensor reads away for a configurable delay, an HA-side
+     automation flips the Nest to its native eco preset and sends an
+     actionable phone notification with UNDO; presence returning
+     restores automatically (a latch helper ensures we only undo what
+     WE engaged - manual eco is never clobbered). Short-tap stays
+     manual eco; trailing click swallowed; run-once gesture mechanics
+     reused. ARMED MARK = the run-once arc geometry but STATIC and
+     GREEN (motion stays reserved for "something happens soon"; a
+     standing rule sits still), white on the active green button, shown
+     in any mode. NOTE: the eco temperature RANGE is Google-locked
+     (SDM exposes eco on/off only; the device rejects setpoint writes
+     in eco - v2.3 finding) - the range is edited in the Google Home
+     app, deliberately NOT in this card. The one editable number is
+     the AWAY DELAY: an "ECO WHEN AWAY" row at the bottom of the
+     default expanded panel shows armed/off status and a +/- 5min
+     stepper (800ms debounce, optimistic draft) bound to
+     eco_away_delay_entity. Config: eco_away_entity (the arming
+     input_boolean) + eco_away_delay_entity (the minutes input_number);
+     both absent = feature invisible. Engine entities (all labeled
+     hvac_runtime): input_boolean.hvac_eco_when_away,
+     input_boolean.hvac_eco_away_engaged_latch,
+     input_number.hvac_eco_away_delay, + owner-installed automations
+     on binary_sensor.household_all_away.
      DEFAULT-LAYER RIBBON (v2.9, owner request): the same full ribbon
      (band + ticks + labels + tooltip) ALSO renders on the default
      expanded panel - "Ran during - today" - between the three stat
@@ -414,7 +460,7 @@ class FlatThermostatCard extends HTMLElement {
         .mode ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
           align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
         .mode.active ha-icon { color: #fff; }
-        .ecobtn { flex: 0 0 46px; height: 42px; border-radius: 12px; background: rgba(255,255,255,.04);
+        .ecobtn { position: relative; flex: 0 0 46px; height: 42px; border-radius: 12px; background: rgba(255,255,255,.04);
           display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .15s; }
         .ecobtn:hover { background: rgba(255,255,255,.07); }
         .ecobtn ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
@@ -422,7 +468,26 @@ class FlatThermostatCard extends HTMLElement {
         .ecobtn.on { background: ${COLORS.eco}; }
         .ecobtn.on:hover { background: ${COLORS.eco}; }
         .ecobtn.on ha-icon { color: #fff; }
+        .emark { display: none; position: absolute; top: 0; bottom: 0; width: 3px;
+          background: ${COLORS.eco}; }
         .ecobtn.gone { display: none; }
+        /* v2.11 eco-when-away armed mark: the run-once arc geometry, but
+           STATIC and green - a standing rule, not a pending one-shot
+           (motion stays reserved for "something happens soon") */
+        .ecoarc { display: none; position: absolute; left: 50%; top: 50%; width: 32px; height: 32px;
+          margin: -16px 0 0 -16px; pointer-events: none; }
+        .ecoarc circle { fill: none; stroke: ${COLORS.eco}; stroke-width: 2; stroke-linecap: round;
+          stroke-dasharray: 24 70; transform: rotate(-45deg); transform-origin: center; }
+        .ecobtn.armed .ecoarc { display: block; }
+        .ecobtn.on .ecoarc circle { stroke: rgba(255,255,255,.85); }
+        .ecoline { display: flex; align-items: center; gap: 8px; font-size: 11px;
+          color: var(--secondary-text-color); margin: 4px 2px 0; }
+        .ecoline b { color: var(--primary-text-color); font-weight: 600; }
+        .ecostep { display: inline-flex; align-items: center; gap: 3px; }
+        .ecostep .b { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(255,255,255,.14);
+          display: flex; align-items: center; justify-content: center; cursor: pointer;
+          font-size: 14px; line-height: 1; color: var(--primary-text-color); user-select: none; }
+        @media (hover: hover) { .ecostep .b:hover { background: rgba(255,255,255,.06); } }
         .rtchip { flex: 0 0 auto; box-sizing: border-box; width: 68px; height: 42px; border-radius: 12px;
           background: transparent; transition: background .15s;
           display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -559,6 +624,8 @@ class FlatThermostatCard extends HTMLElement {
               <div class="fill singlef" id="fsingle"></div>
               <div class="fill brightf" id="bfheat"></div>
               <div class="fill brightf" id="bfcool"></div>
+              <div class="emark" id="emlow"></div>
+              <div class="emark" id="emhigh"></div>
               <div class="curdot" id="curdot"></div>
               <div class="handle" id="hlow"></div>
               <div class="handle" id="hhigh"></div>
@@ -571,7 +638,7 @@ class FlatThermostatCard extends HTMLElement {
         <div class="bottom">
           <div class="chipslot"><div class="rtchip gone" id="rtchip"></div></div>
           <div class="modes" id="modes"></div>
-          <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon></div>
+          <div class="ecobtn gone" id="ecobtn"><ha-icon icon="mdi:leaf"></ha-icon><svg class="ecoarc" viewBox="0 0 32 32"><circle cx="16" cy="16" r="14"/></svg></div>
         </div>
         <div class="gwrap" id="gwrap"><div class="gin">
           <div class="gpanel">
@@ -582,6 +649,7 @@ class FlatThermostatCard extends HTMLElement {
               <div class="vsect" id="glab"></div>
               <div class="gplot" id="gplot"></div>
               <div class="gxrow" id="gxrow"></div>
+              <div id="ecorow"></div>
             </div>
             <div id="gview" style="display:none"></div>
           </div>
@@ -589,12 +657,27 @@ class FlatThermostatCard extends HTMLElement {
       </ha-card>
     `;
     this._el = {};
-    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','gwrap','gtitle','gright','grib','glab','gplot','gxrow','gstats','gdef','gview','curval','unit','state']
+    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','gwrap','gtitle','gright','grib','glab','gplot','gxrow','ecorow','gstats','gdef','gview','curval','unit','state']
       .forEach(id => this._el[id] = root.getElementById(id));
     this._el.bfheat.style.background = COLORS.heat;
     this._el.bfcool.style.background = COLORS.cool;
     this._bindDrag();
-    this._el.ecobtn.addEventListener('click', () => this._toggleEco());
+    // v2.11: long-press (550ms) the leaf arms/disarms "eco when away" -
+    // the same gesture grammar as the power button's run-once; short-tap
+    // stays manual eco, the click trailing a long-press is swallowed
+    const eb = this._el.ecobtn;
+    eb.addEventListener('pointerdown', () => {
+      if (!this._ecoAwayEnt()) return;
+      clearTimeout(this._ecoLpTimer);
+      this._ecoLpTimer = setTimeout(() => { this._ecoLpFired = true; this._toggleEcoAway(); }, 550);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) =>
+      eb.addEventListener(ev, () => clearTimeout(this._ecoLpTimer)));
+    eb.addEventListener('click', (e) => {
+      if (this._ecoLpFired) { this._ecoLpFired = false; e.stopPropagation(); return; }
+      this._toggleEco();
+    });
+    eb.addEventListener('contextmenu', (e) => { if (this._ecoAwayEnt()) e.preventDefault(); });
     // tapping the runtime chip toggles the in-card runtime graph (v2.5)
     this._el.rtchip.addEventListener('click', () => this._toggleGraph());
     // summary tiles switch the plot area to their view (v2.6, delegated;
@@ -651,6 +734,45 @@ class FlatThermostatCard extends HTMLElement {
     return this._attrs().preset_mode === 'eco';
   }
 
+  /* ---------- eco when away (v2.11) ---------- */
+  _ecoAwayEnt() { return this._config.eco_away_entity; }
+
+  _ecoAwayOn() {
+    if (!this._ecoAwayEnt() || !this._hass) return false;
+    if (this._optEcoAway != null && Date.now() < this._optEcoAwayUntil) return this._optEcoAway;
+    const st = this._hass.states[this._ecoAwayEnt()];
+    return !!st && st.state === 'on';
+  }
+
+  _toggleEcoAway() {
+    const ent = this._ecoAwayEnt();
+    if (!ent) return;
+    const next = !this._ecoAwayOn();
+    this._optEcoAway = next;
+    this._optEcoAwayUntil = Date.now() + 8000;
+    this._hass.callService('input_boolean', next ? 'turn_on' : 'turn_off', { entity_id: ent });
+    this._render();
+  }
+
+  _ecoDelayAdj(dir) {
+    const ent = this._config.eco_away_delay_entity;
+    const st = ent && this._hass.states[ent];
+    if (!st) return;
+    const step = parseFloat(st.attributes.step) || 5;
+    const min = parseFloat(st.attributes.min);
+    const max = parseFloat(st.attributes.max);
+    let v = this._ecoDelayDraft != null ? this._ecoDelayDraft : parseFloat(st.state);
+    if (isNaN(v)) v = 30;
+    v = Math.min(isNaN(max) ? 1e9 : max, Math.max(isNaN(min) ? 0 : min, v + dir * step));
+    this._ecoDelayDraft = v;
+    clearTimeout(this._ecoDelayTimer);
+    this._ecoDelayTimer = setTimeout(() => {
+      this._hass.callService('input_number', 'set_value', { entity_id: ent, value: v });
+    }, 800);
+    this._gCache = '';
+    this._renderGraph();
+  }
+
   /* ---------- run once (v2.7) ---------- */
   _onceEnt() { return this._config.run_once_entity; }
 
@@ -700,6 +822,9 @@ class FlatThermostatCard extends HTMLElement {
     el.ecobtn.classList.toggle('gone', !this._ecoSupported());
     el.ecobtn.classList.toggle('on', eco);
     el.bar.classList.toggle('ecolock', eco);
+    // v2.11: eco-when-away armed mark (static arc; shows in ANY mode - the
+    // rule is standing regardless of what the thermostat is doing now)
+    el.ecobtn.classList.toggle('armed', this._ecoAwayOn() && !unavailable);
 
     // run-once armed visuals (v2.7; arc-only since v2.7.2): only while a run can complete
     this._armedShow = this._onceOn() && mode !== 'off' && !unavailable;
@@ -844,6 +969,7 @@ class FlatThermostatCard extends HTMLElement {
     this._el.gstats.innerHTML = '';
     this._el.grib.innerHTML = '';
     this._el.glab.innerHTML = '';
+    this._el.ecorow.innerHTML = '';
     this._gCache = '';
   }
 
@@ -870,7 +996,15 @@ class FlatThermostatCard extends HTMLElement {
   _renderGraph() {
     if (!this._gDef) return;
     const days = this._graphDays();
-    const cache = this._gDef.key + '|' + (this._view || '') + '|' + (this._vpSel || '') + '|' + (this._vpAvg ? this._vpAvg.sel + ':' + this._vpAvg.v.toFixed(3) : '') + '|' + days.map((x) => x.v.toFixed(3)).join(',');
+    // v2.11 eco-when-away row state (part of the cache key so armed/delay
+    // changes re-render the panel)
+    const ecoArmed = this._ecoAwayOn();
+    const dEnt = this._config.eco_away_delay_entity;
+    const dSt = dEnt ? this._hass.states[dEnt] : null;
+    if (this._ecoDelayDraft != null && dSt && Math.abs(parseFloat(dSt.state) - this._ecoDelayDraft) < 0.01) this._ecoDelayDraft = null;
+    const ecoDv = this._ecoDelayDraft != null ? this._ecoDelayDraft : (dSt ? Math.round(parseFloat(dSt.state)) : null);
+    const cache = this._gDef.key + '|' + (this._view || '') + '|' + (this._vpSel || '') + '|' + (this._vpAvg ? this._vpAvg.sel + ':' + this._vpAvg.v.toFixed(3) : '') + '|' + days.map((x) => x.v.toFixed(3)).join(',') +
+      '|eco' + (this._config.eco_away_entity ? (ecoArmed ? 1 : 0) + ':' + ecoDv : 'x');
     if (cache === this._gCache) return;
     this._gCache = cache;
 
@@ -963,6 +1097,25 @@ class FlatThermostatCard extends HTMLElement {
         sect: 'Ran during \u00b7 today', isToday: true,
       });
     } else el.grib.innerHTML = '';
+    // v2.11: ECO WHEN AWAY row at the bottom of the default panel - status +
+    // the away-delay stepper (the one editable number in the native-eco build)
+    if (this._config.eco_away_entity) {
+      let line;
+      if (ecoArmed) {
+        line = '<span>armed \u00b7 sets Eco after</span>' +
+          (ecoDv != null
+            ? '<span class="ecostep"><span class="b" id="ecodn">\u2212</span><b>' + ecoDv + 'm</b><span class="b" id="ecoup">+</span></span>'
+            : '<b>away</b>') +
+          '<span>away \u00b7 hold the leaf to disarm</span>';
+      } else {
+        line = '<span>off \u00b7 hold the leaf to arm</span>';
+      }
+      el.ecorow.innerHTML = '<div class="vsect">Eco when away</div><div class="ecoline">' + line + '</div>';
+      const up = el.ecorow.querySelector('#ecoup');
+      const dn = el.ecorow.querySelector('#ecodn');
+      if (up) up.addEventListener('click', (e) => { e.stopPropagation(); this._ecoDelayAdj(1); });
+      if (dn) dn.addEventListener('click', (e) => { e.stopPropagation(); this._ecoDelayAdj(-1); });
+    } else el.ecorow.innerHTML = '';
     const todayD = days[days.length - 1];
     const peak = peakIdx >= 0 ? days[peakIdx] : null;
     // tiles (ABOVE the plot, v2.6): tab switcher into the views; active tile
@@ -1400,7 +1553,21 @@ class FlatThermostatCard extends HTMLElement {
       }
       pairs.push({ tk: tk, lb: lb, span: Math.max(0, end - k.t) });
     });
-    if (o.segs) o.segs.forEach((s) => {
+    if (o.hourly) {
+      // v2.10 fallback: runtime-shaded HOUR CELLS (timing within the hour is
+      // unknown, so cells span the whole hour with opacity ~ fraction ran;
+      // 1px gaps make the hour quantization visible = honest resolution cue)
+      o.hourly.run.forEach((m, h) => {
+        if (!(m > 0)) return;
+        const sg = document.createElement('div');
+        sg.className = 'seg';
+        sg.style.background = this._gDef.bar;
+        sg.style.opacity = (0.35 + 0.65 * Math.min(1, m / 60)).toFixed(2);
+        sg.style.left = 'calc(' + (h / 24) * 100 + '% + 1px)';
+        sg.style.width = 'calc(' + 100 / 24 + '% - 2px)';
+        rib.appendChild(sg);
+      });
+    } else if (o.segs) o.segs.forEach((s) => {
       const sg = document.createElement('div');
       sg.className = 'seg';
       sg.style.background = this._gDef.bar;
@@ -1473,7 +1640,24 @@ class FlatThermostatCard extends HTMLElement {
       const t = o.aT + frac * 86400000;
       if (t > o.endLive) { hide(); return; }
       let parts = [this._fmtClock(t)];
-      if (o.clim) {
+      if (o.hourly) {
+        // v2.10 fallback: hour-granularity readout
+        const fv = (v) => {
+          const r2 = Math.round(v * 10) / 10;
+          return (r2 % 1 ? r2.toFixed(1) : String(Math.round(r2))) + '\u00b0';
+        };
+        const h = Math.min(23, Math.floor(frac * 24));
+        const onR = o.hourly.on[h];
+        const sp = o.hourly.set[h];
+        const m = o.hourly.run[h];
+        parts = [this._hourLbl(h) + '\u2013' + this._hourLbl(h + 1)];
+        if (onR && onR.mean > 0) {
+          parts.push(onR.mean >= 0.99 ? 'on' : 'on ' + Math.round(onR.mean * 60) + 'm');
+          if (sp) parts.push('set <b style="color:' + this._gDef.color + '">' +
+            (sp.min === sp.max ? fv(sp.mean) : fv(sp.min) + '\u2013' + fv(sp.max)) + '</b>');
+          if (m > 0) parts.push('ran ' + Math.round(m) + 'm');
+        } else parts.push('off');
+      } else if (o.clim) {
         let cur = null;
         o.clim.pts.forEach((p) => { if (p.t <= t) cur = p; });
         const mode = cur ? (MODE_TXT[cur.mode] || cur.mode) : null;
@@ -1500,6 +1684,67 @@ class FlatThermostatCard extends HTMLElement {
     rib.addEventListener('click', (e) => { e.stopPropagation(); show(e.clientX); });
   }
 
+  /* --- LTS fallback for the ribbon (v2.10) --- */
+  _ltsFallback(lts, aT, endLive) {
+    // Hourly statistics of the mirror sensors -> hour-resolution ribbon data
+    // for days recorder has purged. Returns { clim-like, hourly } or null.
+    // - on-band: hours whose mode-on mean > 0 (on at some point that hour)
+    // - ticks: on-start + settled setpoint changes at hour boundaries; an
+    //   hour whose setpoint min != max is a transition hour -> quiet tick,
+    //   the next stable hour carries the label (mirrors the settle rule)
+    if (!lts) return null;
+    const mEnt = this._config.mode_stats;
+    const sEnt = this._config.setpoint_stats;
+    const idx = (rows) => {
+      const arr = new Array(24).fill(null);
+      (rows || []).forEach((r) => {
+        const h = Math.round((new Date(r.start).getTime() - aT) / 3600000);
+        if (h >= 0 && h < 24) arr[h] = r;
+      });
+      return arr;
+    };
+    const on = idx(mEnt ? lts[mEnt] : null);
+    const set = idx(sEnt ? lts[sEnt] : null);
+    if (!on.some((r) => r)) return null;
+    const fmtV = (v) => {
+      const r = Math.round(v * 10) / 10;
+      return (r % 1 ? r.toFixed(1) : String(Math.round(r))) + '\u00b0';
+    };
+    const onSegs = [];
+    const ticks = [];
+    let segStart = null;
+    let last = null;
+    for (let h = 0; h < 24; h++) {
+      const t = aT + h * 3600000;
+      if (t >= endLive) break;
+      const isOn = on[h] && on[h].mean > 0;
+      const sp = set[h];
+      if (isOn) {
+        if (segStart == null) {
+          segStart = t;
+          let lab = null;
+          if (sp && sp.min === sp.max) lab = fmtV(sp.mean);
+          ticks.push({ t: t, lab: lab });
+          last = lab;
+        } else if (sp) {
+          if (sp.min === sp.max) {
+            const lab = fmtV(sp.mean);
+            if (lab !== last) { ticks.push({ t: t, lab: lab }); last = lab; }
+          } else {
+            ticks.push({ t: t, lab: null }); // transition inside this hour
+            last = null;
+          }
+        }
+      } else if (segStart != null) {
+        onSegs.push([segStart, t]);
+        segStart = null;
+        last = null;
+      }
+    }
+    if (segStart != null) onSegs.push([segStart, Math.min(aT + 86400000, endLive)]);
+    return { clim: { onSegs: onSegs, ticks: ticks, pts: null }, on: on, set: set };
+  }
+
   /* --- TODAY view --- */
   _loadToday(done, fail) {
     const statsEnt = this._statsEntity();
@@ -1507,12 +1752,23 @@ class FlatThermostatCard extends HTMLElement {
     const a = this._dayStart(this._vDay);
     const b = new Date(a.getTime() + 86400000);
     const hEnd = new Date(Math.min(b.getTime(), Date.now()));
+    // v2.10: mode/setpoint LTS (permanent hourly stats from the mirror
+    // sensors) - the fallback source for days recorder has purged
+    const ltsIds = [this._config.mode_stats, this._config.setpoint_stats].filter(Boolean);
     Promise.all([
       this._statsFetch(statsEnt, a, b, 'hour', ['change']),
       sigEnt ? this._histFetch(sigEnt, a, hEnd).catch(() => null) : Promise.resolve(null),
       // v2.8 on-band / v2.9 setpoints: climate history WITH attributes
       this._histAttrFetch(this._config.entity, a, hEnd).catch(() => null),
-    ]).then((res) => done({ hours: res[0] || [], hist: res[1], modeHist: res[2] })).catch(fail);
+      ltsIds.length ? this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: a.toISOString(),
+        end_time: b.toISOString(),
+        statistic_ids: ltsIds,
+        period: 'hour',
+        types: ['mean', 'min', 'max'],
+      }).catch(() => null) : Promise.resolve(null),
+    ]).then((res) => done({ hours: res[0] || [], hist: res[1], modeHist: res[2], lts: res[3] })).catch(fail);
   }
 
   _renderToday() {
@@ -1532,7 +1788,14 @@ class FlatThermostatCard extends HTMLElement {
     // exact on/off segments from the signal sensor's recorder history (~10 days)
     const segs = this._foldSignal(d.hist, aT, endLive);
     // v2.8 on-band / v2.9 setpoint ticks from the climate entity's history
-    const clim = this._climParse(d.modeHist, aT, endLive);
+    let clim = this._climParse(d.modeHist, aT, endLive);
+    // v2.10: when recorder has purged this day, fall back to the mirror
+    // sensors' permanent hourly statistics (hour-resolution ribbon)
+    let fb = null;
+    if (!segs && !clim && d.lts) {
+      fb = this._ltsFallback(d.lts, aT, endLive);
+      if (fb) clim = fb.clim;
+    }
     let total = daySum;
     if (isToday) {
       const st = this._hass.states[this._config[this._gDef.key]];
@@ -1565,8 +1828,12 @@ class FlatThermostatCard extends HTMLElement {
       '<div class="vsect">Minutes per hour</div><div id="vhb"></div>' +
       '<div style="margin-right:26px">' + ax + '</div>';
     // v2.9: shared ribbon renderer (band + setpoint ticks/labels + tooltip)
-    this._renderRibbon(gv.querySelector('#vribhost'),
-      { aT: aT, endLive: endLive, segs: segs, clim: clim, sect: 'Ran during', isToday: isToday });
+    // v2.10: fb -> hour-resolution mode (runtime-shaded hour cells, hourly tooltip)
+    this._renderRibbon(gv.querySelector('#vribhost'), {
+      aT: aT, endLive: endLive, segs: segs, clim: clim, isToday: isToday,
+      sect: fb ? 'Ran during \u00b7 hourly' : 'Ran during',
+      hourly: fb ? { on: fb.on, set: fb.set, run: mins } : null,
+    });
     const nowH = new Date().getHours();
     const items = mins.map((m, h) => ({
       v: m,
@@ -2030,7 +2297,7 @@ class FlatThermostatCard extends HTMLElement {
     const a = this._attrs();
     const v = this._vals();
     const eco = this._ecoOn();
-    const ALL = ['fheat','fcool','fsingle','bfheat','bfcool','hlow','hhigh','blow','bhigh','curdot','offlbl'];
+    const ALL = ['fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','hlow','hhigh','blow','bhigh','curdot','offlbl'];
     const used = new Set();
     const show = (k) => { if (el[k].style.display !== 'block') el[k].style.display = 'block'; used.add(k); };
 
@@ -2069,7 +2336,52 @@ class FlatThermostatCard extends HTMLElement {
     };
     let dotOnBright = false;
 
-    if (mode === 'heat_cool' && v.low != null && v.high != null) {
+    // v2.11.1/.2 (owner): in ECO the Nest maintains a RANGE no matter which
+    // hvac mode is selected - "it's kind of like its own mode" - so the track
+    // renders BOTH eco bounds as a green band (heat_cool geometry, dark
+    // deadband between) with FLUSH full-height marks at each bound (1a-i from
+    // the mockup round: contained inside the track, squared - a hard "the
+    // fill ends HERE" boundary). HA only reports the bound matching the
+    // current mode (cool mode = the eco cool point only; the eco heat point
+    // exists nowhere in the entity), so the blind side comes from the
+    // eco_low_entity / eco_high_entity HELPERS (v2.11.2 - owner: no numbers
+    // hardcoded in YAML; a mirror automation keeps the helpers synced from
+    // whatever bound the Nest exposes while eco runs, so they self-heal when
+    // the Google-Home-app range changes). Numeric eco_low/eco_high YAML still
+    // accepted as a fallback. Live entity values win wherever present.
+    const ecoHelper = (key) => {
+      const ent = this._config[key + '_entity'];
+      if (ent) {
+        const st = this._hass.states[ent];
+        const n = st ? parseFloat(st.state) : NaN;
+        if (!isNaN(n)) return n;
+      }
+      if (this._config[key] != null) {
+        const n2 = parseFloat(this._config[key]);
+        if (!isNaN(n2)) return n2;
+      }
+      return null;
+    };
+    let ecoRange = false;
+    if (eco && mode !== 'off') {
+      let elo = null, ehi = null;
+      if (mode === 'heat_cool') { elo = v.low; ehi = v.high; }
+      else if (mode === 'cool') ehi = v.single;
+      else if (mode === 'heat') elo = v.single;
+      if (elo == null) elo = ecoHelper('eco_low');
+      if (ehi == null) ehi = ecoHelper('eco_high');
+      if (elo != null && ehi != null && !isNaN(elo) && !isNaN(ehi) && ehi > elo) {
+        ecoRange = true;
+        show('fheat'); el.fheat.style.width = this._pct(elo) + '%';
+        show('fcool'); el.fcool.style.width = (100 - this._pct(ehi)) + '%';
+        show('emlow'); el.emlow.style.left = 'calc(' + this._pct(elo) + '% - 1.5px)';
+        show('emhigh'); el.emhigh.style.left = 'calc(' + this._pct(ehi) + '% - 1.5px)';
+        label('blow', elo, 'heat');
+        label('bhigh', ehi, 'cool');
+      }
+    }
+
+    if (!ecoRange && mode === 'heat_cool' && v.low != null && v.high != null) {
       show('fheat'); el.fheat.style.width = this._pct(v.low) + '%';
       show('fcool'); el.fcool.style.width = (100 - this._pct(v.high)) + '%';
       if (curC != null && curC < v.low) { bright('bfheat', curC, v.low); dotOnBright = true; }
@@ -2080,13 +2392,13 @@ class FlatThermostatCard extends HTMLElement {
       handle('hhigh', v.high);
       label('blow', v.low, 'heat');
       label('bhigh', v.high, 'cool');
-    } else if (mode === 'heat' && v.single != null) {
+    } else if (!ecoRange && mode === 'heat' && v.single != null) {
       show('fheat'); el.fheat.style.width = this._pct(v.single) + '%';
       if (curC != null && curC < v.single) { bright('bfheat', curC, v.single); dotOnBright = true; }
       else bright('bfheat', v.single, v.single);
       handle('hlow', v.single);
       label('blow', v.single, 'heat');
-    } else if (mode === 'cool' && v.single != null) {
+    } else if (!ecoRange && mode === 'cool' && v.single != null) {
       show('fcool'); el.fcool.style.width = (100 - this._pct(v.single)) + '%';
       if (curC != null && curC > v.single) { bright('bfcool', v.single, curC); dotOnBright = true; }
       else bright('bfcool', v.single, v.single);

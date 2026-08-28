@@ -1,4 +1,4 @@
-/* flat-maintenance-card v1.5
+/* flat-maintenance-card v1.6
  *
  * (Renamed from flat-health-card in v1.2 - same card, owner preferred the name.)
  * Device maintenance card: Matter connectivity + battery levels + purifier filter
@@ -8,6 +8,10 @@
  * individually (v1.2: row suppression removed, owner call); 15-min debounce so
  * restart storms raise nothing. Device rows and battery rows show the device's
  * registry AREA as a dim suffix (v1.2).
+ *
+ * v1.6: "+N more" EXPANDS. The lane cap (history_max_lanes) is a fold, not a
+ * crop: tap "+N more" to show every lane, tap "show less" to fold again; the
+ * fold resets on collapse. Owner: "there can't be any actual reason for this".
  *
  * v1.5: DEVICE TAPS OPEN THE DEVICE PAGE. Auto-discovered device rows, alerts,
  * lanes and network-event members navigate to /config/devices/device/<id>
@@ -74,7 +78,7 @@
  *   debounce_minutes: 15    # unavailable shorter than this = "settling", not an issue
  *   banner_threshold: 5     # this many down at once = radio banner, rows suppressed
  *   history_hours: 24       # LAST 24H lanes window; 0 = no history section
- *   history_max_lanes: 6    # worst-first cap, then "+N more"
+ *   history_max_lanes: 6    # worst-first fold, then a tappable "+N more"
  *   history_event_window_s: 120  # drops within this many seconds = one network event
  *   devices:                # OPTIONAL manual extras (or full manual mode w/ auto: false)
  *     - name: Extra Device
@@ -207,8 +211,8 @@
       color:#6f6f6f; padding:8px 0 4px; display:flex; align-items:baseline; gap:8px;
     }
     .row{ display:flex; align-items:center; gap:10px; padding:5px 0; font-size:13px; }
-    .row[data-ent], .row[data-dev]{ cursor:pointer; }
-    @media (hover:hover){ .row[data-ent]:hover, .row[data-dev]:hover{ background: rgba(255,255,255,.03); } }
+    .row[data-ent], .row[data-dev], .row[data-more]{ cursor:pointer; }
+    @media (hover:hover){ .row[data-ent]:hover, .row[data-dev]:hover, .row[data-more]:hover{ background: rgba(255,255,255,.03); } }
     .row .k{
       color: var(--secondary-text-color, #9b9b9b);
       flex:0 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -293,6 +297,7 @@
       this._histPending = false;
       this._histError = false;
       this._evtOpen = {};
+      this._moreOpen = false;
     }
 
     setConfig(config) {
@@ -389,6 +394,14 @@
     }
 
     _onClick(e) {
+      const moreEl = e.target.closest ? e.target.closest("[data-more]") : null;
+      if (moreEl) {
+        e.stopPropagation();
+        this._moreOpen = !this._moreOpen;
+        this._sig = "";
+        this._update();
+        return;
+      }
       const evtEl = e.target.closest ? e.target.closest("[data-evt]") : null;
       if (evtEl) {
         e.stopPropagation();
@@ -422,6 +435,7 @@
         this._open = !this._open;
         this._el.card.classList.toggle("open", this._open);
         if (this._open) this._maybeFetchHistory(false);
+        else { this._moreOpen = false; this._evtOpen = {}; this._sig = ""; this._update(); }
       }
     }
 
@@ -579,12 +593,9 @@
       }
       let lanes = Object.keys(lanesByEnt).map((k) => lanesByEnt[k]);
       lanes.sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
-      const more = Math.max(0, lanes.length - C.history_max_lanes);
-      lanes = lanes.slice(0, C.history_max_lanes);
-
       let outages = events.length;
-      for (const L of Object.keys(lanesByEnt).map((k) => lanesByEnt[k])) outages += L.outage;
-      return { lanes: lanes, events: events, outages: outages, more: more, start: start, end: now };
+      for (const L of lanes) outages += L.outage;
+      return { lanes: lanes, events: events, outages: outages, start: start, end: now };
     }
 
     _histHtml() {
@@ -610,13 +621,17 @@
         return '<i class="seg ' + cls + '" style="left:' + left + "%;width:" + width + '%" title="' + tip + '"></i>';
       };
       let out = "";
-      const devices = h.lanes.length + h.more;
+      const devices = h.lanes.length;
+      const cap = Math.max(1, C.history_max_lanes);
+      const folded = !this._moreOpen && h.lanes.length > cap;
+      const shown = folded ? h.lanes.slice(0, cap) : h.lanes;
+      const hidden = h.lanes.length - shown.length;
       out += '<div class="sname">' + label +
         '<span class="sr">' + h.outages + (h.outages === 1 ? " outage" : " outages") +
         (devices ? " - " + devices + (devices === 1 ? " device" : " devices") : "") + "</span></div>";
 
       // device lanes (worst first), events interleaved by start time after them
-      for (const L of h.lanes) {
+      for (const L of shown) {
         const cls = L.outage ? "err" : "dim";
         let segs = "";
         for (const iv of L.ivs) segs += segHtml(iv, iv.blip ? "blip" : "", L.name);
@@ -648,7 +663,11 @@
           out += "</div>";
         }
       }
-      if (h.more) out += this._row("dim", "+ " + h.more + " more", "shorter outages", null);
+      if (hidden) {
+        out += this._row("dim", "+ " + hidden + " more", "show all", null, ' data-more="1"');
+      } else if (this._moreOpen && h.lanes.length > cap) {
+        out += this._row("dim", "show less", "", null, ' data-more="1"');
+      }
 
       // axis: start / quarter marks / now
       let ax = "";
@@ -883,7 +902,7 @@
     _update() {
       const m = this._compute();
       const sig = JSON.stringify([
-        this._histStamp, this._histPending, this._histError, Object.keys(this._evtOpen).filter((k) => this._evtOpen[k]),
+        this._histStamp, this._histPending, this._histError, this._moreOpen, Object.keys(this._evtOpen).filter((k) => this._evtOpen[k]),
         m.banner, m.issues,
         m.conn.total, m.conn.up,
         m.conn.down.map((x) => [x.name, x.area, fmtDur(x.age)]),

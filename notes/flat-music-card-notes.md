@@ -94,7 +94,32 @@ Built against MA 2.9.9, whose sync groups are Sendspin-bridge based (AirPlay/
 Cast bridges only - no Squeezelite bridge). Related upstream issue filed from
 this project: music-assistant/support#5929 (stale cached AirPlay volume asserted
 at session start + DACP feedback dropped); a companion HA guard automation
-counters it until fixed.
+countered it until fixed.
+
+MA 2.10.0 (stable, 2026-08-27) changed the ground under the card; nothing in the
+card needed to change, but consumers should know:
+- 2.10 rebuilt one bridged player instead of migrating it, so its HA entity id
+  changed - search ALL of HA config for the old id (dashboards, automations,
+  scripts), not just the card YAML. A script that targeted the old id kept
+  "working" thanks to continue_on_error and silently skipped that room.
+- #5929 is fixed on 2.10 stable (track skips no longer re-assert the volume);
+  the guard automation is disabled and kept as a backup.
+- The per-player AirPlay `sync_adjust` is LIVE on 2.10 (it was inert on 2.9's
+  bridge path): negative = earlier, positive = later. All sync tuning can live
+  in MA now; device-side audio delays can go to 0.
+- Pause on a Sendspin-led sync group drops the AirPlay-bridge members without a
+  stop/flush, so they keep playing until their buffers drain (~4-5 s); HA then
+  reports the group and every member as `idle`, never `paused`. The card's
+  active-target logic falls through to the group entity, which is correct
+  (play re-forms the group). Filed as music-assistant/support#6195.
+- Sync-group members "unticking themselves" on play now has three distinct
+  causes: protocol ineligibility (the 2.9 lesson), a wedged group after
+  protocol toggling (restart the MA add-on, then reload HA's MA config entry),
+  or a bridge member whose AirPlay side MA has lost after a device dropout -
+  2.10 does not re-discover it when the device returns; only an MA add-on
+  restart re-registers the AirPlay protocol. None of these are the card.
+- `volume_set` on a muted player still audibly un-mutes it on 2.10; the
+  mute-wins policy stands.
 
 ## Version history (2026-07-27, sizes/FNV-1a as shipped)
 v1.0 30378 6918cef5 initial · v1.1 30890 e664bd25 header mini-player, shuffle/

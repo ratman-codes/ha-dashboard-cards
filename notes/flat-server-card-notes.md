@@ -8,8 +8,13 @@ plumbing pattern.
 
 ## Current version
 
-v1.6 — 38,865 B, FNV-1a `2aaa5c48`. Header self-documents the full YAML shape
+v1.7 — 40,360 B, FNV-1a `f50f9a37`. Header self-documents the full YAML shape
 (placeholder entity ids) and per-version changelog.
+
+v1.7 adds **live wattage to the Power → Load row**: with the realpower entities
+configured the row reads `current / total W · load%` (the watts and the
+separator dot dim, the percent normal); absent config falls back to the plain
+`load%`. See the Power section below for the YAML keys.
 
 v1.6 adds the **Outside** section: one row showing what an OFF-SITE uptime
 monitor sees, so the card can also answer "is my monitoring alive and is the
@@ -23,8 +28,9 @@ can know about itself.
   problem-class health sensors, pool usage, container switches, uptime,
   notifications count, container/OS update sensors, CPU temp, host RAM.
 - **Core qBittorrent integration**: WebUI-truth connection state + torrent counts.
-- **Core NUT integration**: UPS status/charge/load (+ battery_runtime, a
-  disabled-by-default entity worth enabling).
+- **Core NUT integration**: UPS status/charge/load (+ battery_runtime and, for
+  the v1.7 wattage row, realpower / nominal-realpower — all disabled-by-default
+  entities worth enabling; a nameplate literal can stand in for the total).
 - **whallil/ha-urbackup-monitor** (HACS custom repo): per-client last-backup
   timestamp + problem/online sensors.
 - **HA native**: `sensor.backup_last_successful_automatic_backup`.
@@ -70,6 +76,13 @@ Amber alerts: a monitor `down`, a monitor with no data, ALL monitors unavailable
 ("Outside monitor unreachable"), or the last check older than
 `thresholds.outside_stale_min` (default 5). `pending` shows as text without
 alerting (the monitor is retrying). `outside_url` = the row's tap-through.
+
+Power → Load wattage (v1.7): `ups_realpower` names the live-watts sensor;
+`ups_realpower_total` is either an entity id (a nominal/nameplate sensor) or a
+literal number for the max VA/W. With `ups_realpower` present the Load row reads
+`current / total W · load%` (watts + separator dim, percent normal); the total
+is omitted if only `ups_realpower` is set; neither key = the original plain
+`load%`. Values round to whole watts.
 
 Availability honesty: unavailable renders '--'/amber, never fake-green; the
 backup client's image-backup sensors are ignored by design where image backups

@@ -83,7 +83,7 @@ filter_warn: 30
 debounce_minutes: 15
 banner_threshold: 5
 history_hours: 24         # LAST 24H lanes; 0 disables the section
-history_max_lanes: 6
+history_max_lanes: 6      # fold point; "+N more" expands
 history_event_window_s: 120
 filters:
   - name: Purifier Living Room
@@ -126,12 +126,17 @@ devices:                # optional manual extras
   entities. Verified: jsdom (event grouping, blip class, cap, disabled, error
   row, lazy fetch only on expand) + headless-Chromium render at the
   dashboard's column width.
-- v1.5 (2026-08-25, 46,011 B, FNV-1a e2bc03ad, CURRENT): device-level taps
+- v1.5 (2026-08-25, 46,011 B, FNV-1a e2bc03ad): device-level taps
   (Connectivity rows, unreachable alerts, 24h lanes, network-event members)
   navigate to the HA device page (`/config/devices/device/<id>` via
   pushState + `location-changed`) instead of more-info on one arbitrary
   canary entity — tapping a camera's lane had opened its IR-light toggle.
   Manual `devices:` entries, battery and filter rows keep more-info.
+- v1.6 (2026-08-26, 46,887 B, FNV-1a 906d5861, CURRENT): the lane cap is a
+  FOLD, not a crop — "+N more" is tappable and reveals every lane, "show less"
+  folds back; the fold and any open network-event member list reset when the
+  card collapses. Owner caught a 12-device night showing six lanes and an
+  inert "+6 more".
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

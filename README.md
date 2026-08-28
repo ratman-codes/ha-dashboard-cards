@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.9.3. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.11.2. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -44,14 +44,33 @@ header.)*
   notch), a scrub tooltip gives the exact time/mode/setpoint/running state,
   and the same ribbon also renders on the default expanded panel between the
   stat tiles and the 14-day bars — all read from existing recorder history of
-  the climate entity itself, zero new configuration.
+  the climate entity itself, zero new configuration. The ribbon's history is
+  PERMANENT (v2.10): two numeric mirror sensors (mode-on 0/1 + setpoint) keep
+  hourly statistics forever, and days recorder has purged render at hour
+  resolution instead of vanishing — quantized runtime-shaded hour cells,
+  hour-boundary setpoint ticks, an hourly tooltip, and a "RAN DURING · HOURLY"
+  label as the honesty cue. ECO is a first-class citizen now too: while eco is
+  active the track renders BOTH eco bounds as a green range with flush
+  full-height marks (the entity only reports the bound matching the current
+  mode, so helper entities carry the blind side, kept self-healing by a small
+  mirror automation), and an ECO-WHEN-AWAY standing rule (v2.11) can be armed
+  by long-pressing the leaf — a static green arc marks it armed; when the
+  household presence sensor reads away past a card-editable delay, an HA-side
+  automation flips the thermostat to native eco, sends an actionable
+  notification with an "Exit Eco" button, and auto-restores on return (a latch
+  ensures manually-enabled eco is never touched) — see
+  notes/hvac-runtime-tracking-notes.md for the whole engine.
   Used as `type: custom:flat-thermostat-card` with a climate entity + optional
   runtime_cooling/runtime_heating (daily meters),
   runtime_cooling_stats/runtime_heating_stats (long-term stats sources),
   runtime_cooling_signal/runtime_heating_signal (0/1 signal sensors for the
   ribbon), outdoor_high_stats (outdoor temperature entity for the scatter),
-  period_default (7d|14d|30d|60d|season), and run_once_entity (the arming
-  input_boolean). HA resource id: `a1bc4b7a12124ab38ded7859b5ed12bc`.
+  period_default (7d|14d|30d|60d|season), run_once_entity (the arming
+  input_boolean), mode_stats/setpoint_stats (the permanence mirror sensors),
+  eco_away_entity/eco_away_delay_entity (the eco-when-away rule + delay), and
+  eco_low_entity/eco_high_entity (the eco-bound helpers; numeric
+  eco_low/eco_high accepted as a fallback). HA resource id:
+  `a1bc4b7a12124ab38ded7859b5ed12bc`.
 - `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
@@ -74,7 +93,7 @@ header.)*
   graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
   label toggles the rest. Used as `type: custom:flat-sensor-stack-card`.
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.7. Roborock control card (Qrevo Edge 2): status
+- `flat-vacuum-card.js` — v2.7rev4. Roborock control card (Qrevo Edge 2): status
   header, room-pick clean flow, full cleaning profiles (Away/Default popup
   editors), maintenance counters. Used as `type: custom:flat-vacuum-card` (see
   `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
@@ -156,7 +175,7 @@ header.)*
   '--' handling. Default entities are this dashboard's sensors; override via
   indoor:/outdoor:/hall: YAML. Used as `type: custom:flat-climate-card`.
   HA resource id: `f8f2966083af4b31b2588016c24dcc19`.
-- `flat-server-card.js` — v1.6. NAS health + backup confidence card ("is the
+- `flat-server-card.js` — v1.7. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
   quiet row; problems surface as a red-first alert strip even collapsed) that
   expands to Storage (array state/fill, parity age with next-due countdown from
@@ -165,7 +184,9 @@ header.)*
   guard), Services (torrent-client WebUI truth, container count, quiet updates
   row), System (host RAM, HA-VM RAM and HA-VM disk with unit-converted
   "used / total GB" labels, uptime with reboot amber), Power (UPS status /
-  battery bar / runtime / load), Backups (client + HA age rows) and, since v1.6,
+  battery bar / runtime / load — since v1.7 the load row also shows measured
+  watts "current / total W" when the realpower entities are configured),
+  Backups (client + HA age rows) and, since v1.6,
   Outside (what an off-site Uptime Kuma instance sees, via the core Uptime Kuma
   integration: "VPS ok - Cloud ok - 40s ago", amber when a monitor is down, no
   data, or stale; tap opens the Kuma dashboard). Row
@@ -174,7 +195,7 @@ header.)*
   YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.5. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.6. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
@@ -184,7 +205,8 @@ header.)*
   individually), LAST 24H (v1.4: one recorder-history call on expand draws a
   timeline lane per device that was unavailable in the window — red = outage,
   grey sliver = blip, an amber "Network event" lane when many drop together,
-  tap to list its members; worst-first, capped, absent when the day was clean),
+  tap to list its members; worst-first, folded past a cap with a tappable
+  "+N more", absent when the day was clean),
   Batteries (tiered amber/red thresholds with bars and a quiet
   "all > N%" summary) and Filters (purifier filter life, hidden until low;
   no-data rows stay dim). AUTO-DISCOVERING: reads the frontend entity/device/area

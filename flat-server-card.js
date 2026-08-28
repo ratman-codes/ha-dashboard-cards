@@ -1,4 +1,4 @@
-/* flat-server-card v1.6
+/* flat-server-card v1.7
  *
  * One-card answer to "is the NAS okay and is my data safe?" for the main
  * dashboard. Green-is-boring: healthy = ONE quiet header row; problems surface
@@ -58,6 +58,12 @@
  *   ups_charge: sensor.my_server_ups_battery_charge
  *   ups_runtime: sensor.ups_battery_runtime
  *   ups_load: sensor.my_server_ups_load
+ *   ups_realpower: sensor.my_server_ups_real_power   # live watts (NUT ups.realpower,
+ *     # disabled by default -- enable "Real power" on the NUT device). When set, the
+ *     # Load row reads "<load>% - <cur> / <total> W" (watts dim). Absent -> "<load>%" only.
+ *   ups_realpower_total: sensor.my_server_ups_nominal_real_power   # rated watts;
+ *     # accepts an entity id OR a literal number (the nameplate never changes, so
+ *     # `ups_realpower_total: 1000` is equally fine and needs no second sensor).
  *   up_since: sensor.my_server_up_since
  *   backup_client_name: PC-01
  *   backup_client: sensor.pc_01_urbackup_last_file_backup
@@ -107,6 +113,9 @@
  *         # re-reports every poll; its last_updated = "checked N ago"
  *       thresholds: { outside_stale_min: 5 }
  *
+ * v1.7: UPS Load row gained live wattage -- "<cur> / <total> W - <load>%" (watts dim
+ *   on the left, percent normal on the right), from ups_realpower (+ ups_realpower_total,
+ *   entity or literal number). Falls back to plain "<load>%" when ups_realpower is absent.
  * v1.6: Outside section (outside_monitors / outside_url / outside_checked,
  *   outside_stale_min threshold) -- the off-site view pulled back in through
  *   the core Uptime Kuma integration; seconds-resolution age formatter for it.
@@ -427,11 +436,16 @@ class FlatServerCard extends HTMLElement {
     let ups = null;
     if (c.ups_status) {
       const st = this._val(c.ups_status);
+      let rtotal = null;
+      if (typeof c.ups_realpower_total === 'number') rtotal = c.ups_realpower_total;
+      else if (typeof c.ups_realpower_total === 'string') rtotal = this._num(c.ups_realpower_total);
       ups = {
         status: st, na: st === null,
         charge: this._num(c.ups_charge),
         runtime: this._num(c.ups_runtime),
-        load: this._num(c.ups_load)
+        load: this._num(c.ups_load),
+        rpower: this._num(c.ups_realpower),
+        rtotal: rtotal
       };
       if (ups.na) push('amber', 'UPS unavailable');
       else if (!/online/i.test(st)) {
@@ -818,7 +832,16 @@ class FlatServerCard extends HTMLElement {
           H.push(row(onBatt ? 'warn' : '', kv('Runtime'), vv(Math.round(m.ups.runtime / 60) + ' min'), c.ups_runtime));
         }
         if (!m.ups.na && m.ups.load !== null) {
-          H.push(row('', kv('Load'), vv(Math.round(m.ups.load) + '%'), c.ups_load));
+          let loadVal;
+          if (m.ups.rpower !== null) {
+            const w = Math.round(m.ups.rpower);
+            const tot = m.ups.rtotal !== null ? Math.round(m.ups.rtotal) : null;
+            loadVal = '<span class="dim">' + w + (tot !== null ? ' / ' + tot : '') + ' W &middot;</span> ' +
+                      Math.round(m.ups.load) + '%';
+          } else {
+            loadVal = Math.round(m.ups.load) + '%';
+          }
+          H.push(row('', kv('Load'), vv(loadVal), c.ups_realpower || c.ups_load));
         }
       }
     }

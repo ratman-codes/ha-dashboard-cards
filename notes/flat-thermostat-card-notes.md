@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.9.3 (ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.11.2 (permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -84,3 +84,39 @@ small degree unit is absolutely positioned outside the centering as an
 adornment. Mode strip's left edge aligns exactly with the track's left edge;
 track and eco run flush right. Full spec, version trail with hashes, and the
 runtime-sensor pipeline live in the private project notes.
+Permanent ribbon history (v2.10): raw recorder history purges at ~10 days, so
+two numeric mirror template sensors (a 0/1 "thermostat on" signal and a
+setpoint sensor, null while off) keep hourly long-term statistics forever;
+card keys `mode_stats`/`setpoint_stats` point at them, and any day recorder
+no longer has falls back to HOUR RESOLUTION - "RAN DURING - HOURLY" section
+label, on-band from hours whose mode-on mean > 0, runtime-shaded hour cells
+with 1px gaps (opacity ~ fraction of the hour that ran; the visible
+quantization is the honesty cue), setpoint ticks at hour boundaries (a stable
+hour labels, a min!=max transition hour gets a quiet tick), and an hourly
+tooltip ("12p-1p - on - set 76 - ran 24m"). Minute-exact rendering still wins
+whenever raw history exists; the fallback hour-stats can also be backfilled
+from whatever recorder still holds via recorder/import_statistics
+(measurement metadata: has_mean true / has_sum false) - done on this install
+before the sensors' first purge cycle. Eco range render (v2.11.1/.2): in eco
+the track shows BOTH eco bounds as a green range (action-zone fills to each
+bound, dark comfort deadband between) with flush full-height 3px marks
+contained inside the track; the entity only reports the bound matching the
+CURRENT hvac mode (the eco range itself is vendor-locked - the device rejects
+setpoint writes in eco and the API only exposes eco on/off), so helper
+input_numbers carry the blind side via `eco_low_entity`/`eco_high_entity`,
+kept self-healing by a small automation that copies whatever bound the entity
+exposes into the matching helper while eco is active. Eco-when-away (v2.11):
+long-press the eco leaf to arm a STANDING rule - armed mark = the run-once
+arc geometry but STATIC and green (motion stays reserved for pending
+one-shots), white atop the active green button; when a household presence
+binary_sensor holds "away" for a helper-set delay, an HA-side automation
+flips the thermostat to native eco and sends an actionable notification with
+an "Exit Eco" button; presence returning restores automatically, and a latch
+helper guarantees only automation-engaged eco is ever undone (manual eco
+untouched). Engage is edge-triggered, so undo cannot re-fire until the next
+departure. The default panel gains an "ECO WHEN AWAY" row: armed shows
+"sets Eco after [-] 30m [+] away" with a debounced stepper writing the delay
+helper; disarmed shows "off - hold the leaf to arm". Config keys:
+`eco_away_entity` (arming input_boolean) + `eco_away_delay_entity` (minutes
+input_number). Version trail: v2.10 2f0cfa12 -> v2.11 745fb705 -> v2.11.1
+1fd75b72 -> v2.11.2 ddd39a78 (118,211 -> 128,182 B).
