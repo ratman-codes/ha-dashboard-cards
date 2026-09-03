@@ -1,9 +1,9 @@
-/* flat-server-card v1.7
+/* flat-server-card v1.12
  *
  * One-card answer to "is the NAS okay and is my data safe?" for the main
  * dashboard. Green-is-boring: healthy = ONE quiet header row; problems surface
  * as an alert strip even while collapsed. Tap the header to expand the full
- * section list (Storage / Mounts / Services / Power / Backups / Outside).
+ * section list (Storage / System / Mounts / Services / Power / Backups / Outside).
  * Long-press a row to open more-info for its entity. Read-only card: no
  * writes, no controls.
  *
@@ -83,8 +83,8 @@
  *     mounts_stale_min: 15
  *     reboot_amber_h: 24
  *     cpu_temp_amber: (auto: 85 C / 185 F by sensor unit)
- *     batt_amber: 50
- *     batt_red: 20
+ *     batt_amber: 50   # UPS charge <= this: amber alert + bar tint (any UPS status)
+ *     batt_red: 20     # UPS charge <= this: red alert + bar tint
  *
  * Optional extras:
  *   server_url / qbit_url / urbackup_url  -- tap the Array / qBittorrent /
@@ -109,10 +109,46 @@
  *       outside_monitors:
  *         - { name: VPS,      entity: sensor.internet_status }
  *         - { name: HA Cloud, entity: sensor.ha_cloud_status }
- *       outside_checked: sensor.internet_response_time   # any sensor Kuma
- *         # re-reports every poll; its last_updated = "checked N ago"
+ *       outside_checked: sensor.ha_cloud_response_time   # optional. A sensor
+ *         # whose VALUE moves each poll (WAN latency is ideal) so its
+ *         # last_updated stays current -- a rock-steady ping freezes its
+ *         # timestamp and would false-"stale". Accepts a list too. v1.9 also
+ *         # auto-checks each monitor's *_response_time sensor, so freshness
+ *         # is the newest of them all and robust either way.
  *       thresholds: { outside_stale_min: 5 }
  *
+ * v1.12: Audit bundle (findings #3-#8 of the 2026-09-03 v1.9 audit), no visible
+ *   change for a healthy card. (#3) backup_client_online is three-valued: an
+ *   unavailable sensor now says "agent status unknown" instead of "offline".
+ *   (#4) _ageMs clamps at 0 (matches Outside). (#5) ups_realpower_total accepts
+ *   a quoted numeric string ("1000") as a literal. (#6) set hass skips the
+ *   rebuild when none of the card's own entities changed (ids harvested from
+ *   the config + derived *_response_time); the 30 s tick still re-renders, so
+ *   any miss is bounded by 30 s. (#7) window.open uses noopener; long-press
+ *   only on the primary button; rows get user-select:none / no touch callout;
+ *   alert sort moved to just before severity (reds-first by construction).
+ *   (#8) dead code removed (unused var, doubly nested if, duplicate restVal,
+ *   ramPct/ramLabel aliases -> model.ram).
+ * v1.11: Mounts freshness honesty. When mounts_last_report is configured but
+ *   its value is empty/unparseable (fresh helper, restore, hand edit), the card
+ *   now flags amber "Mounts: no report -- no timestamp" and marks the Last
+ *   report row stale, instead of silently treating unknown age as fresh (was:
+ *   valid JSON + empty timestamp rendered "6 / 6 mounted" + All clear).
+ * v1.10: UPS battery charge alerts. batt_amber / batt_red now push an alert
+ *   ("UPS battery low <n>%", amber / red) whenever charge is known, regardless of
+ *   UPS status, and the Battery bar tint follows the same thresholds (was: bar
+ *   tint only, and only while on battery -- an Online UPS at 12% read All clear).
+ * v1.9: Outside freshness ("checked N ago" + stale alert) now takes the NEWEST
+ *   last_updated across outside_checked (string or list) AND each monitor's
+ *   auto-derived *_response_time sensor -- a WAN monitor whose value moves every
+ *   poll always reads fresh, so a rock-steady ping (frozen timestamp) can no
+ *   longer produce a false "Outside: last check N ago". Root cause: HA advances
+ *   last_updated (and last_reported) only on a VALUE change, not on every poll.
+ * v1.8: System section moved up under Storage (was between Services and Power).
+ *   Subtext rows standardized to the v1.7 Load format via a subLead() helper --
+ *   the grey secondary note leads, a grey dot, then the white main value on the
+ *   right (parity "next in Nd", disks "N unknown", uptime "rebooted", backup
+ *   "offline", Outside age all flipped; the default for any future subtext row).
  * v1.7: UPS Load row gained live wattage -- "<cur> / <total> W - <load>%" (watts dim
  *   on the left, percent normal on the right), from ups_realpower (+ ups_realpower_total,
  *   entity or literal number). Falls back to plain "<load>%" when ups_realpower is absent.
@@ -195,7 +231,8 @@ const CSS = `
   .row {
     display: flex; align-items: center; gap: 10px;
     padding: 4px 4px; margin: 0 -4px; font-size: 13px;
-    border-radius: 6px;
+    border-radius: 6px; user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     transition: transform .12s ease, background .12s ease;
   }
   .row.link { cursor: pointer; }
@@ -266,10 +303,35 @@ class FlatServerCard extends HTMLElement {
     this._th = Object.assign({}, DEF_TH, config.thresholds || {});
     this._open = config.collapsed_default === false;
     this._built = false;
+    this._watch = this._collectIds(config);
+  }
+
+  // Every entity id the card reads, harvested from the config (any string
+  // shaped like an entity id, at any depth) plus the *_response_time ids the
+  // Outside section derives. Used to skip re-rendering on unrelated hass updates.
+  _collectIds(cfg) {
+    const ids = new Set();
+    const re = /^[a-z_]+\.[a-z0-9_]+$/;
+    const walk = (v) => {
+      if (typeof v === 'string') { if (re.test(v)) ids.add(v); }
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.keys(v).forEach(k => walk(v[k]));
+    };
+    walk(cfg);
+    (cfg.outside_monitors || []).forEach(o => {
+      if (o && typeof o.entity === 'string' && /_status$/.test(o.entity)) ids.add(o.entity.replace(/_status$/, '_response_time'));
+    });
+    return Array.from(ids);
   }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
+    // Skip the rebuild when none of OUR entities changed (HA state objects are
+    // immutable, so identity compare is exact). The 30 s tick still calls
+    // _render() directly to advance the ages, so a miss is bounded by 30 s.
+    if (prev && this._built && this._watch &&
+        !this._watch.some(id => prev.states[id] !== hass.states[id])) return;
     this._render();
   }
 
@@ -303,7 +365,7 @@ class FlatServerCard extends HTMLElement {
     if (v === null) return null;
     const t = Date.parse(v);
     if (isNaN(t)) return null;
-    return Date.now() - t;
+    return Math.max(0, Date.now() - t);
   }
   _fmtAge(ms) {
     if (ms === null) return '--';
@@ -402,6 +464,10 @@ class FlatServerCard extends HTMLElement {
         if (ageMs !== null && ageMs > th.mounts_stale_min * 60000) {
           mounts.stale = true;
           push('amber', 'Mounts: no report', this._fmtAge(ageMs));
+        } else if (ageMs === null && c.mounts_last_report) {
+          // Timestamp helper empty/unparseable: unknown freshness is NOT fresh.
+          mounts.stale = true;
+          push('amber', 'Mounts: no report', 'no timestamp');
         }
       }
     }
@@ -438,7 +504,10 @@ class FlatServerCard extends HTMLElement {
       const st = this._val(c.ups_status);
       let rtotal = null;
       if (typeof c.ups_realpower_total === 'number') rtotal = c.ups_realpower_total;
-      else if (typeof c.ups_realpower_total === 'string') rtotal = this._num(c.ups_realpower_total);
+      else if (typeof c.ups_realpower_total === 'string') {
+        const lit = parseFloat(c.ups_realpower_total);   // "1000" (quoted) -> literal
+        rtotal = isNaN(lit) ? this._num(c.ups_realpower_total) : lit;
+      }
       ups = {
         status: st, na: st === null,
         charge: this._num(c.ups_charge),
@@ -451,6 +520,10 @@ class FlatServerCard extends HTMLElement {
       else if (!/online/i.test(st)) {
         const rt = ups.runtime !== null ? Math.round(ups.runtime / 60) + ' min left' : '';
         push('red', 'UPS: ' + st, rt);
+      }
+      if (!ups.na && ups.charge !== null) {
+        if (ups.charge <= th.batt_red) push('red', 'UPS battery low', Math.round(ups.charge) + '%');
+        else if (ups.charge <= th.batt_amber) push('amber', 'UPS battery low', Math.round(ups.charge) + '%');
       }
     }
 
@@ -482,8 +555,6 @@ class FlatServerCard extends HTMLElement {
     const ram = c.ram_usage ? ramCalc(c.ram_usage, c.ram_used, 'RAM', th.ram_amber, th.ram_red) : null;
     const haRam = c.ha_ram_usage ? ramCalc(c.ha_ram_usage, c.ha_ram_used, 'HA RAM', th.ram_amber, th.ram_red) : null;
     const haDisk = c.ha_disk_usage ? ramCalc(c.ha_disk_usage, c.ha_disk_used, 'HA disk', th.pool_amber, th.pool_red) : null;
-    const ramPct = ram ? ram.pct : null;
-    const ramLabel = ram ? ram.label : null;
 
     // Uptime
     let upMs = this._ageMs(c.up_since);
@@ -496,14 +567,19 @@ class FlatServerCard extends HTMLElement {
     if (c.backup_client) {
       const age = this._ageMs(c.backup_client);
       const problem = this._val(c.backup_client_problem) === 'on';
-      const online = c.backup_client_online ? this._val(c.backup_client_online) === 'on' : true;
+      let online = true; // true / false / null = sensor unavailable
+      if (c.backup_client_online) {
+        const ov = this._val(c.backup_client_online);
+        online = ov === null ? null : ov === 'on';
+      }
       const name = c.backup_client_name || 'Client';
       bkClient = { age, problem, online, name };
       if (problem) push('red', name + ' backup problem');
       if (age === null) push('amber', name + ' backup age unknown');
       else if (age > th.backup_client_red_h * 3600000) push('red', name + ' backup stale', this._fmtAge(age));
       else if (age > th.backup_client_amber_h * 3600000) push('amber', name + ' backup stale', this._fmtAge(age));
-      if (!online) push('amber', name + ' offline (backup agent)');
+      if (online === false) push('amber', name + ' offline (backup agent)');
+      else if (online === null) push('amber', name + ' agent status unknown');
     }
     let bkHa = null;
     if (c.backup_ha) {
@@ -524,14 +600,28 @@ class FlatServerCard extends HTMLElement {
           up: st === 'up', down: st === 'down', na: st === null
         };
       });
+      // Freshness = newest last_updated across candidate response-time sensors.
+      // HA only advances last_updated when a VALUE changes, so a rock-steady
+      // ping freezes its timestamp even while polling fine. A monitor whose
+      // value moves every poll (WAN latency) always reads fresh, so taking the
+      // newest across all of them can never false-"stale". Candidates:
+      // outside_checked (string or list) + each monitor's derived
+      // *_response_time sensor.
       let ageMs = null;
-      if (c.outside_checked) {
-        const s = this._st(c.outside_checked);
+      const cand = Array.isArray(c.outside_checked) ? c.outside_checked.slice()
+                 : (c.outside_checked ? [c.outside_checked] : []);
+      c.outside_monitors.forEach(o => {
+        if (o.entity && /_status$/.test(o.entity)) cand.push(o.entity.replace(/_status$/, '_response_time'));
+      });
+      let newest = null;
+      cand.forEach(id => {
+        const s = this._st(id);
         if (s && s.state !== 'unavailable' && s.state !== 'unknown') {
           const t = Date.parse(s.last_updated);
-          if (!isNaN(t)) ageMs = Math.max(0, Date.now() - t);
+          if (!isNaN(t) && (newest === null || t > newest)) newest = t;
         }
-      }
+      });
+      if (newest !== null) ageMs = Math.max(0, Date.now() - newest);
       const allNa = mons.every(x => x.na);
       const stale = !allNa && ageMs !== null && ageMs > th.outside_stale_min * 60000;
       outside = { mons, ageMs, allNa, stale };
@@ -543,7 +633,6 @@ class FlatServerCard extends HTMLElement {
       }
     }
 
-    issues.sort((a, b) => (a.sev === b.sev) ? 0 : (a.sev === 'red' ? -1 : 1));
     // Unraid notifications (alert-only)
     const notifN = this._num(c.notifications);
     if (notifN !== null && notifN > 0) push('amber', 'Unraid notifications', String(Math.round(notifN)));
@@ -553,7 +642,6 @@ class FlatServerCard extends HTMLElement {
     if (c.updates_containers || c.updates_os) {
       const nC = this._num(c.updates_containers);
       const os = this._val(c.updates_os) === 'on';
-      const n = (nC || 0) + 0;
       updates = { containers: nC, os, any: (nC !== null && nC > 0) || os };
     }
 
@@ -569,11 +657,12 @@ class FlatServerCard extends HTMLElement {
       }
     }
 
+    issues.sort((a, b) => (a.sev === b.sev) ? 0 : (a.sev === 'red' ? -1 : 1)); // reds first (stable)
     const sev = issues.some(i => i.sev === 'red') ? 'crit' : (issues.length ? 'warn' : 'ok');
     return {
       issues, sev,
       arrState, arrPct, parityRunning, parityProg, parityBad, parityDays, parityDue,
-      disks, flagged, diskNa, pools, mounts, qbit, cont, ups, upMs, bkClient, bkHa, updates, ramPct, ramLabel, haRam, haDisk,
+      disks, flagged, diskNa, pools, mounts, qbit, cont, ups, upMs, bkClient, bkHa, updates, ram, haRam, haDisk,
       outside
     };
   }
@@ -591,7 +680,8 @@ class FlatServerCard extends HTMLElement {
       '  <div class="bodywrap"><div class="bodyin"><div class="sect" id="body"></div></div></div>' +
       '</div>';
     const hd = this.shadowRoot.getElementById('hd');
-    hd.addEventListener('pointerdown', () => {
+    hd.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
       hd.classList.add('pressed');
       this._lpFired = false;
       this._pressT = setTimeout(() => { this._lpFired = true; }, 550);
@@ -607,6 +697,7 @@ class FlatServerCard extends HTMLElement {
     });
     const body = this.shadowRoot.getElementById('body');
     body.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
       const row = ev.target.closest('[data-ent],[data-url]');
       if (!row) return;
       this._rowLp = false;
@@ -628,7 +719,7 @@ class FlatServerCard extends HTMLElement {
     body.addEventListener('click', (ev) => {
       if (this._rowLp) { this._rowLp = false; return; }
       const row = ev.target.closest('[data-url]');
-      if (row) window.open(row.getAttribute('data-url'), '_blank');
+      if (row) window.open(row.getAttribute('data-url'), '_blank', 'noopener');
     });
     this._built = true;
   }
@@ -684,6 +775,10 @@ class FlatServerCard extends HTMLElement {
       kHtml + vHtml + '</div>';
     const kv = (k) => '<span class="k">' + k + '</span>';
     const vv = (v) => '<span class="v">' + v + '</span>';
+    // Standard subtext row: grey secondary note leads, grey dot, white main on the
+    // right -- "<sub> &middot; <main>". Use for every value that pairs a main
+    // reading with a secondary detail (the default going forward).
+    const subLead = (main, sub) => '<span class="dim">' + sub + ' &middot;</span> ' + main;
     const barRow = (name, pct, sev, ent) => {
       const p = pct === null ? null : Math.min(100, Math.max(0, pct));
       return '<div class="row' + (sev ? ' ' + sev : '') + '"' + (ent ? ' data-ent="' + ent + '"' : '') + '>' +
@@ -710,10 +805,9 @@ class FlatServerCard extends HTMLElement {
     if (m.parityRunning) {
       pv = 'check running' + (m.parityProg !== null ? ' &middot; ' + m.parityProg + '%' : '');
     } else if (m.parityDays !== null) {
-      pv = m.parityDays + 'd ago' +
-        (m.parityDue !== null
-          ? ' <span class="dim">&middot; ' + (m.parityDue >= 0 ? 'next in ' + m.parityDue + 'd' : (-m.parityDue) + 'd overdue') + '</span>'
-          : '');
+      pv = m.parityDue !== null
+        ? subLead(m.parityDays + 'd ago', m.parityDue >= 0 ? 'next in ' + m.parityDue + 'd' : (-m.parityDue) + 'd overdue')
+        : m.parityDays + 'd ago';
     } else pv = '--';
     const pcls = m.parityBad && !m.parityRunning ? 'err' : (m.parityDue !== null && m.parityDue < 0 && !m.parityRunning ? 'warn' : '');
     H.push(row(pcls, kv('Parity check'), vv(pv), c.parity_valid || c.parity_running));
@@ -726,11 +820,40 @@ class FlatServerCard extends HTMLElement {
       });
       const restLabel = m.flagged.length ? 'other disks' : 'Disks';
       let restVal = okCount + ' / ' + (m.disks.length - m.flagged.length) + ' healthy';
-      if (!m.flagged.length) restVal = okCount + ' / ' + m.disks.length + ' healthy';
-      if (m.diskNa.length) restVal += ' <span class="dim">&middot; ' + m.diskNa.length + ' unknown</span>';
+      if (m.diskNa.length) restVal = subLead(restVal, m.diskNa.length + ' unknown');
       H.push(row(m.diskNa.length ? 'warn' : '', kv(restLabel), vv(restVal)));
     }
     m.pools.forEach(p => H.push(barRow(p.name, p.pct, p.sev, p.entity)));
+
+    // SYSTEM
+    if (c.ram_usage || c.ha_ram_usage || c.ha_disk_usage || c.up_since) {
+      H.push('<div class="sname">System</div>');
+      const ramRow = (label, pct, lbl, ent, amberTh, redTh) => {
+        const a = amberTh !== undefined ? amberTh : this._th.ram_amber;
+        const r = redTh !== undefined ? redTh : this._th.ram_red;
+        let rsev = '';
+        if (pct !== null) {
+          if (pct >= r) rsev = 'err';
+          else if (pct >= a) rsev = 'warn';
+        }
+        const p = pct === null ? null : Math.min(100, Math.max(0, pct));
+        H.push('<div class="row' + (rsev ? ' ' + rsev : '') + '" data-ent="' + ent + '">' +
+          kv(label) +
+          (p === null ? vv('--')
+            : '<span class="bar' + (rsev ? ' ' + rsev : '') + '"><i style="width:' + p.toFixed(0) + '%"></i></span>' +
+              '<span class="pctw">' + (lbl ? esc(lbl) : p.toFixed(0) + '%') + '</span>') +
+          '</div>');
+      };
+      if (c.ram_usage && m.ram) ramRow('RAM', m.ram.pct, m.ram.label, c.ram_usage);
+      if (c.ha_ram_usage && m.haRam) ramRow('HA RAM', m.haRam.pct, m.haRam.label, c.ha_ram_usage);
+      if (c.ha_disk_usage && m.haDisk) ramRow('HA disk', m.haDisk.pct, m.haDisk.label, c.ha_disk_usage, this._th.pool_amber, this._th.pool_red);
+      if (c.up_since) {
+        const warn = m.upMs !== null && m.upMs < this._th.reboot_amber_h * 3600000;
+        let uv = m.upMs === null ? '--' : this._fmtAge(m.upMs);
+        if (warn) uv = subLead(uv, 'rebooted');
+        H.push(row(warn ? 'warn' : '', kv('Uptime'), vv(uv), c.up_since));
+      }
+    }
 
     // MOUNTS
     if (m.mounts) {
@@ -781,68 +904,33 @@ class FlatServerCard extends HTMLElement {
     }
 
     // POWER
-    if (c.ram_usage || c.ha_ram_usage || c.ha_disk_usage || c.up_since) {
-      H.push('<div class="sname">System</div>');
-      const ramRow = (label, pct, lbl, ent, amberTh, redTh) => {
-        const a = amberTh !== undefined ? amberTh : this._th.ram_amber;
-        const r = redTh !== undefined ? redTh : this._th.ram_red;
-        let rsev = '';
-        if (pct !== null) {
-          if (pct >= r) rsev = 'err';
-          else if (pct >= a) rsev = 'warn';
-        }
-        const p = pct === null ? null : Math.min(100, Math.max(0, pct));
-        H.push('<div class="row' + (rsev ? ' ' + rsev : '') + '" data-ent="' + ent + '">' +
-          kv(label) +
-          (p === null ? vv('--')
-            : '<span class="bar' + (rsev ? ' ' + rsev : '') + '"><i style="width:' + p.toFixed(0) + '%"></i></span>' +
-              '<span class="pctw">' + (lbl ? esc(lbl) : p.toFixed(0) + '%') + '</span>') +
-          '</div>');
-      };
-      if (c.ram_usage) ramRow('RAM', m.ramPct, m.ramLabel, c.ram_usage);
-      if (c.ha_ram_usage && m.haRam) ramRow('HA RAM', m.haRam.pct, m.haRam.label, c.ha_ram_usage);
-      if (c.ha_disk_usage && m.haDisk) ramRow('HA disk', m.haDisk.pct, m.haDisk.label, c.ha_disk_usage, this._th.pool_amber, this._th.pool_red);
-      if (c.up_since) {
-        const warn = m.upMs !== null && m.upMs < this._th.reboot_amber_h * 3600000;
-        let uv = m.upMs === null ? '--' : this._fmtAge(m.upMs);
-        if (warn) uv += ' <span class="dim">&middot; rebooted</span>';
-        H.push(row(warn ? 'warn' : '', kv('Uptime'), vv(uv), c.up_since));
-      }
-    }
     if (m.ups) {
       H.push('<div class="sname">Power</div>');
-      if (m.ups) {
-        let uval, ucls = '', dot = 'dot';
-        const onBatt = !m.ups.na && !/online/i.test(m.ups.status);
-        if (m.ups.na) { uval = 'unavailable'; ucls = 'warn'; dot = 'dot na'; }
-        else {
-          uval = esc(m.ups.status);
-          if (onBatt) { ucls = 'err'; dot = 'dot off'; }
+      let uval, ucls = '', dot = 'dot';
+      const onBatt = !m.ups.na && !/online/i.test(m.ups.status);
+      if (m.ups.na) { uval = 'unavailable'; ucls = 'warn'; dot = 'dot na'; }
+      else {
+        uval = esc(m.ups.status);
+        if (onBatt) { ucls = 'err'; dot = 'dot off'; }
+      }
+      H.push(row(ucls, '<span class="' + dot + '"></span>' + kv('UPS'), vv(uval), c.ups_status));
+      if (!m.ups.na && m.ups.charge !== null) {
+        let bsev = '';
+        if (m.ups.charge <= this._th.batt_red) bsev = 'err';
+        else if (m.ups.charge <= this._th.batt_amber) bsev = 'warn';
+        H.push(barRow('Battery', m.ups.charge, bsev, c.ups_charge));
+      }
+      if (!m.ups.na && m.ups.runtime !== null) {
+        H.push(row(onBatt ? 'warn' : '', kv('Runtime'), vv(Math.round(m.ups.runtime / 60) + ' min'), c.ups_runtime));
+      }
+      if (!m.ups.na && m.ups.load !== null) {
+        let loadVal = Math.round(m.ups.load) + '%';
+        if (m.ups.rpower !== null) {
+          const w = Math.round(m.ups.rpower);
+          const tot = m.ups.rtotal !== null ? Math.round(m.ups.rtotal) : null;
+          loadVal = subLead(loadVal, w + (tot !== null ? ' / ' + tot : '') + ' W');
         }
-        H.push(row(ucls, '<span class="' + dot + '"></span>' + kv('UPS'), vv(uval), c.ups_status));
-        if (!m.ups.na && m.ups.charge !== null) {
-          let bsev = '';
-          if (onBatt) {
-            if (m.ups.charge <= this._th.batt_red) bsev = 'err';
-            else if (m.ups.charge <= this._th.batt_amber) bsev = 'warn';
-          }
-          H.push(barRow('Battery', m.ups.charge, bsev, c.ups_charge));
-        }
-        if (!m.ups.na && m.ups.runtime !== null) {
-          H.push(row(onBatt ? 'warn' : '', kv('Runtime'), vv(Math.round(m.ups.runtime / 60) + ' min'), c.ups_runtime));
-        }
-        if (!m.ups.na && m.ups.load !== null) {
-          let loadVal;
-          if (m.ups.rpower !== null) {
-            const w = Math.round(m.ups.rpower);
-            const tot = m.ups.rtotal !== null ? Math.round(m.ups.rtotal) : null;
-            loadVal = '<span class="dim">' + w + (tot !== null ? ' / ' + tot : '') + ' W &middot;</span> ' +
-                      Math.round(m.ups.load) + '%';
-          } else {
-            loadVal = Math.round(m.ups.load) + '%';
-          }
-          H.push(row('', kv('Load'), vv(loadVal), c.ups_realpower || c.ups_load));
-        }
+        H.push(row('', kv('Load'), vv(loadVal), c.ups_realpower || c.ups_load));
       }
     }
 
@@ -856,7 +944,8 @@ class FlatServerCard extends HTMLElement {
         else if (b.age === null || b.age > this._th.backup_client_amber_h * 3600000) cls = 'warn';
         let val = b.age === null ? '--' : this._fmtAge(b.age) + ' ago';
         if (b.problem) val = 'problem &middot; ' + val;
-        if (!b.online) val += ' <span class="dim">&middot; offline</span>';
+        if (b.online === false) val = subLead(val, 'offline');
+        else if (b.online === null) val = subLead(val, 'status unknown');
         H.push(row(cls, kv(esc(b.name)), vv(val), c.backup_client, c.urbackup_url));
       }
       if (m.bkHa) {
@@ -881,7 +970,7 @@ class FlatServerCard extends HTMLElement {
         if (o.mons.some(x => x.down)) { ocls = 'warn'; dot = 'dot off'; }
         else if (o.mons.some(x => x.na) || o.stale) { ocls = 'warn'; }
         if (o.ageMs !== null) {
-          oval += ' <span class="dim">&middot; ' + this._fmtAgeS(o.ageMs) + ' ago</span>';
+          oval = subLead(oval, this._fmtAgeS(o.ageMs) + ' ago');
         }
       }
       H.push(row(ocls, '<span class="' + dot + '"></span>' + kv('Outside'), vv(oval),

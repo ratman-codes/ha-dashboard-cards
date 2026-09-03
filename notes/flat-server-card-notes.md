@@ -8,8 +8,56 @@ plumbing pattern.
 
 ## Current version
 
-v1.7 — 40,360 B, FNV-1a `f50f9a37`. Header self-documents the full YAML shape
+v1.12 — 46,274 B, FNV-1a `ad33adc4`. Header self-documents the full YAML shape
 (placeholder entity ids) and per-version changelog.
+
+v1.10–v1.12 came out of a full source audit (every behavioral finding confirmed
+in a jsdom harness before it was called a finding):
+
+v1.12: **audit bundle, no visible change for a healthy card** — a full-config
+mixed-state render is byte-identical to v1.11. (a) `backup_client_online` is
+three-valued: an unavailable sensor now says "agent status unknown" instead of
+being reported as offline. (b) `_ageMs` clamps at 0. (c) `ups_realpower_total`
+accepts a quoted numeric string as the literal. (d) `set hass` skips the
+rebuild when none of the card's own entities changed — the ids are harvested
+from the config automatically (any entity-id-shaped string at any depth, plus
+the derived `*_response_time` ids), so no hand-kept list; the 30 s tick still
+re-renders, bounding any miss at 30 s. (e) `window.open(..., 'noopener')`;
+long-press only on the primary button; rows get `user-select: none` / no touch
+callout; the reds-first alert sort now runs after every alert is pushed.
+(f) dead code removed.
+
+v1.11: **Mounts freshness honesty.** If the last-report timestamp helper is
+empty or unparseable while the mounts JSON is still valid, the card used to
+treat unknown age as fresh ("6 / 6 mounted", no alert). It now flags amber
+"Mounts: no report — no timestamp" and marks the Last report row stale. Bad
+JSON still yields the single "no data" alert; with no timestamp helper
+configured nothing changes.
+
+v1.10: **UPS battery-charge alerts.** `thresholds.batt_amber` (50) /
+`batt_red` (20) were documented alongside the alerting thresholds but only
+tinted the Battery bar, and only while on battery — an Online UPS at 12% read
+"All clear". They now push "UPS battery low N%" (amber / red) whenever charge
+is known, regardless of UPS status, and the bar tint follows. Accepted side
+effect: amber for a few hours after a real outage while the battery recharges.
+
+v1.9: **Outside freshness robustness.** The "checked N ago" / stale check now
+uses the NEWEST `last_updated` across `outside_checked` (a string OR a list) AND
+each monitor's derived `*_response_time` sensor. HA advances `last_updated` (and
+`last_reported`) only on a VALUE change, not on every poll — so a rock-steady
+ping's response-time sensor freezes its timestamp even while the integration
+polls fine, and the old single-sensor check then false-flagged "stale". Taking
+the newest across a WAN monitor (whose latency moves every poll) fixes it. Pure
+render change: no new YAML, no HA-side change.
+
+v1.8: **section reorder + subtext-first default.** The System section moved up to
+sit directly under Storage (order: Storage / System / Mounts / Services / Power /
+Backups / Outside). Every row that pairs a main value with a secondary note now
+renders `<grey sub> · <white main>` — subtext plus the separator dot grey and
+leading, main value white on the right — via one `subLead()` helper that is the
+default going forward (parity "next in Nd", disks "N unknown", uptime "rebooted",
+backup "offline", Outside age; the Load row was refactored onto the same helper).
+Pure render change: no new YAML, no HA-side change.
 
 v1.7 adds **live wattage to the Power → Load row**: with the realpower entities
 configured the row reads `current / total W · load%` (the watts and the
@@ -59,7 +107,7 @@ icon circle 10px from the border-box edge, text at 56px — remember your own
 first) even while collapsed. Header tap = expand (grid-rows animation, no
 toggle glyph); long-press any row = more-info; Array / torrent / backup-client /
 Outside rows tap through to their web UIs (configurable urls). Sections:
-Storage / Mounts / Services / System / Power / Backups / Outside. Alert-only
+Storage / System / Mounts / Services / Power / Backups / Outside. Alert-only
 checks (no row): server notifications count, CPU temp (unit-aware default
 85C/185F). Parity next-due is derived from an `input_datetime` anchor (a
 companion automation bumps it to today whenever a parity check completes,
@@ -69,9 +117,11 @@ thresholds are card YAML. data_size sensors are unit-converted (B..TiB) for
 
 Outside row (v1.6): `outside_monitors: [{name, entity}]` lists the Kuma status
 sensors to show; the row reads `● Outside · VPS ok · Cloud ok · 40s ago`.
-`outside_checked` names any sensor Kuma re-reports every poll (response time is
-the natural pick) — its `last_updated` drives the "checked N ago" suffix, because
-status sensors only change on transitions and would read stale while healthy.
+`outside_checked` (v1.9: a string or a list) plus each monitor's derived
+`*_response_time` sensor feed the "checked N ago" suffix — the freshest
+`last_updated` among them wins. HA advances `last_updated`/`last_reported` only on
+a VALUE change (not every poll), so a rock-steady response-time sensor freezes; a
+WAN monitor whose latency moves every poll keeps the row honest.
 Amber alerts: a monitor `down`, a monitor with no data, ALL monitors unavailable
 ("Outside monitor unreachable"), or the last check older than
 `thresholds.outside_stale_min` (default 5). `pending` shows as text without
@@ -84,9 +134,15 @@ literal number for the max VA/W. With `ups_realpower` present the Load row reads
 is omitted if only `ups_realpower` is set; neither key = the original plain
 `load%`. Values round to whole watts.
 
-Availability honesty: unavailable renders '--'/amber, never fake-green; the
-backup client's image-backup sensors are ignored by design where image backups
-are disabled.
+Availability honesty: unavailable renders '--'/amber, never fake-green — this
+includes an unreadable mounts heartbeat (v1.11) and an unavailable backup-agent
+online sensor (v1.12: "status unknown", not "offline"); the backup client's
+image-backup sensors are ignored by design where image backups are disabled.
+
+Re-render gate (v1.12): the card rebuilds only when one of its harvested entity
+ids changes identity in `hass.states`, or on the 30 s age tick. A future config
+key whose entity id isn't lowercase `domain.object_id` shaped would be missed by
+`_collectIds` — fix the regex there rather than adding a hand-kept list.
 
 ## Companion automations (pattern)
 
@@ -111,5 +167,8 @@ are disabled.
   list them in `containers:`.
 - The NUT integration's battery_runtime and all System Monitor sensors ship
   disabled by default.
-- Uptime Kuma status sensors' `last_updated` is not a freshness signal (they only
-  change on transitions) — hence `outside_checked`.
+- Uptime Kuma freshness: HA advances `last_updated`/`last_reported` only on a
+  VALUE change, so BOTH a status sensor (changes on transition) and a steady
+  response-time sensor freeze while the integration polls fine — v1.9 takes the
+  newest `last_updated` across all the monitors' response-time sensors so a
+  rock-steady ping can't false-"stale".
