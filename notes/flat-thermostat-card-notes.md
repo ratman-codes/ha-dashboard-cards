@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.12 (eco-while-home warning + period-total tile + reactive peak 2026-08-28; permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.12.1 (weekly heatmap = days-as-columns 2026-08-31; eco-while-home warning + period-total tile + reactive peak 2026-08-28; permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -38,7 +38,13 @@ stat row, daily bars auto-aggregating weekly past 35 days, and a TRANSPOSED
 time-of-day heatmap — 8 fixed 3-hour band columns across the top, dates down
 as rows newest-first (Today on top), every row labeled, uniform 20px square
 cells at every range, grid optically centered (panel center nudged a quarter
-of the label column). RECORDS: peak-day hero, top-5 ranked days (tap a rank to
+of the label column). On weekly-aggregated ranges (past 35 days) the heatmap
+trades the time-of-day columns for the 7 DAYS OF THE WEEK (v2.12.1): initial
+headers with full day names in tooltips, each cell that day's total runtime
+sourced from the period's own day statistics (so the weekly grid ignores the
+120-day hour cap and covers the whole range), a small "WEEK OF" corner header
+over the plain week-start row labels, today's cell dash-outlined, future days
+this week empty; daily ranges keep the 3-hour band grid. RECORDS: peak-day hero, top-5 ranked days (tap a rank to
 drill into that day's TODAY view), and a runtime-vs-outdoor-high scatter of
 the last 60 days with a dashed least-squares trend line that hides itself when
 r-squared < 0.1. The middle summary tile tracks the selected window and shows the
@@ -133,4 +139,5 @@ active but you're home - tap the leaf to exit"). Config key:
 flag, zero behavior change, unconfigured = never warns. YAML-authoring
 lesson from the ship: always quote automation aliases containing colons.
 Version trail: v2.10 2f0cfa12 -> v2.11 745fb705 -> v2.11.1
-1fd75b72 -> v2.11.2 ddd39a78 -> v2.12 def53c9c (118,211 -> 133,129 B).
+1fd75b72 -> v2.11.2 ddd39a78 -> v2.12 def53c9c -> v2.12.1 d4cfc653
+(118,211 -> 135,783 B).

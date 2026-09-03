@@ -1,45 +1,84 @@
-# flat-climate-card — notes (sanitized repo copy; authoritative doc lives in the private project)
+# flat-climate-card — sanitized notes (repo copy)
 
-Whole-house climate card for a fleet of 5 BLE temperature/humidity meters (3 indoor rooms, 2 outdoor) heard via ESPHome Bluetooth proxies, plus the thermostat's own thermometer as a sixth line. Deployed v1.6.4; repo source is byte-identical to the live dashboard resource.
+Deployed as a data: URL dashboard resource (see README). **Repo copy of the JS is
+NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate sanitization:**
+the deployed card bakes the household's hourly-capable weather entity into
+`DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
+`weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
+Deployed v2.1.1 = 107,150 B, FNV-1a dc8824c7; this repo copy = 107,363 B, FNV-1a 4f830560.
+Everything else is identical. Full private design history lives in the project notes.
 
-## Layout
-- **Hero row (170px, always visible):** big indoor-vs-outdoor delta ("5.8 °F cooler outside") with the OPEN WINDOWS chip directly beneath it (top-left), over a 24h temperature overlay of six solid series + two translucent dashed average lines. Legend bottom-left in **grouped-by-meaning order: the three indoor rooms, then Hall (the thermostat — indoor), then the two outdoor sensors**; the same order everywhere the six appear (legend, strip, scrub tooltip). **The chart itself is text-free since v1.6** (the old outdoor max/min direct labels and avg end-labels are gone) — series identity lives in the legend, the scrub tooltip, and spotlight. Title pill toggles the expansion (hover wash per house style). No tap action on the hero — touch/hover only scrubs (removed v1.3; it fought mobile tap-scrubbing).
-- **Legend tap = spotlight (v1.6):** tap a legend item to draw that line full-strength (2.5px, opacity 1) with a single on-chart name+value label while every other line dims to 18% and the avg dashes to 12%; tap again (or another item) to release. Scrubbing works during spotlight (only the focused line keeps its dot).
-- **Scrub (overhauled v1.6→v1.6.4):** pointermove on any graph = vertical hairline + a tooltip panel listing every solid series' value at that time (the hero tooltip adds "in avg"/"out avg" rows; averages stay out of the series list — they're derived). The panel is **position:fixed at the ha-card level** (escapes overflow:hidden and the humidity row's press-transform containing block; clamped on-screen, flips sides near the viewport edge), **anchored to the top of the graph and sliding only horizontally** — it never chases the cursor vertically (v1.6.2). Scrub is **band-gated** (v1.6.1) to each graph's plot band, so hovering the headline or legend doesn't summon it. Each line gets a **7px series-colored dot with a card-bg ring** riding its curve at the hairline (v1.6.2/v1.6.3); **dot position AND tooltip value are linearly interpolated between the two bracketing history points** (v1.6.4) — sparse reporters (thermostats that only post on meaningful changes leave hour-plus gaps) previously parked the dot far off the hairline under nearest-bucket snapping. A dot hides when the hairline is outside its line's data range. `scrub_dots: false` removes the dots (hairline + tooltip + interpolation stay).
-- **Average dashes (v1.5; dashed = computed, solid = measured):** in-avg (#e6c193) + out-avg (#8fb8e8), 2px dash, default opacity 0.35 on the hero (`avg_opacity`; 0 hides). The out-avg dash IS the sun-trimmed value the headline reports — the trim is visible where the dash refuses to follow a solar spike. Averages are bucket-time-aligned across available sensors, trim applied per bucket.
-- **Hall line (v1.5):** the thermostat's temperature sensor, solid violet #a774d6, seated in the indoor group. Display-only by default — NOT in the indoor average (thermostat-embedded sensors run slightly warm); `hall: {in_average: true}` counts it, `hall: false` removes the line.
-- **Expansion (grid-rows 0fr↔1fr + border-width 0↔1px):** **averages row (v1.6):** in-avg + out-avg full-visibility dashed over their own 24h graph with live numbers in the reading ("76.9 in · 75.1 out · Δ 1.8" — the Δ equals the headline by construction) + its own scrub; then the humidity row (outdoor vs indoor, 2 series; row tap → more-info) + six-room now-strip (temp big, name, RH small; cell tap → more-info).
-- **Chip:** green or absent, never red. ON at delta ≥ on_delta (default 3 °F), OFF below off_delta (1.5) — hysteresis so it never flickers.
+## What it is
+Whole-house climate card for a fleet of BLE temperature/humidity meters plus the
+thermostat's own thermometer.
 
-## The three data-driven design decisions
-1. **Sun-spike trim (`sun_cap`, default 4 °F).** One outdoor sensor sits near glass/wall surfaces and reads +9 to +11.8 °F over the other on sunny afternoons (radiant heating of the sensor, not the air; clean-hour true difference ≤ 2.5 °F; ~1.4 °F LOW overnight from open-sky radiation). No honest reposition existed → each outdoor temp counts at most `sun_cap` above the coolest outdoor sensor before averaging. Graph lines stay raw. Legitimate warm-side air (that side is the intake) still counts up to the cap.
-2. **No moisture gate on the chip.** Historical analysis (95 h of computed dew point via Magnus from T+RH) showed local summer dew point never leaves a narrow ~63–68 °F band — a textbook Td ≤ 60 gate would never fire, and an RH ceiling is permanently pessimistic (cool humid-climate air is always high-RH) → removed (v1.4). Bonus: computed dew point is IMMUNE to the solar sensor-heating (Td agreement ~0.6 °F between the two outdoor sensors even mid-spike). If a moisture rule is ever wanted again, re-add as a dew-point gate thresholded from a real offending evening, never RH.
-3. **The sixth color, by measurement (v1.5).** A red sixth line was requested; an OKLab distance sweep showed red's best case ≈7 ΔE from the nearest existing series (the orange) — would be the most confusable pair on the chart — while violet #a774d6 sits ≈14 from its nearest neighbor (the blue), the one hue region the five left empty, and passes 3:1 contrast on the dark surface. Violet shipped after both were mocked. All-pairs CVD for six braided series is formally unpassable — identity is carried by legend + tooltip + spotlight + the hall line's flattest-in-the-braid position. Do not add a seventh series.
+- **Hero (always visible):** indoor-vs-outdoor delta headline + OPEN WINDOWS chip
+  (delta-only with hysteresis; a moisture gate was deliberately removed after
+  historical dew-point analysis — reasoning in the source header) over a 24h
+  six-series temperature overlay with translucent dashed average lines.
+  Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
+  Legend tap = spotlight; band-gated scrub with graph-anchored viewport-fixed
+  tooltips and interpolated on-curve dots (`scrub_dots: false` removes dots).
+- **Expansion:** averages row (live in/out/Δ readings, dashed) → **moisture row
+  (v1.7):** in/out averages across ALL humidity sensors, dashed, own color pair
+  (in `#e0834e` / out `#38bfd8`); tapping the row title toggles **Humidity ⇄ Dew point**
+  (Magnus per-sensor per-bucket then side-averaged; dew mode: min-span 10°F scale,
+  Δ readout, threshold colors plain <60 / amber 60–65 / orange 65+; mode persists in
+  localStorage, default via `moisture_mode`) → per-room now-strip → **"History & stats"
+  strip (v2.0):** opens the pop-out.
+- **History pop-out (v2.0–v2.0.2):** card-rendered full-screen overlay (zero
+  dependencies, zero HA-side entities; Esc/✕/backdrop close). Range tabs
+  24h/7d/14d/1m/3m/6m/1y. 24h = raw history + 12h hourly forecast from the weather
+  entity (dotted, outdoor only — indoor is never forecast) with a predicted-venting
+  strip and tile (forecast outdoor ≥ `on_delta` below current indoor, dew forecast
+  shown as information, not a gate). 7d+ = `recorder/statistics_during_period`
+  min/mean/max (hour period ≤14d, day beyond; zero-poisoned rows filtered) drawn as
+  dashed means with min–max envelope bands (edges smoothed display-only via
+  `band_smooth`, default 1; tiles keep raw extremes). Room picker overlays ≤3 sensors
+  as solid lines with envelopes; single pick swaps the room tile to that sensor.
+  Venting heatmap = mean Δ by hour × weekday (square cells, all 24 hour labels,
+  hover tooltip; capped at the last 30 days on seasonal tabs). Faint overlays on
+  24h/7d: window-open (green, from contact sensors), cooling (blue) / heating
+  (heat-orange) from the thermostat's `hvac_action` history. Tiles: venting offered
+  h/day + share captured (chip-on hours with a window actually open, past 7d),
+  range extremes (sun-trimmed), warmest/selected room, muggy hours (outdoor dew
+  ≥65/≥60 share). Both pop-out charts scrub like the card rows.
+- **Sun-spike trim** (`sun_cap`, default 4°F): an outdoor sensor heated by reflected
+  sun can't distort the headline/averages; graph lines stay raw. Dew point is immune
+  to that heating (temperature up, RH down cancel in Magnus), so the dew view needs
+  no trim.
+- **Availability honesty:** unavailable sensors show '--' and drop from averages;
+  nothing is ever coerced to 0.
 
 ## Config
-`type: custom:flat-climate-card` (defaults baked). Overridables: `hours`, `indoor: [{entity, humidity, name, color}...]`, `outdoor: [...]`, `hall: {entity, humidity, name, color, in_average}` (or `false`), `sun_cap` (0 = pure min-of-outdoor, large = pure average), `avg_opacity` (default 0.35), `scrub_dots` (default true), `chip: {on_delta, off_delta, label}`. Humidity graph uses outdoor[0]+indoor[0] humidity entities. Delta = avg(available indoor [+hall if in_average]) − sun-trimmed avg(available outdoor); card-internal, no helper entities.
+`type: custom:flat-climate-card` — defaults cover the original household; override:
+`hours`, `indoor: [{entity, humidity, name, color}...]`, `outdoor: [...]`,
+`hall: {entity, humidity, name, color, in_average}` or `false`, `sun_cap`,
+`avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label}`,
+`moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]` or `false`,
+`hvac_entity` or `false`, `forecast_entity` (hourly-capable weather entity) or `false`,
+`band_smooth` (0 = raw envelopes).
 
-## Colors
-Solids (hardcoded per house rule): indoor #d95926 / #c98500 / #d55181, hall #a774d6, outdoor #3987e5 / #199e70; chip #4caf50; avg dashes #e6c193 / #8fb8e8.
+## Version history (details in the source header)
+- v1.0–v1.2 (2026-08-05): initial "option 2+5" build; hero condensed; narrow-column fit.
+- v1.3/v1.4 (2026-08-10): hero tap removed; sun-spike trim; chip moisture gate removed
+  after dew-point analysis (delta-only).
+- v1.5 (2026-08-17): thermostat (hall) line, indoor group, display-only by default;
+  translucent average dashes.
+- v1.6–v1.6.4 (2026-08-17/18): readability pass — viewport-fixed anchored tooltips,
+  text-free hero, legend spotlight, averages row, band-gated scrub, interpolated dots.
+- v2.0.2 (2026-08-31): moisture-row rework (v1.7) + history pop-out (v2.0) + pop-out
+  scrub & band calming (v2.0.1) + heatmap polish (v2.0.2), shipped as one release.
+  First repo-sanitized version (see top).
+- v2.1 (2026-08-31): seasonal heatmap — 3m/6m/1y tabs draw hour x MONTH rows
+  (chronological; hourly stats in 45-day chunks; empty cells until data
+  accumulates) — and a "vs prior period" outdoor-mean line in the extremes
+  tile (same-length preceding window, cached, silently absent without data).
+- v2.1.1 (2026-08-31): 3m heatmap rows are Monday-aligned weeks labeled by
+  start date; 6m/1y keep months.
 
-## Availability honesty
-Unavailable sensors show '--' and drop out of the averages; if all outdoor sensors drop, the headline goes '--', the chip hides, and the hero dims. Nothing is coerced to 0.
-
-## History plumbing
-`history/history_during_period` WS (REST fallback), hourly-averaged buckets, last point pinned to live state, 5-min refresh, shared y-scale per graph (average lines included in the scale pass), 8 entities per call.
-
-## Version history
-- v1.0 (25,412 B, FNV-1a 7b183b6c): initial build; headless-Chromium mock-hass verified (collapsed/expanded/scrub/outdoor-dropout).
-- v1.1 (25,636 B, 1e5642e3): hero condensed 224→170px; chip moved beside the legend.
-- v1.2 (25,909 B, 7a5665bf): chip nowrap + chip/legend line fits one row down to ~400px card width. Lesson: the test bed was wider than the real dashboard column and the chip wrapped on install — verify at the deployment width; a 400px fit assertion now lives in the test driver.
-- v1.3 (27,203 B, 86b35356): hero tap-to-more-info removed; sun-spike trim added.
-- v1.4 (27,804 B, 20c34f83): chip moisture gate removed (delta-only).
-- v1.5 (32,173 B, c074a151): hall line (solid violet, indoor group, display-only default) + translucent average dashes @0.35 + chip back to top-left.
-- v1.6 (38,060 B, 9ace3699): viewport-fixed tooltips at the ha-card level (unclipped, edge-flip), all on-chart text removed, legend tap-to-spotlight, averages row with live numbers, avg rows in the hero tooltip.
-- v1.6.1 (38,745 B, 12cf8c16): scrub band-gated to each graph's plot band.
-- v1.6.2 (40,436 B, f5a91543): graph-anchored readout (panel fixed-y, slides horizontally only) + on-curve scrub dots.
-- v1.6.3 (41,128 B, b83d6c0a): dots 9px white → 7px series-colored with card-bg ring.
-- v1.6.4 (42,324 B, bfafe4ae): scrub interpolates between bracketing points instead of nearest-bucket snapping (sparse-reporter dots sat visibly off the hairline mid-gap); new `scrub_dots: false` config. **Deployed + signed off.**
-
-## Verification method
-Headless Chromium + a mock-hass harness (stubbed states + callWS synthetic history — the hall generator reports every 3h to reproduce a sparse-reporting thermostat — harness-injected ha-card styles) driving expand/scrub/unavailable/narrow-width/tap assertions plus v1.5 checks (6 solids + 2 dashes at 0.35, group order across all three surfaces, chip position) and v1.6.x checks (tooltip fixed + on-screen at the right edge, band-gating zones, anchored-y panel, spotlight dim/release, averages-row numbers, dot count/coloring, max hairline offset ≤1px under the sparse generator) — no HA instance needed.
+## Verification
+Headless Chromium harness: stubbed hass (raw history incl. a sparse reporter,
+synthetic statistics incl. a deliberately zero-poisoned row, contact/hvac history,
+forecast via subscription and service fallback); ~45 assertions across card + pop-out
+at 470px and 400px widths. Rebuildable from this description; no HA needed.

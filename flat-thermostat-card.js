@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.12 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.12.1 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -212,6 +212,18 @@
         ride the _tileEnsure fetch / the open PERIOD view's data. Peak
         still excludes the still-counting today. The 14d bar-chart
         highlight stays on the 14d peak (the graph only shows 14 days).
+     v2.12.1 (owner, 2026-08-31; mockup pick B of two label options):
+        WEEKLY HEATMAP = DAYS AS COLUMNS. When the PERIOD range exceeds
+        35 days (bars go weekly), the heatmap's 8 time-of-day columns
+        stop earning their keep - bands blur when summed over 7 days.
+        Weekly rows now carry 7 weekday columns (S M T W T F S headers,
+        full day name in the tooltip), each cell = that day's TOTAL
+        runtime from the period's own day stats (so the weekly grid
+        ignores the 120-day hour-source cap), a small "WEEK OF" header
+        sits over the label column (the row labels stay plain week-start
+        dates), today's cell gets a dashed series-colored outline, and
+        future days this week render empty. Daily ranges (7d-35d) keep
+        the 3-hour band grid untouched.
      DEFAULT-LAYER RIBBON (v2.9, owner request): the same full ribbon
      (band + ticks + labels + tooltip) ALSO renders on the default
      expanded panel - "Ran during - today" - between the three stat
@@ -636,6 +648,8 @@ class FlatThermostatCard extends HTMLElement {
         .vhc { flex: 0 0 auto; border-radius: 3px; }
         .vhth { flex: 0 0 auto; text-align: center; font-size: 10px; color: var(--secondary-text-color);
           opacity: .85; line-height: 1.6; }
+        /* v2.12.1: "WEEK OF" corner header over the weekly grid's label column */
+        .vhlab.vhwof { font-size: 8px; letter-spacing: .8px; opacity: .7; }
         .vrrow { display: flex; align-items: center; gap: 8px; padding: 3px 4px; font-size: 11px;
           border-radius: 6px; cursor: pointer; transition: background .15s; }
         @media (hover: hover) { .vrrow:hover { background: rgba(255,255,255,.05); } }
@@ -2058,7 +2072,7 @@ class FlatThermostatCard extends HTMLElement {
       '<div class="vsect">Hours per ' + (weekly ? 'week' : 'day') + (weekly ? ' &middot; auto (range &gt; 5 weeks)' : '') + '</div>' +
       '<div id="vpb"></div>' +
       '<div class="vxax" style="margin-right:28px"><span>' + this._shortDate(days[0].t) + '</span><span>' + this._shortDate(days[days.length - 1].t) + '</span></div>' +
-      '<div id="vhm"' + (heatCapped ? ' title="hour detail: last 120 days"' : '') + '></div>';
+      '<div id="vhm"' + (heatCapped && !weekly ? ' title="hour detail: last 120 days"' : '') + '></div>';
     // bars
     let peakIdx = -1;
     cols.forEach((x, i) => {
@@ -2077,49 +2091,69 @@ class FlatThermostatCard extends HTMLElement {
       color: bar, colorLite: lite, unit: 'h', height: 96, head: 1.2,
       avg: weekly ? total / cols.length : avgDay, peakIdx: peakIdx,
     });
-    // heatmap: 6 three-hour bands x day/week columns
     // heatmap, TRANSPOSED (v2.6.6, owner design): time-of-day bands are 8 FIXED
     // COLUMNS across the top, dates run DOWN as rows, and the card simply grows
     // taller with longer ranges. Fixed column count = every cell is the same
     // 20px square at every range - the column-squeeze problem cannot exist.
+    // WEEKLY VARIANT (v2.12.1, owner mockup pick B): past 35 days the rows are
+    // weeks, and time-of-day bands stop earning their keep (they blur when
+    // summed over 7 days) - columns become the 7 DAYS OF THE WEEK, each cell
+    // that day's total runtime, a small "WEEK OF" header sits over the label
+    // column, row labels stay the plain week-start dates. Day totals come from
+    // the period's own day stats, so the weekly grid ignores the 120-day hour
+    // cap; today's cell gets a dashed outline, future days render empty.
     const BANDS = ['12-3a', '3-6a', '6-9a', '9a-12', '12-3p', '3-6p', '6-9p', '9p-12a'];
     const BANDS_SHORT = ['12a', '3a', '6a', '9a', '12p', '3p', '6p', '9p']; // band START, column headers
-    const heatRows = weekly ? cols.filter((c) => c.t + 7 * 86400000 > d.heatA) : days.filter((c) => c.t >= d.heatA);
+    const DAYS_SHORT = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    const DAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const nHm = weekly ? 7 : 8;
+    const heatRows = weekly ? cols : days.filter((c) => c.t >= d.heatA);
     const hByT = {}; heatRows.forEach((c, i) => hByT[c.t] = i);
-    const grid = heatRows.map(() => [0, 0, 0, 0, 0, 0, 0, 0]);
-    (d.hours || []).forEach((r) => {
-      if (r.change == null || r.change <= 0) return;
-      const rd = new Date(r.start);
-      const band = Math.floor(rd.getHours() / 3);
-      const key = new Date(rd.getTime());
-      key.setHours(0, 0, 0, 0);
-      if (weekly) key.setDate(key.getDate() - key.getDay());
-      const ri = hByT[key.getTime()];
-      if (ri != null) grid[ri][band] += r.change;
-    });
+    const grid = heatRows.map(() => new Array(nHm).fill(0));
+    if (weekly) {
+      days.forEach((x) => {
+        const wd = new Date(x.t);
+        const dow = wd.getDay();
+        wd.setDate(wd.getDate() - dow); wd.setHours(0, 0, 0, 0);
+        const ri = hByT[wd.getTime()];
+        if (ri != null) grid[ri][dow] = x.v;
+      });
+    } else {
+      (d.hours || []).forEach((r) => {
+        if (r.change == null || r.change <= 0) return;
+        const rd = new Date(r.start);
+        const band = Math.floor(rd.getHours() / 3);
+        const key = new Date(rd.getTime());
+        key.setHours(0, 0, 0, 0);
+        const ri = hByT[key.getTime()];
+        if (ri != null) grid[ri][band] += r.change;
+      });
+    }
     let maxCell = 0;
     grid.forEach((c) => c.forEach((v) => { if (v > maxCell) maxCell = v; }));
     const hm = gv.querySelector('#vhm');
     const SIDE = 20, GAP = 2, PITCH = SIDE + GAP;
     const LABW = 51; // 46px label basis + 5px padding (content-box)
     const innerW = Math.max(160, (hm.clientWidth || this._el.gview.clientWidth || 452) - 4);
-    const gridW = 8 * PITCH - GAP;
+    const gridW = nHm * PITCH - GAP;
     // optical centering (v2.6.9): panel center nudged right by a quarter of the
     // label column - labels half-count; clamped so they always fit at the left
     const gridLeft = Math.max(LABW + 2, Math.floor((innerW - gridW) / 2 + (LABW + 2) / 4));
     const hpad = gridLeft - LABW - 2;
-    // header row: band-start times over each column
+    // header row: band-start times (daily) or weekday initials (weekly)
     const head = document.createElement('div'); head.className = 'vhrow';
     head.style.paddingLeft = hpad + 'px';
     head.style.marginTop = '14px'; // spacing formerly provided by the removed section caption
-    const hspace = document.createElement('div'); hspace.className = 'vhlab'; head.appendChild(hspace);
-    BANDS_SHORT.forEach((t, i) => {
+    const hspace = document.createElement('div'); hspace.className = 'vhlab';
+    if (weekly) { hspace.classList.add('vhwof'); hspace.textContent = 'WEEK OF'; }
+    head.appendChild(hspace);
+    for (let hi = 0; hi < nHm; hi++) {
       const th = document.createElement('div'); th.className = 'vhth';
       th.style.width = SIDE + 'px';
-      th.textContent = t;
-      th.title = BANDS[i];
+      th.textContent = weekly ? DAYS_SHORT[hi] : BANDS_SHORT[hi];
+      th.title = weekly ? DAYS_FULL[hi] : BANDS[hi];
       head.appendChild(th);
-    });
+    }
     hm.appendChild(head);
     const todayT2 = this._dayStart(0).getTime();
     // newest-first (v2.6.8): Today at the top, oldest below the fold
@@ -2131,15 +2165,32 @@ class FlatThermostatCard extends HTMLElement {
       // every row is labeled (v2.6.7, owner: sparse Monday-only labels read as random)
       lab.textContent = c.t === todayT2 && !weekly ? 'Today' : this._shortDate(c.t);
       row.appendChild(lab);
-      for (let b2 = 0; b2 < 8; b2++) {
+      for (let b2 = 0; b2 < nHm; b2++) {
         const cell = document.createElement('div'); cell.className = 'vhc';
         cell.style.width = SIDE + 'px';
         cell.style.height = SIDE + 'px';
         cell.style.borderRadius = '4px';
+        let cellT = null;
+        if (weekly) {
+          const cd = new Date(c.t);
+          cd.setDate(cd.getDate() + b2); cd.setHours(0, 0, 0, 0);
+          cellT = cd.getTime();
+        }
+        if (weekly && cellT > todayT2) {
+          cell.style.background = 'transparent'; // future day this week
+          row.appendChild(cell);
+          continue;
+        }
         const v = grid[ri][b2];
         const inten = maxCell > 0 ? v / maxCell : 0;
         cell.style.background = inten < 0.01 ? 'rgba(255,255,255,.04)' : 'rgba(' + rgb + ',' + (0.12 + inten * 0.88).toFixed(2) + ')';
-        cell.title = (weekly ? 'Week of ' + this._shortDate(c.t) : this._shortDate(c.t)) + ' ' + BANDS[b2] + ' \u00b7 ' + this._fmtRuntime(v);
+        if (weekly && cellT === todayT2) {
+          cell.style.outline = '1px dashed ' + lite;
+          cell.style.outlineOffset = '-1px';
+        }
+        cell.title = weekly
+          ? this._shortDate(cellT) + ' \u00b7 ' + this._fmtRuntime(v) + (cellT === todayT2 ? ' so far' : '')
+          : this._shortDate(c.t) + ' ' + BANDS[b2] + ' \u00b7 ' + this._fmtRuntime(v);
         row.appendChild(cell);
       }
       hm.appendChild(row);

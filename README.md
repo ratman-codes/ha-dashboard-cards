@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.12. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.12.1. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -29,7 +29,10 @@ header.)*
   bars from hourly statistics, day pager with native calendar picker),
   PERIOD explorer (7d/14d/30d/60d/season/custom chips, totals + vs-previous,
   daily bars auto-aggregating weekly past 35 days, transposed time-of-day
-  heatmap: 8 fixed 3-hour columns, dates down as rows newest-first), and
+  heatmap: 8 fixed 3-hour columns, dates down as rows newest-first — and on
+  weekly-aggregated ranges the heatmap trades the time-of-day columns for the
+  7 days of the week under a "WEEK OF" corner header, each cell that day's
+  total runtime sourced from day statistics so it covers the whole range), and
   RECORDS (top-5 days, runtime-vs-outdoor-high scatter with a least-squares
   trend line that hides when the fit is noise) — and a RUN-ONCE arm (v2.7):
   long-press the power button while running to schedule "off after this run"
@@ -161,48 +164,70 @@ header.)*
   from the theme's card variables. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
-- `flat-climate-card.js` — v1.6.4. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.1.1. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
   deliberately removed after historical dew-point analysis — reasoning in the
-  source header) over a 24h temperature overlay (six solid series in
-  grouped-by-meaning legend order, indoor rooms + hall then outdoor; the
-  chart itself is text-free — series identity lives in the legend, the scrub
-  tooltip, and legend tap-to-spotlight, which draws one series full-strength
-  with a name+value label while the rest dim) with translucent dashed
-  average lines (dashed = computed, solid = measured; the out-avg dash is
-  exactly the sun-trimmed headline value; opacity via `avg_opacity`),
-  expanding to an averages row with live in/out/delta readings, an out-vs-in
-  humidity row, and a per-room now-strip. Includes a sun-spike trim
-  (`sun_cap`) so an outdoor sensor heated by reflected sun can't distort the
-  headline (graph lines stay raw), an optional in-average hall toggle
-  (`hall: {in_average}`; display-only by default), band-gated hover/tap
-  scrubbing with viewport-fixed graph-anchored tooltips (never clipped by
-  the card edge) and series-colored on-curve dots whose position and values
-  interpolate between history points, so sparse reporters stay on the
-  hairline (`scrub_dots: false` removes the dots), and availability-honest
-  '--' handling. Default entities are this dashboard's sensors; override via
-  indoor:/outdoor:/hall: YAML. Used as `type: custom:flat-climate-card`.
+  source header) over a 24h six-series temperature overlay with translucent
+  dashed averages; line grammar throughout: solid = measured, dashed =
+  computed, dotted = forecast. Legend tap-to-spotlight, band-gated scrubbing
+  with viewport-fixed graph-anchored tooltips and interpolated on-curve dots
+  (`scrub_dots: false`), sun-spike trim (`sun_cap`) so a solar-heated outdoor
+  sensor can't distort the headline, availability-honest '--' handling.
+  Expansion: averages row → moisture row (in/out humidity AVERAGES across
+  all meters, own color pair; title-tap toggles Humidity <-> Dew point —
+  Magnus per sensor per bucket, min-span dew scale, threshold-colored
+  readout, mode persisted in localStorage) → per-room now-strip → a
+  "History & stats" strip opening the v2.0 POP-OUT: card-rendered overlay
+  with 24h/7d/14d/1m/3m/6m/1y tabs — 24h adds a 12h outdoor-only forecast
+  extension (dotted) with a predicted-venting strip and dew check; longer
+  tabs read long-term statistics (min/mean/max, zero-poisoned rows filtered)
+  as dashed means with smoothed min–max envelope bands (`band_smooth`); room
+  picker overlays up to 3 sensors as solid lines; venting heatmap (mean
+  delta by hour x weekday, hover values); window-open / cooling / heating
+  shading from contact + thermostat history; stat tiles incl. venting
+  offered-vs-captured, muggy hours, and a "vs prior period" outdoor-mean
+  comparison; on the seasonal tabs the heatmap rows become weeks (3m) or
+  calendar months (6m/1y) — the seasonal fingerprint; hourly stats fetched
+  in chunks, empty cells until data accumulates. Zero HA-side entities. Default
+  entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
+  and the pop-out keys (contacts/hvac_entity/forecast_entity/popout).
+  Used as `type: custom:flat-climate-card`.
   HA resource id: `f8f2966083af4b31b2588016c24dcc19`.
-- `flat-server-card.js` — v1.7. NAS health + backup confidence card ("is the
+  SANITIZED COPY NOTE: from v2.0.2 this repo file is NOT byte-identical to
+  the deployed blob — the deployed default forecast entity id is
+  location-bearing and is replaced here by a `weather.home` placeholder
+  (set `forecast_entity` in YAML). Deployed v2.1.1 = 107,150 B FNV-1a dc8824c7;
+  repo copy = 107,363 B FNV-1a 4f830560; sole difference is that one
+  constant + comment.
+- `flat-server-card.js` — v1.12. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
   quiet row; problems surface as a red-first alert strip even collapsed) that
   expands to Storage (array state/fill, parity age with next-due countdown from
   an anchor helper, per-disk problem sensors collapsed to "N/N healthy", pool
-  bars), Mounts (host-truth JSON from a cron script via webhook + staleness
+  bars), System (host RAM, HA-VM RAM and HA-VM disk with unit-converted
+  "used / total GB" labels, uptime with reboot amber — moved up under Storage
+  in v1.8), Mounts (host-truth JSON from a cron script via webhook + staleness
   guard), Services (torrent-client WebUI truth, container count, quiet updates
-  row), System (host RAM, HA-VM RAM and HA-VM disk with unit-converted
-  "used / total GB" labels, uptime with reboot amber), Power (UPS status /
-  battery bar / runtime / load — since v1.7 the load row also shows measured
-  watts "current / total W" when the realpower entities are configured),
-  Backups (client + HA age rows) and, since v1.6,
+  row), Power (UPS status / battery bar / runtime / load — since v1.7 the load
+  row also shows measured watts "current / total W" when the realpower entities
+  are configured; v1.10 adds battery-charge alerts, amber/red on the batt_*
+  thresholds regardless of UPS status), Backups (client + HA age rows) and, since v1.6,
   Outside (what an off-site Uptime Kuma instance sees, via the core Uptime Kuma
   integration: "VPS ok - Cloud ok - 40s ago", amber when a monitor is down, no
-  data, or stale; tap opens the Kuma dashboard). Row
+  data, or stale; tap opens the Kuma dashboard — v1.9 makes the "checked N ago"
+  freshness the newest timestamp across the monitors' response-time sensors, so a
+  rock-steady ping's frozen timestamp can't trigger a false "stale"). Every row that pairs a value
+  with a secondary note reads grey-subtext-first then the white value (v1.8:
+  parity, disks, uptime, backup, Outside age — the UPS Load format made the
+  default). Row
   tap-throughs to the server / torrent / backup / Kuma web UIs; long-press = more-info;
   alert-only server-notification and CPU-temp checks; every threshold is card
-  YAML. All entities via YAML config. Used as `type: custom:flat-server-card`
+  YAML. v1.11 makes an unreadable mounts heartbeat amber instead of silently
+  fresh; v1.12 is a no-visible-change audit bundle (re-render only when the
+  card's own entities change, three-valued backup-agent online state, small
+  hygiene). All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
 - `flat-maintenance-card.js` — v1.6. Device maintenance card (connectivity +
