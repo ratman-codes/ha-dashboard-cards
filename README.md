@@ -106,10 +106,14 @@ header.)*
   graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
   label toggles the rest. Used as `type: custom:flat-sensor-stack-card`.
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.7rev4. Roborock control card (Qrevo Edge 2): status
-  header, room-pick clean flow, full cleaning profiles (Away/Default popup
-  editors), maintenance counters. Used as `type: custom:flat-vacuum-card` (see
-  `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
+- `flat-vacuum-card.js` — v2.8.1. Roborock control card (Qrevo Edge 2): status
+  header (state word on the title line while cleaning; mid-run pit-stop, recharge
+  stall and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors),
+  maintenance counters + dock issue rows (dock error, water tanks), dock config
+  (empty mode, wash/empty actions, mop drying toggle), run history. Needs the
+  HA 2026.9+ Roborock integration (python-roborock 7.1.1) for the dock entities;
+  rows sleep when their entity is absent. Used as `type: custom:flat-vacuum-card`
+  (see `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
 - `flat-cat-card.js` — v1.22. Consolidated cats card (pet-tech litter box + two
   feeders + per-cat rows): header-zone expand/collapse with hover strip and
   animated height (grid-rows technique), per-cat litter history panels (tap a cat

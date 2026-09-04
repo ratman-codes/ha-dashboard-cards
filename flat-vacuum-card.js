@@ -1,4 +1,78 @@
-/* flat-vacuum-card v2.7rev4 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.8.1 - custom Lovelace card for the main dashboard.
+   v2.8.1 (2026-09-03, first live run on v2.8): two header wording changes.
+   (1) CLEANING LINE DECLUTTERED: while cleaning, the state word moves UP to
+       the title line ("Vacuum \u2014 Cleaning": white label, grey em dash,
+       state word in the accent color at the TITLE's weight - a dot and then a
+       colon were tried first; both mixed two type treatments inside one
+       phrase and read like a link dropped into the title) and the
+       secondary line carries only "25% done - 1h 35m - Bathroom" - four
+       segments no longer fit the owner's ~430px column and the ROOM (last,
+       by owner rule) was truncating. Only the cleaning state moves; every
+       other state keeps its word on the secondary line (owner picked this
+       over an all-states move after a 14-state mockup: moving every state
+       left three states with an empty second line = card height jumps).
+   (2) "Going to wash mops" -> "Returning for pit stop": the device sends the same
+       status code (going_to_wash_the_mop) for ANY mid-run return to the dock
+       - the first v2.8 run logged going_to_wash_the_mop -> emptying_the_bin
+       with no wash - so the label is neutral about the reason while still
+       saying it is in motion ("Dock pit stop" alone read as static). The
+       at-dock states (Washing mops / Emptying bin) say which service.
+   (3) "Attaching mops" added to the dock-activity map: on a two-sweep run the
+       robot reports attaching_the_mop for ~10 s when it picks the pads up
+       between passes (seen 2026-09-03 17:51:58); unmapped, that status fell
+       through to the idle Docked line mid-run.
+   v2.8 (2026-09-03): POST-DOCK-FIX REV. HA core 2026.9.0 bumped
+   python-roborock 5.31.1 -> 7.1.1, which maps this dock's type code 38 -
+   the Dock device grew from 3 to 14 entities (dock error sensor, strainer
+   counter, empty-mode select, two water-tank problem sensors, three action
+   switches). The v2.7 dormant rows (dock error row + token, Cleaning tray
+   counter, Dock empty mode) woke on their own; this rev adds what the
+   survey found and fixes two header bugs that were never upstream-bound:
+   (1) DRYING ROW -> SWITCH: drying_entity default is now
+       switch.qx_revo_ultra_2_dock_mop_drying (the binary sensor is
+       deprecated by the integration, removed in 2027.3). Same on/off
+       reading; the row gained a toggle so drying can be started/stopped.
+   (2) TANK ISSUE ROWS: dirty_tank_sensor / clean_tank_sensor (dock
+       problem-class binaries) render amber issue rows in Maintenance
+       ("Dirty water tank - needs emptying" / "Clean water tank - needs
+       refilling"), feed the header's amber "dock" token and the group
+       summary. Dormant when absent; absent = no problem.
+   (3) EMPTY MODE WRITABLE: the Dock empty mode chip is a dropdown
+       (select.select_option over the entity's own options; the
+       SET_DUST_COLLECTION_MODE rejection noted in v2.1 predates the
+       dock-type fix). Deliberately kept as a plain chip - set-once setting.
+   (4) DOCK ACTIONS ROW (compact, low priority by owner call): one Config
+       row with two chips, "Wash mops" / "Empty bin", bound to the
+       mop_wash_switch / dust_empty_switch entities (turn_on when off,
+       turn_off when running; chip tints cyan while the switch is on,
+       8 s optimistic). Row is dormant when both switches are absent.
+   (5) RECHARGE-STALL HEADER STATE: vacuum 'docked' + status 'charging' +
+       cleaning_progress strictly between 0 and 100 = a mid-run recharge
+       stall (owner-confirmed 2026-08-20; every two-sweep run has one).
+       Was falling through to the idle "Docked - cleaned N days ago" line.
+       Now renders "Charging to resume - N% done - elapsed" in cyan with
+       the map button, play suppressed, and the dock button as END RUN
+       (vacuum.stop - cancels the pending job; not yet exercised live).
+   (6) ELAPSED RUN TIME: cleaning_time_sensor (minutes, float, excludes
+       dock time; the sensor HOLDS the last run's value while idle so it is
+       shown ONLY in the cleaning / paused / stall lines) - "Cleaning -
+       34% done - 1h 12m - Kitchen".
+   (7) STARTING LOCK: any start issued from the card (armed play, warning
+       Start chip) renders "Starting..." in cyan and hides play/arm for up
+       to 30 s or until the vacuum leaves docked/idle - the cloud-polled
+       device takes ~15-20 s to move, and a second tap in that gap used to
+       overwrite the run record (2026-07-24 double-record bug).
+   (7b) DRYING REMAINING TIME honors the sensor's unit: 7.1.1 reports
+       hours ('h'), the v2.7 row assumed minutes - "drying - 2h 00m left".
+   (8) 'deep' FILTERED from the mop-mode pickers (Config dropdown + both
+       profile popups) like smart_mode: the a298 rejects wire code 301
+       (snaps back to standard in ~10 s; root-caused 2026-08-17). 7.1.1
+       already dropped it from the device select; the helpers still list
+       it until the owner edits them, so the popup filter stays.
+   Nothing here changes any HA entity; new YAML keys all have baked
+   defaults: dirty_tank_sensor, clean_tank_sensor, cleaning_time_sensor,
+   dust_empty_switch, mop_wash_switch.
+   v2.7rev4 (2026-08-27): HISTORY FIX - the begin/end pairing window in
    v2.7rev4 (2026-08-27): HISTORY FIX - the begin/end pairing window in
    _parseHist widens 6h -> 12h. An away run with a mid-run recharge stall
    ran 6h15m wall clock (2026-08-27: leave 15:05 -> stall 17:08-19:35 ->
@@ -11,8 +85,8 @@
    is now the native vacuum.start service (the old full_cleaning button
    was a cloud ROUTINE on the returned unit - integration creates buttons
    per app routine; none exist on the new device and none are needed).
-   DORMANT-ENTITY PATTERN: the Edge 2 integration currently exposes no
-   dock error sensor, no dock strainer counter, and no empty-mode select.
+   DORMANT-ENTITY PATTERN: the Edge 2 integration (before 2026.9) exposed
+   no dock error sensor, no dock strainer counter, and no empty-mode select.
    Those rows/tokens sleep when their entity is absent from hass.states
    and wake automatically if a future integration update (or lazy cloud
    property creation) adds them. Absent dock error sensor = NO error.
@@ -220,8 +294,13 @@ class FlatVacuumCard extends HTMLElement {
       dnd_begin_entity: 'time.qx_revo_ultra_2_do_not_disturb_begin',
       dnd_end_entity: 'time.qx_revo_ultra_2_do_not_disturb_end',
       child_lock_entity: 'switch.qx_revo_ultra_2_dock_child_lock',
-      drying_entity: 'binary_sensor.qx_revo_ultra_2_dock_mop_drying',
+      drying_entity: 'switch.qx_revo_ultra_2_dock_mop_drying',
       drying_time_entity: 'sensor.qx_revo_ultra_2_dock_mop_drying_remaining_time',
+      dirty_tank_sensor: 'binary_sensor.qx_revo_ultra_2_dock_dirty_water_box',
+      clean_tank_sensor: 'binary_sensor.qx_revo_ultra_2_dock_clean_water_box',
+      cleaning_time_sensor: 'sensor.qx_revo_ultra_2_cleaning_time',
+      dust_empty_switch: 'switch.qx_revo_ultra_2_dock_dust_emptying',
+      mop_wash_switch: 'switch.qx_revo_ultra_2_dock_mop_washing',
       clean_begin_sensor: 'sensor.qx_revo_ultra_2_last_clean_begin',
       clean_area_sensor: 'sensor.qx_revo_ultra_2_cleaning_area',
       run_trigger_entity: 'input_text.vacuum_run_trigger',
@@ -246,6 +325,7 @@ class FlatVacuumCard extends HTMLElement {
   disconnectedCallback() {
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
     if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }
+    if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = null; }
   }
 
   set hass(hass) {
@@ -304,7 +384,10 @@ class FlatVacuumCard extends HTMLElement {
         .hdr ha-icon { --mdc-icon-size: 26px; width: 26px; height: 26px; display: flex;
           align-items: center; justify-content: center; line-height: 0; flex: none; }
         .ht { min-width: 0; flex: 1; }
-        .ht .p { font-size: 14px; font-weight: 500; color: var(--primary-text-color); line-height: 1.3; }
+        .ht .p { font-size: 14px; font-weight: 500; color: var(--primary-text-color); line-height: 1.3;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ht .p .tst { color: ${ACCENT_TEXT}; }
+        .ht .p .tsep { color: #777; font-weight: 400; }
         .ht .s { font-size: 12px; color: var(--secondary-text-color); line-height: 1.3;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .hctl { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -407,6 +490,8 @@ class FlatVacuumCard extends HTMLElement {
         .chip.pressed { transform: scale(.94); }
         .chip.ro { cursor: default; opacity: .55; }
         .chip.ro:hover { background: rgba(255,255,255,.07); }
+        .chip.live { color: #0a2a30; background: ${ACCENT_TEXT}; font-weight: 500; }
+        .chip.live:hover { background: #6fdbe8; }
         .menu { position: absolute; background: #262626; border: 1px solid rgba(255,255,255,.1);
           border-radius: 9px; padding: 4px; z-index: 6; box-shadow: 0 6px 20px rgba(0,0,0,.5);
           min-width: 110px; display: none; }
@@ -499,7 +584,7 @@ class FlatVacuumCard extends HTMLElement {
         <div class="hdr" id="hdr">
           <ha-icon id="hico" icon="mdi:robot-vacuum"></ha-icon>
           <div class="ht">
-            <div class="p">Vacuum</div>
+            <div class="p" id="httl">Vacuum</div>
             <div class="s" id="hsub">--</div>
           </div>
           <span class="hctl" id="hctl">
@@ -614,6 +699,16 @@ class FlatVacuumCard extends HTMLElement {
               <span class="slbl il" id="iss_dock_t">--</span>
               <span class="rt ihint">warn-only</span>
             </div>
+            <div class="srow act irow" id="iss_dirty" style="display:none">
+              <ha-icon class="sic" icon="mdi:water-off" style="color:${AMBER}"></ha-icon>
+              <span class="slbl il">Dirty water tank</span>
+              <span class="rt ihint">needs emptying</span>
+            </div>
+            <div class="srow act irow" id="iss_clean" style="display:none">
+              <ha-icon class="sic" icon="mdi:water-outline" style="color:${AMBER}"></ha-icon>
+              <span class="slbl il">Clean water tank</span>
+              <span class="rt ihint">needs refilling</span>
+            </div>
             <div class="srow act irow" id="iss_water" style="display:none">
               <ha-icon class="sic" icon="mdi:water-alert" style="color:${AMBER}"></ha-icon>
               <span class="slbl il">Water low</span>
@@ -655,7 +750,16 @@ class FlatVacuumCard extends HTMLElement {
               <ha-icon class="sic" icon="mdi:delete-empty-outline"></ha-icon>
               <span class="slbl">Dock empty mode</span>
               <ha-icon class="info" id="i_empty" icon="mdi:information-outline"></ha-icon>
-              <span class="rt"><span class="chip ro" id="c_empty">--</span></span>
+              <span class="rt"><span class="chip" id="c_empty">--</span></span>
+            </div>
+            <div class="srow" id="ract">
+              <ha-icon class="sic" icon="mdi:home-lightning-bolt-outline"></ha-icon>
+              <span class="slbl">Dock actions</span>
+              <ha-icon class="info" id="i_act" icon="mdi:information-outline"></ha-icon>
+              <span class="rt">
+                <span class="chip" id="c_wash" style="display:none">Wash mops</span>
+                <span class="chip" id="c_dust" style="display:none">Empty bin</span>
+              </span>
             </div>
             <div class="srow" id="rvol">
               <ha-icon class="sic" icon="mdi:volume-high"></ha-icon>
@@ -686,7 +790,10 @@ class FlatVacuumCard extends HTMLElement {
               <ha-icon class="sic" id="dryic" icon="mdi:hair-dryer"></ha-icon>
               <span class="slbl">Mop drying</span>
               <ha-icon class="info" id="i_dry" icon="mdi:information-outline"></ha-icon>
-              <span class="rt stat" id="drytxt">--</span>
+              <span class="rt">
+                <span class="stat" id="drytxt">--</span>
+                <span class="sw" id="drysw"><span class="knob"></span></span>
+              </span>
             </div>
             <div class="srow act" id="rbatt">
               <ha-icon class="sic" id="battic" icon="mdi:battery"></ha-icon>
@@ -738,7 +845,7 @@ class FlatVacuumCard extends HTMLElement {
       </div>
     `;
     this._el = {};
-    const ids = ['hdr','hico','hsub','hctl','hmap','hplay','harm','hstart','habort','hpause','hpico','hdock',
+    const ids = ['hdr','hico','hsub','httl','hctl','hmap','hplay','harm','hstart','habort','hpause','hpico','hdock',
       'body','g_auto','auico','ch_auto','asw','b_auto',
       'rdays','dminus','dval','dplus','rwin','cws','cwe','rback','cbk',
       'rdelay','track_delay','dlval','dlin','rnotif','nseg','rwarn','track_notify','ntval','ntin',
@@ -746,6 +853,7 @@ class FlatVacuumCard extends HTMLElement {
       'pvovl','pvttl','pvsub','pvclose','pv_suct','pv_mopi','pv_mopm','pvcancel','pvsave',
       'raway','aico','atxt',
       'g_maint','mico','ch_maint','msum','b_maint','iss_vac','iss_vac_t','iss_dock','iss_dock_t','iss_water',
+      'iss_dirty','iss_clean','ract','c_wash','c_dust','i_act','drysw',
       'g_conf','ch_conf','csum','b_conf',
       'rmopi','c_mopi','rmopm','c_mopm','rempty','c_empty',
       'rvol','track_vol','volval','rdnd','c_dndb','c_dnde','dndsw','rlock','locksw','rbatt','battic','battxt',
@@ -842,9 +950,21 @@ class FlatVacuumCard extends HTMLElement {
           this._svc('input_text', 'set_value', { entity_id: c.run_trigger_entity,
             value: 'manual ' + new Date().toISOString() + ' M:' + fan + '|' + mi + '|' + mm });
         this._svc('vacuum', 'start', { entity_id: c.vacuum });
+        this._lockStart();
       }
       disarm();
     });
+    /* STARTING LOCK (v2.8): the cloud-polled robot takes ~15-20 s to leave
+       'docked' after a start command; during that gap the header reads
+       "Starting..." and play/arm stay hidden so a second tap cannot issue a
+       second start (and overwrite the run record). Cleared early the moment
+       the vacuum state leaves docked/idle. */
+    this._lockStart = () => {
+      this._startUntil = Date.now() + 30000;
+      if (this._startTimer) clearTimeout(this._startTimer);
+      this._startTimer = setTimeout(() => { this._startUntil = 0; this._startTimer = null; this._render(); }, 30000);
+      this._render();
+    };
     el.habort.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this._hass) this._hass.callApi('POST', 'events/vacuum_warning_abort', {});
@@ -852,6 +972,7 @@ class FlatVacuumCard extends HTMLElement {
     el.hstart.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this._hass) this._hass.callApi('POST', 'events/vacuum_warning_start', {});
+      this._lockStart();
     });
     el.hpause.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -861,7 +982,9 @@ class FlatVacuumCard extends HTMLElement {
     });
     el.hdock.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._svc('vacuum', 'return_to_base', { entity_id: c.vacuum });
+      /* during a mid-run recharge stall the robot is already on the dock -
+         the button means END RUN (cancel the pending job) */
+      this._svc('vacuum', this._stall ? 'stop' : 'return_to_base', { entity_id: c.vacuum });
     });
     el.hmap.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -889,6 +1012,7 @@ class FlatVacuumCard extends HTMLElement {
     bindSwitch(el.asw, 'auto', 'automation', c.automation);
     bindSwitch(el.dndsw, 'dnd', 'switch', c.dnd_entity);
     bindSwitch(el.locksw, 'lock', 'switch', c.child_lock_entity);
+    bindSwitch(el.drysw, 'dry', 'switch', c.drying_entity);
     /* min-days stepper */
     [el.dminus, el.dplus].forEach(b => this._press(b));
     const stepDays = (d) => {
@@ -945,9 +1069,8 @@ class FlatVacuumCard extends HTMLElement {
     chip(el.cbk, 'backstop_entity');
     chip(el.c_dndb, 'dnd_begin_entity');
     chip(el.c_dnde, 'dnd_end_entity');
-    /* select dropdown menus (mop intensity / mop mode); empty mode is read-only -
-       the integration rejects SET_DUST_COLLECTION_MODE (see header). To re-enable
-       when fixed: swap c_empty's 'ro' class off and add a dd() bind for it. */
+    /* select dropdown menus (mop intensity / mop mode / dock empty mode). The
+       empty-mode select is writable since the 2026.9 dock-type fix (v2.8). */
     const closeMenu = () => {
       el.menu.style.display = 'none';
       this._menuKey = null;
@@ -998,8 +1121,10 @@ class FlatVacuumCard extends HTMLElement {
     /* smart_mode is a ONE-WAY DOOR from HA: the device rejects individual
        mode commands while in SmartPlan, so only the Roborock app can exit
        it. It stays visible as a CURRENT value but is never offered as a
-       pickable option in the Config dropdowns. */
-    const noSmart = (l) => (l || []).filter((o) => o !== 'smart_mode');
+       pickable option in the Config dropdowns. 'deep' (mop route, wire
+       code 301) is likewise hidden: the a298 rejects it (v2.8). */
+    const HIDDEN_OPTS = ['smart_mode', 'deep'];
+    const noSmart = (l) => (l || []).filter((o) => HIDDEN_OPTS.indexOf(o) < 0);
     const selSpec = (entity) => ({
       opts: () => noSmart(((this._st(entity) || {}).attributes || {}).options),
       cur: () => (this._st(entity) || {}).state,
@@ -1007,6 +1132,24 @@ class FlatVacuumCard extends HTMLElement {
     });
     dd(el.c_mopi, 'mopi', selSpec(c.mop_intensity_entity));
     dd(el.c_mopm, 'mopm', selSpec(c.mop_mode_entity));
+    dd(el.c_empty, 'empty', selSpec(c.empty_mode_entity));
+    /* dock action chips (v2.8): tap = turn_on when idle, turn_off while running */
+    const actChip = (node, key, entity) => {
+      this._press(node);
+      node.addEventListener('pointerdown', (e) => e.stopPropagation());
+      node.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const s = this._st(entity);
+        if (!s) return;
+        const on = this._optv(key, s.state) === 'on';
+        this._opt[key] = on ? 'off' : 'on';
+        this._optUntil = Date.now() + 8000;
+        this._render();
+        this._svc('switch', on ? 'turn_off' : 'turn_on', { entity_id: entity });
+      });
+    };
+    actChip(el.c_wash, 'wash', c.mop_wash_switch);
+    actChip(el.c_dust, 'dust', c.dust_empty_switch);
     dd(el.c_fan, 'fan', {
       opts: () => noSmart(((this._st(c.vacuum) || {}).attributes || {}).fan_speed_list),
       cur: () => ((this._st(c.vacuum) || {}).attributes || {}).fan_speed,
@@ -1025,7 +1168,8 @@ class FlatVacuumCard extends HTMLElement {
       if (!st) return;
       PV_SETTINGS.forEach((s) => {
         const ent = st.kind === 'away' ? s.away : s.def;
-        const opts = (((this._st(ent) || {}).attributes || {}).options) || [];
+        const opts = ((((this._st(ent) || {}).attributes || {}).options) || [])
+          .filter((o) => o !== 'deep');   /* device rejects route 301 (v2.8) */
         s.node.innerHTML = '';
         opts.forEach((o) => {
           const d = document.createElement('div');
@@ -1142,6 +1286,10 @@ class FlatVacuumCard extends HTMLElement {
     el.iss_dock.addEventListener('click', () => this._moreInfo(c.dock_error_sensor));
     this._press(el.iss_water);
     el.iss_water.addEventListener('click', () => this._moreInfo(c.water_sensor));
+    this._press(el.iss_dirty);
+    el.iss_dirty.addEventListener('click', () => this._moreInfo(c.dirty_tank_sensor));
+    this._press(el.iss_clean);
+    el.iss_clean.addEventListener('click', () => this._moreInfo(c.clean_tank_sensor));
     /* maintenance rows: guide button always opens the guide; row click = sensor
        history when a counter exists, else the guide */
     c.maint.forEach(([id, , , entity]) => {
@@ -1173,13 +1321,14 @@ class FlatVacuumCard extends HTMLElement {
       i_conf: 'Device settings - changes apply to the robot immediately.',
       i_dnd: "The robot's own quiet hours: suppresses its internal schedules, auto-resume, and dock auto-empty. Commanded starts still run.",
       i_lock: 'Disables the physical buttons on the robot and dock (cat insurance).',
-      i_empty: 'Read-only for now: the Roborock integration rejects changes to this setting. Change it in the Roborock app instead.',
+      i_empty: 'How hard the dock vacuums the robot\u2019s dustbin after a run: smart lets the dock decide, light / balanced / max trade noise and bag life for suction.',
+      i_act: 'Start (or stop) a dock job by hand: wash the mop pads or empty the dustbin now. The robot must be on the dock. Normal runs do both automatically.',
       i_mopi: 'How wet the spinning pads run (water fed to the mops). Off = vacuum only with dry pads; low to high = increasing dampness. The custom options defer to per-room settings from the app.',
-      i_mopm: 'The mopping route: standard = one normal pass; deep / deep+ = slower, tighter overlapping passes that scrub harder; fast = quicker sparse pass; custom = per-room app settings.',
+      i_mopm: 'The mopping route: standard = one normal pass; deep+ = slower, tighter overlapping passes that scrub harder; fast = quicker sparse pass; custom = per-room app settings.',
       i_fan: 'Vacuum suction power: quiet to max+ trades noise and battery for pick-up strength. Off = mop only. Custom defers to per-room app settings. NOTE: this is the LIVE value - it reverts to the Default suction profile after every run ends.',
       i_sucta: 'The full cleaning profile for auto-cleans that start while everyone is out: suction + mop water + mop route. Tap the row to edit. Temporary - the run ends, the Default profile returns. Crank it, nobody is home.',
       i_suctd: 'The sticky Default profile - the robot\u2019s normal way of cleaning, restored automatically whenever any run ends (auto, manual, or app-started). Tap the row to edit. Away runs and one-off tweaks are always per-run visitors.',
-      i_dry: "After mopping, the dock blow-dries the pads for a few hours to prevent odor and mildew. Read-only status; the drying duration is set in the Roborock app.",
+      i_dry: "After mopping, the dock blow-dries the pads for a few hours to prevent odor and mildew. The switch starts or stops drying by hand; the drying duration is set in the Roborock app.",
       i_hist: 'Recent full cleans: when, what triggered them (away / backstop / manual), how long, how much floor. Squares = the last 14 days, teal = a day with a clean.',
     };
     const tipShow = (icon, text) => {
@@ -1488,9 +1637,19 @@ class FlatVacuumCard extends HTMLElement {
     const errDock = dockSt != null && dockSt !== 'ok'
       && dockSt !== 'unknown' && dockSt !== 'unavailable';
     const water = (this._st(c.water_sensor) || {}).state === 'on';
-    const warnTok = errVac ? 'blocked' : errDock ? 'dock' : water ? 'water' : null;
+    /* dock water tanks (v2.8): problem-class binaries, dormant when absent */
+    const dirtyFull = (this._st(c.dirty_tank_sensor) || {}).state === 'on';
+    const cleanEmpty = (this._st(c.clean_tank_sensor) || {}).state === 'on';
+    const dockIssue = errDock || dirtyFull || cleanEmpty;
+    const warnTok = errVac ? 'blocked' : dockIssue ? 'dock' : water ? 'water' : null;
     const prog = this._num(c.progress_sensor);
     const pTxt = prog != null ? ' \u00b7 ' + Math.round(prog) + '% done' : '';
+    /* elapsed run time (v2.8): the sensor holds the last run's value while
+       idle, so it is only appended to run-in-progress lines */
+    const elMin = this._num(c.cleaning_time_sensor);
+    const eTxt = elMin != null && elMin >= 1
+      ? ' \u00b7 ' + (elMin >= 60 ? Math.floor(elMin / 60) + 'h ' + String(Math.round(elMin % 60)).padStart(2, '0') + 'm'
+        : Math.round(elMin) + 'm') : '';
 
     /* warning period */
     const idleish = vstate === 'docked' || vstate === 'idle';
@@ -1511,22 +1670,41 @@ class FlatVacuumCard extends HTMLElement {
        map (post-run drying and stale statuses must not read as run-in-progress). */
     const statusRaw = (this._st(c.status_sensor) || {}).state || '';
     const DOCK_ACT = { washing_the_mop: 'Washing mops',
-      going_to_wash_the_mop: 'Going to wash mops', emptying_the_bin: 'Emptying bin' };
+      going_to_wash_the_mop: 'Returning for pit stop', emptying_the_bin: 'Emptying bin',
+      attaching_the_mop: 'Attaching mops' };
     const dockAct = !warning && (idleish || vstate === 'returning') && DOCK_ACT[statusRaw]
       ? DOCK_ACT[statusRaw] : null;
+    /* RECHARGE STALL (v2.8): docked + charging + progress mid-range = the
+       robot is topping up to finish a run, not done. Plain 'charging' with
+       progress 0 or 100 stays the idle Docked line. */
+    const stall = !warning && !dockAct && vstate === 'docked' && statusRaw === 'charging'
+      && prog != null && prog > 0 && prog < 100;
+    this._stall = stall;
+    /* STARTING LOCK (v2.8) */
+    if (this._startUntil && (Date.now() > this._startUntil || !idleish)) {
+      this._startUntil = 0;
+      if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = null; }
+    }
+    const starting = !!this._startUntil && idleish && !warning && !dockAct && !stall;
 
     /* header text (warning-first two-tone: amber prefix token + state-colored rest) */
-    let sub;
+    let sub, titleState = null;
     if (unavailable) sub = 'Unavailable';
     else if (warning) sub = vstate.replace(/^./, ch => ch.toUpperCase()) + ' \u00b7 starting in ' + mmss;
+    else if (starting) sub = 'Starting\u2026';
     else if (dockAct) sub = dockAct + (prog != null && prog > 0 ? pTxt : '');
+    else if (stall) sub = 'Charging to resume' + pTxt + eTxt;
     else if (vstate === 'cleaning') {
-      sub = 'Cleaning' + pTxt;
+      /* v2.8.1: the state word lives on the title line while cleaning; the
+         secondary line is progress - elapsed - room (room last, truncates
+         first). Falls back to the plain word if nothing else is known. */
       const rs = this._st(c.room_sensor);
-      if (rs && rs.state && rs.state !== 'unavailable' && rs.state !== 'unknown')
-        sub += ' \u00b7 ' + rs.state;
+      const room = rs && rs.state && rs.state !== 'unavailable' && rs.state !== 'unknown' ? rs.state : null;
+      const parts = [pTxt.slice(3), eTxt.slice(3), room].filter(Boolean);
+      sub = parts.length ? parts.join(' \u00b7 ') : 'Cleaning';
+      titleState = parts.length ? 'Cleaning' : null;
     }
-    else if (vstate === 'paused') sub = 'Paused' + pTxt;
+    else if (vstate === 'paused') sub = 'Paused' + pTxt + eTxt;
     else if (vstate === 'returning') sub = 'Returning to dock';
     else {
       sub = vstate.replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
@@ -1548,6 +1726,8 @@ class FlatVacuumCard extends HTMLElement {
     const subHtml = (warnTok
       ? '<span style="color:' + AMBER + '">\u26a0 ' + warnTok + ' \u00b7 </span>' : '') + esc(sub);
     if (this._subHtml !== subHtml) { this._subHtml = subHtml; el.hsub.innerHTML = subHtml; }
+    const ttlHtml = 'Vacuum' + (titleState ? ' <span class="tsep">\u2014</span> <span class="tst">' + esc(titleState) + '</span>' : '');
+    if (this._ttlHtml !== ttlHtml) { this._ttlHtml = ttlHtml; el.httl.innerHTML = ttlHtml; }
 
     /* header state machine */
     if (this._armUntil && Date.now() > this._armUntil) this._armUntil = 0;
@@ -1556,20 +1736,22 @@ class FlatVacuumCard extends HTMLElement {
     if (warning) el.hico.setAttribute('icon', 'mdi:alarm');
     else if (vstate === 'returning') el.hico.setAttribute('icon', 'mdi:home-import-outline');
     else el.hico.setAttribute('icon', 'mdi:robot-vacuum');
+    const active = vstate === 'cleaning' || vstate === 'returning' || dockAct || stall || starting;
     el.hico.style.color = warning ? AMBER
-      : (vstate === 'cleaning' || vstate === 'returning' || dockAct) ? ACCENT_TEXT
+      : active ? ACCENT_TEXT
       : vstate === 'paused' ? AMBER
       : autoOn ? GREY : 'rgba(255,255,255,.25)';
     el.hsub.style.color = warning || vstate === 'paused' ? AMBER
-      : (vstate === 'cleaning' || vstate === 'returning' || dockAct) ? ACCENT_TEXT : '';
+      : active ? ACCENT_TEXT : '';
     const armed = this._armUntil > 0;
-    show(el.hmap, running || vstate === 'returning' || !!dockAct);
-    show(el.hplay, idleish && !warning && !dockAct && !unavailable && !armed);
-    show(el.harm, idleish && !warning && !dockAct && !unavailable && armed);
+    const idleCtl = idleish && !warning && !dockAct && !unavailable && !stall && !starting;
+    show(el.hmap, running || vstate === 'returning' || !!dockAct || stall);
+    show(el.hplay, idleCtl && !armed);
+    show(el.harm, idleCtl && armed);
     show(el.hstart, warning);
     show(el.habort, warning);
     show(el.hpause, running || !!dockAct);
-    show(el.hdock, running || !!dockAct);
+    show(el.hdock, running || !!dockAct || stall);
     el.hpico.setAttribute('icon', vstate === 'paused' ? 'mdi:play' : 'mdi:pause');
 
     /* map dialog: keep title + image fresh while open */
@@ -1618,8 +1800,10 @@ class FlatVacuumCard extends HTMLElement {
     if (errVac) el.iss_vac_t.textContent = 'Robot: ' + pretty(vacErrState);
     show(el.iss_dock, errDock);
     if (errDock) el.iss_dock_t.textContent = 'Dock: ' + pretty(dockErrState);
+    show(el.iss_dirty, dirtyFull);
+    show(el.iss_clean, cleanEmpty);
     show(el.iss_water, water);
-    const issueCt = (errVac ? 1 : 0) + (errDock ? 1 : 0) + (water ? 1 : 0);
+    const issueCt = (errVac ? 1 : 0) + (errDock ? 1 : 0) + (dirtyFull ? 1 : 0) + (cleanEmpty ? 1 : 0) + (water ? 1 : 0);
     let overdue = 0, unknownCt = 0, counterRows = 0;
     c.maint.forEach(([id, , , entity]) => {
       const vEl = el[id + '_v'];
@@ -1658,7 +1842,8 @@ class FlatVacuumCard extends HTMLElement {
     });
     el.g_maint.classList.toggle('warn', overdue > 0 || issueCt > 0);
     el.mico.style.color = overdue > 0 || issueCt > 0 ? AMBER : '';
-    const issueTxt = errVac ? 'robot issue' : errDock ? 'dock issue' : water ? 'water low' : null;
+    const issueTxt = errVac ? 'robot issue' : errDock ? 'dock issue'
+      : dirtyFull ? 'dirty tank full' : cleanEmpty ? 'clean tank empty' : water ? 'water low' : null;
     el.msum.textContent = [issueTxt, overdue > 0 ? overdue + ' overdue' : null]
       .filter(Boolean).join(' \u00b7 ')
       || (unknownCt === counterRows ? '--' : 'all ok');
@@ -1685,11 +1870,34 @@ class FlatVacuumCard extends HTMLElement {
     el.c_fan.textContent = (this._optv('fan', va.fan_speed) || '--') + ' \u25be';
     show(el.rempty, !!this._hass.states[c.empty_mode_entity]);
     if (this._hass.states[c.empty_mode_entity])
-      el.c_empty.textContent = selTxt('empty', c.empty_mode_entity);
-    const drying = (this._st(c.drying_entity) || {}).state;
-    const dryMin = this._num(c.drying_time_entity);
+      el.c_empty.textContent = selTxt('empty', c.empty_mode_entity) + ' \u25be';
+    /* dock actions (v2.8): dormant row, per-chip dormant too */
+    const washSt = this._st(c.mop_wash_switch), dustSt = this._st(c.dust_empty_switch);
+    show(el.ract, !!(washSt || dustSt));
+    show(el.c_wash, !!washSt);
+    show(el.c_dust, !!dustSt);
+    if (washSt) {
+      const on = this._optv('wash', washSt.state) === 'on';
+      el.c_wash.classList.toggle('live', on);
+      el.c_wash.textContent = on ? 'Washing\u2026' : 'Wash mops';
+    }
+    if (dustSt) {
+      const on = this._optv('dust', dustSt.state) === 'on';
+      el.c_dust.classList.toggle('live', on);
+      el.c_dust.textContent = on ? 'Emptying\u2026' : 'Empty bin';
+    }
+    const drying = this._optv('dry', (this._st(c.drying_entity) || {}).state);
+    el.drysw.classList.toggle('on', drying === 'on');
+    show(el.drysw, !!this._st(c.drying_entity));
+    /* remaining time: the 7.1.1 integration reports HOURS (unit 'h'); older
+       builds reported minutes - honor the unit attribute either way (v2.8) */
+    const dts = this._st(c.drying_time_entity);
+    let dryMin = this._num(c.drying_time_entity);
+    if (dryMin != null && dts && dts.attributes && dts.attributes.unit_of_measurement === 'h') dryMin *= 60;
+    const dryTxt = dryMin != null && dryMin >= 1
+      ? ' \u00b7 ' + (dryMin >= 60 ? Math.floor(dryMin / 60) + 'h ' + String(Math.round(dryMin % 60)).padStart(2, '0') + 'm' : Math.round(dryMin) + 'm') + ' left' : '';
     if (drying === 'on') {
-      el.drytxt.textContent = 'drying' + (dryMin != null && dryMin > 0 ? ' \u00b7 ' + Math.round(dryMin) + ' min left' : '');
+      el.drytxt.textContent = 'drying' + dryTxt;
       el.drytxt.style.color = ACCENT_TEXT;
       el.dryic.style.color = ACCENT_TEXT;
     } else if (drying === 'off') {

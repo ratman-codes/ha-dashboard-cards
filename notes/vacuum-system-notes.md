@@ -24,11 +24,23 @@ history — three automations + one custom card.
   Kept as-is at pairing; entity prefix is therefore `qx_revo_ultra_2`.
 - Model `roborock.vacuum.a298`, firmware `02.15.44` at migration.
 - Integration = **HA core Roborock** (not HACS). Config entry `01KTB3NAQ18JA0KVSD7JEF072F`.
-- The integration registers **two devices**: the robot (~37 entities, incl. ~7
-  disabled-by-default diagnostics) and a separate **"QX Revo Ultra 2 Dock"** device
-  holding exactly **3** entities (mop drying, drying remaining time, child lock).
-  *That count is the tripwire:* if the Dock device ever shows more than 3 entities
-  after an HA update, the upstream dock fix has landed (see Dock type 38).
+- The integration registers **two devices**: the robot (38 entities on 2026.9.0)
+  and a separate **"QX Revo Ultra 2 Dock"** device. **Since HA core 2026.9.0
+  (python-roborock 7.1.1, installed 2026-09-02 21:44 PT) the Dock holds 14
+  entities** (was exactly 3 through 2026.8.x — that count was the dock-type-38
+  tripwire, now retired): `sensor.qx_revo_ultra_2_dock_dock_error` (enum, 11
+  fault states, reads `ok`), `_dock_strainer_time_left` (h), `_dock_maintenance_
+  brush_time_left` (permanently `unknown` — this dock has no such brush),
+  `binary_sensor.…_dock_dirty_water_box` / `_dock_clean_water_box` (problem-class,
+  `on` = fault), `select.…_dock_empty_mode` (smart/light/balanced/max, writable),
+  `switch.…_dock_dust_emptying` / `_dock_mop_washing` / `_dock_mop_drying` (start/
+  stop a dock job), `switch.…_dock_child_lock`, `sensor.…_dock_mop_drying_remaining_
+  time` (**unit is now HOURS**), two `button.…_dock_reset_*_consumable` (disabled by
+  the integration), and the DEPRECATED `binary_sensor.…_dock_mop_drying` (replaced
+  by the switch; **disabled by owner 2026-09-03** to clear the integration's repair
+  — the repair only re-evaluates on an integration reload). Robot side gained
+  `select.qx_revo_ultra_2_cleaning_mode` (vacuum / vac_and_mop / mop) which reads
+  `unknown` while the app carousel sits on "Vac followed by Mop" (see seq_type).
 - Hardware notes: dual anti-tangle main brush; side brush is **screw-mounted**
   (owner-confirmed — the card's guide steps are correct as written).
 
@@ -37,8 +49,8 @@ history — three automations + one custom card.
 **Automations**
 
 - `automation.vacuum_auto_clean_opportunistic_backstop` (unique_id 1783947925268,
-  config_hash `02d67387d8db6ec3`). Full rules live in its description field
-  (append-only). Key semantics:
+  config_hash `e951107809120179` since 2026-09-03; was `02d67387d8db6ec3`). Full
+  rules live in its description field (append-only). Key semantics:
   - Full clean via **`vacuum.start`** (native service). The old system pressed
     `button.*_full_cleaning`; that button was a **cloud ROUTINE** on the returned
     unit — the integration creates one button per app routine, so a fresh device has
@@ -56,6 +68,9 @@ history — three automations + one custom card.
     Start now: VACUUM_START or event `vacuum_warning_start` — skips the
     someone-returned re-check by design.
   - Dock errors WARN-ONLY; hard blocks: not docked, vacuum error, unknown last_clean.
+    The dock token in both notify branches guards `not in ['ok','unknown',
+    'unavailable']` (fixed 2026-09-03 — the old `!= 'ok'` rendered `⚠ Dock:
+    unknown.` on every warning while the sensor didn't exist).
   - AWAY PROFILE: after the warning wait, if `binary_sensor.household_all_away` is
     ON *at action time* (deliberately not keyed to trigger id — backstops can fire
     while away), the full away profile is applied. All three set actions carry
@@ -85,12 +100,11 @@ history — three automations + one custom card.
   DO NOT fold into the auto-clean automation as a wait-then-restore: a long-running
   automation + docked robot makes the card hallucinate a warning countdown.
 - `automation.vacuum_maintenance_overdue_notify` (unique_id 1783954328760,
-  config_hash `14604c43cd22718c`): one notification per counter per below-zero
-  crossing, channel "Vacuum maintenance", mode queued max 5. **Four** counter
-  triggers (main brush, side brush, filter, sensors). The dock strainer was removed
-  from the trigger list — that entity does not exist on this device yet; re-add
-  `sensor.qx_revo_ultra_2_dock_strainer_time_left` when it appears (also noted in
-  the automation's own description).
+  config_hash `2d13321fc5fd99cc` since 2026-09-03; was `14604c43cd22718c`): one
+  notification per counter per below-zero crossing, channel "Vacuum maintenance",
+  mode queued max 5. **Five** counter triggers (main brush, side brush, filter,
+  sensors, **dock strainer — re-added 2026-09-03** once the entity existed; its
+  friendly name is rewritten to "Cleaning tray" in the message to match the card).
 
 **Profile semantics (the core design):** the Default profile is the single source of
 truth for normal cleaning. Away runs and any pre-run tweak (app, card Config rows)
@@ -115,13 +129,14 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   - `vacuum_suction_away` / `_default` — quiet, balanced, turbo, max, max_plus
   - `vacuum_mop_intensity_away` / `_default` — off, slight, low, medium, moderate,
     high, extreme (**7 levels** on this model, up from 4)
-  - `vacuum_mop_mode_away` / `_default` — standard, deep, deep_plus, fast
+  - `vacuum_mop_mode_away` / `_default` — standard, deep_plus, fast (`deep`
+    removed from both option lists by owner 2026-09-03; the device rejects it)
   - Current values (owner-set): **away = max · high · deep_plus** (suction max_plus→max
     by owner preference; mop mode deep→**deep_plus set 2026-08-17** as the 301-bug
     mitigation — deep_plus IS this model's real deep route), **default = balanced ·
     medium · standard**. `extreme` intensity was considered and declined (soaks the
-    pads, slows the robot). **Do not set `deep` in either profile — the device
-    rejects it (301 bug below).**
+    pads, slows the robot). `deep` is no longer offered anywhere (helpers, device
+    select on 7.1.1, card pickers) — the 301 bug is closed, see findings.
 - `binary_sensor.household_all_away` — template helper, label `household_presence`
   (SHARED — NOT vacuum teardown scope).
 
@@ -144,9 +159,15 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   Install path: **Card Manager** (preferred). Deploy loop: edit source →
   `node --check` → grep non-ASCII (must be 0) → base64 → paste over the resource URL
   → hard refresh.
-- **Deployed: v2.7rev4, FNV-1a `19451dc0`, 93,541 bytes** — owner-installed
-  2026-08-27/28; live blob byte-verified = archive 2026-08-28 (subagent registry
-  read; earlier rev3 `ac4998d5` / 93,039 B was byte-verified 2026-07-25).
+- **Deployed: v2.8.1, FNV-1a `33f14a36`, 106,793 bytes** — owner-installed via
+  Card Manager 2026-09-03 evening; live blob byte-verified = archive = local
+  build (subagent registry read, `cmp` BYTE_IDENTICAL). Same-day lineage: v2.8
+  `8df41b74` / 104,301 B (installed + verified that afternoon) → v2.8.1
+  iterated through three superseded blobs (`34919e7b` dot title, `1cb1ee28`
+  colon title, `d0934fd4` em-dash title, `5b1e92bd` + pit-stop label) → final
+  `33f14a36` (+ Attaching mops). Previous: v2.7rev4 `19451dc0` / 93,541 B.
+  Card YAML is bare `type: custom:flat-vacuum-card` — every entity id is a
+  baked default.
 - Structure: status header + four accordion groups:
   - HEADER: warning-first amber prefix tokens (blocked > dock > water) ahead of
     state-colored text; "34% done"; current room while cleaning; dock-activity
@@ -155,16 +176,38 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     map controls (`charging` and stale `paused` deliberately excluded). Contextual
     controls: two-tap-arm play / warning Start+Abort / map+pause+dock; long-press =
     more-info. Map dialog 900px, live-refreshing via the image entity's
-    entity_picture token. KNOWN GAP (2026-08-20, owner-confirmed live): a MID-RUN
-    recharge stall (docked + status charging + progress mid-range) falls through
-    to the idle Docked line — queued for v2.8 as the recharge-stall header state
-    (see handoff Step 3).
+    entity_picture token. **v2.8 additions:** RECHARGE-STALL state (vacuum
+    `docked` + status `charging` + progress strictly 0–100 → "Charging to resume ·
+    48% done · 1h 32m", cyan, map + dock buttons, play suppressed; the dock button
+    calls `vacuum.stop` = end run — NOT yet exercised live); ELAPSED RUN TIME from
+    `sensor.qx_revo_ultra_2_cleaning_time` appended to the cleaning / paused /
+    stall lines only (the sensor holds the last run's value while idle; hidden
+    under 1 min); STARTING LOCK — any card-issued start (armed play, warning Start
+    chip) renders "Starting…" and hides play/arm for 30 s or until the vacuum
+    leaves docked/idle (closes the double run-record bug). **v2.8.1 (first live
+    run on v2.8, owner feedback):** while CLEANING the state word moves to the
+    TITLE line — "Vacuum — Cleaning" (white label, grey `#777` em dash, accent
+    state word at the title's weight; a dot and a colon were tried and both
+    read like a link pasted into the title) — and the second line is just
+    "25% done · 1h 40m · Kitchen" (room LAST, truncates first; four segments
+    did not fit the 430px column). ONLY the cleaning state moves: a 14-state
+    mockup showed moving every state left Starting/Returning/Unavailable with
+    an empty second line = card height jumps. Dock-activity labels:
+    `going_to_wash_the_mop` → **"Returning for pit stop"** (the device sends
+    that code for ANY mid-run return — run 6 logged it before a bin-empty with
+    no wash — so the label is neutral about the reason and says it's moving),
+    `washing_the_mop` → "Washing mops", `emptying_the_bin` → "Emptying bin",
+    and NEW `attaching_the_mop` → "Attaching mops" (the ~10 s pad pick-up
+    between passes; previously fell through to the idle Docked line).
   - AUTO-CLEAN: toggle + 7 setting rows + Away profile / Default profile rows
     (summary chips "max+ · high · deep ›"; tap → popup editor with segmented
     Suction / Mop intensity / Mop mode pickers, Save writes the helpers) +
     Presence row.
   - MAINTENANCE: conditional amber ISSUE ROWS at top (one per active problem:
-    "Robot: <error>" blocks-hint / "Dock: <error>" warn-only / "Water low"; labels
+    "Robot: <error>" blocks-hint / "Dock: <error>" warn-only / "Dirty water tank —
+    needs emptying" / "Clean water tank — needs refilling" (v2.8, the dock's two
+    problem-class tank sensors; either one also lights the header's `⚠ dock` token
+    and the group summary) / "Water low"; labels
     ellipsize — `flex:1 min-width:0`; tap → sensor more-info; group summary leads
     with the issue) + 7 counter rows **in Roborock app order: Filter, Main brush,
     Side brush, Sensors, Mop pads, Cleaning tray, Dust bag** with guide dialogs
@@ -172,8 +215,13 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     captions.
   - CONFIG: **Suction → Mop intensity → Mop mode** dropdowns (order matches the
     summary grammar; summary reads "balanced · medium · standard", prettified,
-    mirroring the profile chips), read-only dock empty mode, volume, DND, child
-    lock, Mop drying status, Battery status.
+    mirroring the profile chips), **Dock empty mode dropdown** (writable since
+    v2.8; smart/light/balanced/max), **Dock actions row** (v2.8, deliberately
+    compact: "Wash mops" / "Empty bin" chips bound to the mop_washing /
+    dust_emptying switches — tap = turn_on, tint cyan + "Washing…"/"Emptying…"
+    while on, tap again = turn_off), volume, DND, child lock, **Mop drying** (v2.8:
+    reads `switch.…_dock_mop_drying`, gained a toggle; remaining-time text honors
+    the sensor's unit — hours on 7.1.1), Battery status.
   - HISTORY: last 4 runs (day · time · trigger · duration · area) with a settings
     second line — cyan = away profile (A:), dim = default (D:) or card-manual (M:),
     absent = app-started — aligned under the time text (61px), condensed rows,
@@ -184,10 +232,12 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     run's cyan line reads A:max|high|deep though the route ran standard.**
 - **Design patterns introduced in v2.7 (reusable elsewhere):**
   - **DORMANT-ENTITY PATTERN** — rows whose entity is absent from `hass.states` hide
-    themselves and wake automatically if the entity is ever created. Currently
-    dormant: dock error row + amber dock token, Cleaning tray counter row,
-    empty-mode Config row. Critically, an **absent dock error sensor means NO
-    error**, never a permanent error.
+    themselves and wake automatically if the entity is ever created. **Proven
+    2026-09-03:** the Cleaning tray counter row and the Dock empty mode row woke
+    on their own when 2026.9.0 created their entities — zero card change. v2.8's
+    tank rows, dock-action chips, drying toggle and elapsed-time text follow the
+    same rule. Critically, an **absent dock error sensor means NO error**, never
+    a permanent error.
   - **grid-template-rows 0fr/1fr collapse** — outer body + all four groups. Runtime
     `.gin` wrappers built in `_bind`; `_setGroup` is pure class toggling. **All
     hardcoded group height math is gone** (the old 332 / 330+36n / 335 / 170+12n
@@ -196,7 +246,8 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     group now needs zero height maintenance.
   - `smart_mode` is **filtered out of the Config dropdowns' pickable options** while
     still displaying as the current value if the app parked the device there — it's
-    a one-way door from HA (see SmartPlan hazard).
+    a one-way door from HA (see SmartPlan hazard). Since v2.8 `deep` is filtered the
+    same way in the Config dropdown AND both profile-popup pickers (`HIDDEN_OPTS`).
 - Version history (FNV-1a): v1.0 2aed706c … v2.2 f83dc8fd → v2.3 (warning-first
   tokens, map, dock-activity) → v2.4 f6881983 → v2.4rev d8b6be72 → v2.4rev2 8cbac835
   (issue rows) → v2.5 6c4d7e99 (suction profiles) → v2.6 febc9840 (full profiles +
@@ -206,16 +257,27 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   vacuum.start, dormant entities, grid collapse, hover affordance)** → rev2 5622b1a9
   (smart_mode dropdown filter) → rev3 ac4998d5 (maintenance rows in app order) →
   **rev4 19451dc0 (history begin/end pairing window 6h → 12h — SHIPPED 2026-08-27,
-  installed and byte-verified 2026-08-28)**.
+  installed and byte-verified 2026-08-28)** → **v2.8 8df41b74 / 104,301 B
+  (2026-09-03, POST-DOCK-FIX REV: drying switch, tank issue rows, writable empty
+  mode, dock-action chips, recharge-stall header, elapsed time, starting lock,
+  `deep` filter, drying-time unit fix; 60-probe Playwright harness at 430px;
+  new YAML keys with baked defaults: dirty_tank_sensor, clean_tank_sensor,
+  cleaning_time_sensor, dust_empty_switch, mop_wash_switch)**.
+  → **v2.8.1 33f14a36 / 106,793 B (2026-09-03 evening: cleaning state word on
+  the title line "Vacuum — Cleaning", secondary "N% done · elapsed · room";
+  "Returning for pit stop" + "Attaching mops" dock-activity labels; 66-probe
+  harness)**.
   A rev7 `48405154` history "sanitizer" (hide sub-5-minute runs) was built and
   REVERTED the same day — the owner rejected display filtering; all runs show as
   recorded. Don't rebuild it.
 
 ## Device/integration findings (hard-won)
 
-- **DOCK TYPE 38 — why dock entities are missing (settled root cause).** The Edge 2's
+- **DOCK TYPE 38 — RESOLVED 2026-09-03 (HA core 2026.9.0 ships python-roborock
+  7.1.1; Dock device 3 → 14 entities; the `Missing RoborockDockTypeCode code: 38`
+  log line is gone).** History of the root cause, kept for the record: the Edge 2's
   Multifunctional Dock reports `RoborockDockTypeCode 38`, which `python-roborock`
-  5.31.1 does not map. Log: `Missing RoborockDockTypeCode code: 38 - defaulting to
+  5.31.1 did not map. Log: `Missing RoborockDockTypeCode code: 38 - defaulting to
   'unknown'` (plus `Missing RoborockInCleaning code: 4`); diagnostics show
   `dockType: -9999` (unknown sentinel) while the raw dock status is perfectly
   healthy. **Confirmed at the wire 2026-07-27:** raw `get_status` via the CLI returns
@@ -242,17 +304,20 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     stance: wait, no custom-component override. 38 was NOT obviously added to the
     dust-collection set — the writable empty-mode select is less certain than the
     tank binaries; survey, don't assume.
-  - **Bump watch:** 2026.7.4 pinned 5.31.1. **2026.8.0/2026.8.1 STILL pin 5.31.1
-    (manifest checked on the 2026.8.1 tag 2026-08-11; owner is on 2026.8.1; Dock
-    device still exactly 3 entities — tripwire negative).** The 2026.8 monthly
-    shipped active Roborock work (Q10 features) but no lib bump — possibly held back
-    by breaking changes between 5.31 and 5.37. Next check: 2026.8.x patches / 2026.9
-    (~first Wednesday of September).
-  - **Arrival signal:** Dock device entity count exceeding 3 after an HA core update.
-    **Execution order for that session: `claude/vacuum-dock-fix-session-handoff.md`**
-    (survey → strainer re-add + notify-template fix → ONE card rev →
-    post the held issue).
-  - Meanwhile dock faults reach the owner via Roborock's own app notifications.
+  - **Bump history:** 2026.7.4 / 2026.8.0 / 2026.8.1 all pinned 5.31.1 (tripwire
+    negative each time). **2026.9.0 (stable 2026-09-02, owner installed the same
+    evening) pins `python-roborock==7.1.1`** — a double-major jump; the manifest
+    on the 2026.9.0 tag confirms it. Survey results are in "The device" above.
+  - **7.1.1 side effect (NEW, upstream-worthy):** `DeviceFeatures.from_dict` fails
+    — the 7.1.1 dataclass added `is_roller_mop_supported`,
+    `is_ai_recognition_setting_supported`, `is_ai_recognition_obstacle_supported`
+    with no defaults; the raw feature dict from home data lacks them, so
+    `cls(**result)` raises, `convert_dict` logs `Failed to convert device_features
+    …` at ERROR and drops the key. Logged TWICE per HA start (two feature dicts —
+    the a298's, and a second with hot-wash/fluid/LiDAR-lift false). Harmless in
+    practice (route gating is correct, so the integration takes the
+    `from_feature_flags` bitfield path), but an ERROR on every boot. Section 7 of
+    the re-based issue draft.
 - **`in_cleaning` / RoborockInCleaning code 4 — the first-class mid-job flag
   (upstream issue #929, posted 2026-08-28 by owner).** The a298 reports
   `in_cleaning: 4`, unmapped by the library (log: `Missing RoborockInCleaning
@@ -269,8 +334,15 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   restore automation's or-condition to it. Code 4's exact meaning is NOT
   confirmed (the issue deliberately makes no claim); if the maintainer asks,
   CLI-probe `get_status` during a stall vs idle-docked.
-- **THE `deep` MOP-ROUTE BUG (root-caused 2026-08-17; library bug, upstream-worthy).**
-  Wire codes for mop route (library `CleanRoutes`): standard 300 · **deep 301** ·
+- **THE `deep` MOP-ROUTE BUG — FIXED UPSTREAM in 7.1.1 (verified in source +
+  live 2026-09-03).** `get_clean_routes()` now gates DEEP on
+  `not is_clean_efficiency_supported` (true on the a298 → `deep` gone from the
+  device select), and the DEEP_PLUS_CN branch requires `region == "cn"` +
+  `is_clean_route_deep_slow_plus_supported`, so this device is now sent **303**
+  for deep_plus (was 305). Owner live-toggled standard → deep_plus → fast →
+  standard via the card's Config dropdown on 7.1.1: all stick. Section 7 of the
+  issue draft became a "resolved, thanks" note. Original analysis, for the record:
+  wire codes for mop route (library `CleanRoutes`): standard 300 · **deep 301** ·
   deep_plus 303 · fast 304 · deep_plus_CN 305 · smart 306. The library's
   `get_clean_routes()` gates fast/smart/custom on `device_features` flags but
   **hardcodes STANDARD + DEEP as universal — no flag guards `deep`**. The a298
@@ -283,9 +355,9 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   3-position Route slider = this model's real route set — **the app's "Deep" and
   HA's `deep_plus` are the same route; `deep`/301 is vestigial on the a298 and was
   never applied successfully on either robot (first-ever away run was 2026-08-14).**
-  Mitigation LIVE: away profile mop mode = `deep_plus` (owner set 2026-08-17).
-  Still open: card-side option filter (wishlist) + the upstream issue section
-  (drafted, section 7 of the held issue).
+  Mitigation was: away profile mop mode = `deep_plus` (owner set 2026-08-17) —
+  still the setting, now on 303. Belt-and-braces since 2026-09-03: `deep` removed
+  from both mop_mode helpers and filtered in every card picker.
 - **Automation TRACE retention is 5 runs (~2 days at this automation's firing
   rate).** The 08-14 away-run trace was already evicted by 08-17 — audit past runs
   via recorder history (selects + run_trigger + all_away), not traces.
@@ -301,7 +373,8 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   **A `smart_mode` Default profile is permanently off the table** — it can't be
   applied and it strands every restore.
 - **Old dock-error latching lore (Q Revo) is UNVERIFIED here.** Treat it as history,
-  not as current behavior — no dock error sensor exists yet to retest with.
+  not as current behavior — the dock error sensor exists since 2026-09-03 but no
+  fault has occurred on it yet; the first real dock fault is the retest.
   Related observation (2026-08-20): a dock out-of-water fault surfaced only as a
   **3-second `error` transit** on the vacuum entity + status sensor
   (18:33:35→18:33:38) before settling to docked/charging — `vacuum_error` stayed
@@ -312,18 +385,44 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   `last_clean_end` populate, status goes `charging`, `cleaning_area` reports.
 - `sensor.qx_revo_ultra_2_status` can hold a stale `paused` after runs —
   deliberately ignored by the dock-activity mapping.
-- `sensor.qx_revo_ultra_2_cleaning_progress` exists and reports percent (0–100)
-  during a run — candidate companion to elapsed time on the card. **Verified
-  behavior (08-20 + 08-27): holds the mid-range percent through a mid-run
-  recharge stall; reads 0 within seconds of a completed run's end.** Now load-
-  bearing in the restore automation's stall guard.
+- `sensor.qx_revo_ultra_2_cleaning_progress` reports percent during a run.
+  **Verified behavior (08-20 + 08-27 + 09-03): holds the mid-range percent
+  through a mid-run recharge stall; reads 0 within seconds of a completed run's
+  end.** Load-bearing in the restore automation's stall guard and the card's
+  stall state. **PROGRESS-CEILING PATTERN (six-run recorder audit, 2026-09-03,
+  runs 08-25 → 09-03, pre-map-edit):** on the two-sweep config the % is rigid
+  and NEVER reaches 100 — vacuum pass ends at **26–27 %** (area ~59 m²), pads
+  attach → jumps to 51–52, climbs to 53–55 over ~5 min of mopping, then
+  **collapses to 37–39** (largest drop every run; speculation: the mop pass
+  re-bases against a carpet-excluded denominator), then climbs to **60–62 % at
+  run completion** (area 103–107 m²) — identical across Default/backstop, the
+  away max/deep_plus run, the app-started run, and the 147-min-stall run.
+  Other decreases are ±1–3 noise. WHY: the denominator is the WHOLE map, and
+  ~30 % of the mapped floor is unreachable by design — the guest bedroom
+  (pet gate) and the master bedroom (virtual wall across its door), plus
+  phantom slivers behind mirrors/windows; a pixel count of the app's map put
+  reachable rooms at ~70 % of mapped area, and furniture/no-go boxes account
+  for the rest of the 61-vs-70 gap (~1 progress point ≈ 2 m²). So "61% done"
+  immediately before "finished" is the robot's honest ratio, not a fault.
+  **Owner is erasing the phantom regions with the app's map eraser
+  (2026-09-03, `isMapEraserSupported` true) — the ceiling WILL move; re-measure
+  on the next run before quoting 61 again.** Display options recorded, none
+  built (owner: leave it for now): rescale by the ceiling (one YAML number,
+  drifts on any map edit) or area-based progress from the card's own history
+  (truthful, self-calibrating, a real feature).
 - Guide images soften if dialogs exceed ~660px width (640px sources).
 - Service intervals are **identical to the Q Revo's** (main 300 h, side 200 h,
   filter 150 h + rinse every 2 weeks, sensors 30 h, cleaning tray monthly, dust bag
   as needed) — verified against the Edge 2's own app diagrams.
 - **The integration is cloud-polled** (active repair issue `cloud_api_used_*`).
-  Explains the ~15–20 s lag between `vacuum.start` and the robot moving — see the
-  double run-record bug below.
+  Explains the ~15–20 s lag between `vacuum.start` and the robot moving — the
+  reason for v2.8's 30-s starting lock.
+- **Integration repairs re-evaluate only on reload** (2026-09-03): after disabling
+  the deprecated `binary_sensor.…_dock_mop_drying` the `deprecated_mop_drying`
+  repair stayed listed until the Roborock config entry was reloaded. The robot
+  chimes twice on a reload (two device connections) — normal.
+- **Two "Mop drying" entities on the Dock page** — the Controls one is the switch
+  (keep); the Diagnostic one was the deprecated binary sensor (disabled).
 
 ## Direct-device probe findings (2026-07-27) — THE SETTINGS MAP
 
@@ -343,10 +442,24 @@ Key results (all on fw 02.15.44):
   just fan/water combos HA can already set: Vacuum = mop intensity `off`
   (water_box_mode 200), Mop = fan `off_raise_main_brush` (fan_power 105),
   Vac & Mop = both active (fan 102 / water 235 at Default profile).
-  **No known setter for seq_type.** Ruled out: `set_clean_sequence` (takes a list of
-  ints — room order; `["ok"]` but no effect; dict form → `-10005 Param error`) and
-  `set_switch_mop_mode` (device: not recognized). The library also drops `seq_type`
-  during status parsing, so HA never sees it.
+  **SETTER FOUND 2026-09-03 — `app_set_clean_sequence_type`** (credit: BlackRockCity's
+  app capture on a Saros 10R in python-roborock#914, comment 2026-08-28; owner
+  confirmed on the a298 the same day via `vacuum.send_command`): params
+  `{type: 1, water_box_mode: 235, mop_mode: 300, fan_power: 102, repeat: 1}` →
+  Vac followed by Mop; `{type: 0, water_box_mode: 235, mop_mode: 300, fan_power:
+  102}` → Vac & Mop. Both accepted (no `-10005`), both reflected in the app
+  carousel within seconds. Ruled out in July: `set_clean_sequence` (room order) and
+  `set_switch_mop_mode` (not recognized). The library STILL drops `seq_type` on
+  parse, so HA cannot read the mode back — and `select.qx_revo_ultra_2_cleaning_
+  mode` is no readout either: it reads `unknown` in BOTH positions on this robot,
+  because the Default water code 235 (`pure_water_flow_middle`) is the enum member
+  python-roborock#931 shows collapsing, so the classifier can't place the device.
+  OWNER DECISION 2026-09-03: tested, NOT built on — wait a few weeks for #914 to
+  get a typed API (which would also give readable state); if it stalls, the
+  two-`send_command` version (away branch `type: 1`, restore `type: 0`, plus a
+  helper + card row) is a one-session job. Note 7.1.1's integration writes state
+  only on change (last_reported stayed pinned across a `homeassistant.update_entity`
+  call), so "no update" after a command is not evidence of failure.
 - **Library drops raw status fields on parse:** `seq_type, cleaning_info, extra_time,
   monitor_status, exit_dock, dtof_status, pet_reminding, sub_error_code, sub_zone,
   user_privacy`. This is why HA-diagnostics diffing can't find these settings.
@@ -378,10 +491,12 @@ Key results (all on fw 02.15.44):
   `app_get_robot_setting`, `get_timer_summary`.
 - **2026-08-17 addition — mop-route wire codes + the `deep`/301 rejection** (see the
   dedicated finding under Device/integration findings above).
-- **Upstream issue DRAFTED and held** (owner's call: post after the HA core pin bump
-  so the dock section can be dropped or confirmed). Owner-edited copy archived at
-  `claude/roborock-upstream-issue-draft.md` — **now including the 2026-08-17
-  `deep`/301 addendum section.** Pre-submission fixes noted there.
+- **Upstream issue RE-BASED 2026-09-03 and ready to post** —
+  `claude/roborock-upstream-issue-draft.md`: dropped fields + seq_type + sections
+  4–6 re-verified still valid against the v7.1.1 source (`StatusV2` has none of the
+  10 fields); old section 7 (`deep`/301) replaced by a resolved note; NEW section 7
+  = the `DeviceFeatures.from_dict` failure; asks renumbered; pre-submission fixes
+  applied. Owner posts.
   **A SECOND, standalone issue was posted 2026-08-28:
   `Python-roborock/python-roborock#929` (RoborockInCleaning missing code 4)** —
   see the `in_cleaning` finding above; the held omnibus issue is unaffected.
@@ -423,6 +538,17 @@ Measured so nobody re-diagnoses "the robot is too slow" as a fault:
   VERIFIED.** 16:08 → 18:17, **115.6 min cleaning, 61.4 m², one charge, no stall**
   (4 mid-run mop-wash dock visits, normal). The 61 vs 99 m² delta = single vs double
   coverage of the same floor. The July run-time complaint is CLOSED.
+- **Run 6 (2026-09-03 16:08, backstop, Default profile, two-sweep — first run on
+  v2.8/v2.8.1):** vacuum pass 16:08→17:52 (pads attached at the dock 17:52),
+  mop pass 17:52→19:19; **174.6 min cleaning, 104.4 m², battery 100→24 %, NO
+  recharge stall** — the first two-sweep run to fit one charge (run 1 needed
+  184 min and didn't; 24 % is a thin margin). Four mid-run dock visits (bin
+  empty 17:41; empty + attach pads + wash 17:50; washes 18:19, 18:53), post-run
+  wash 19:21–19:25 then drying (2h 59m). Cord in the main brush at 16:38:
+  `vacuum_error` read `main_brush_jammed` for 19 s → status `paused` 63 s →
+  owner cleared it, resumed 16:39 — **robot-side errors DO reach the error
+  sensor** (unlike the 08-20 dock water fault). Restore automation correctly
+  did nothing (Default profile). Strainer 62→58 h.
 - **Run 5 (2026-08-27 15:05, LEAVE-TRIGGERED away run, two-sweep config):**
   record `leave … A:max|high|deep_plus` — the deep_plus mitigation applied
   (intensity medium→high watched at start). Recharge stall 17:08–19:35, resumed,
@@ -477,12 +603,27 @@ State as of 2026-07-27 (probe session), except where dated:
 
 ## Open items
 
-- **HA core bump to python-roborock ≥5.37.1** — tripwire: Dock device >3 entities.
-  **2026.8.1 checked 2026-08-11: pin unchanged (5.31.1), still 3 entities, NOT
-  fixed.** Next check: 2026.8.x patches / 2026.9 (~Sep 2). Cheap nudge available:
-  one-line comment on #896. When it lands, follow
-  **`claude/vacuum-dock-fix-session-handoff.md`** (survey → HA fixes → one card
-  rev → post the held issue).
+- **v2.8/v2.8.1 LIVE WATCHES** (not exercised by run 6 — no stall, backstop
+  start, no dock fault): (1) "Charging to resume" header on the next recharge
+  stall; (2) the stall dock button = `vacuum.stop` (untested — press only to
+  actually cancel a run); (3) "Starting…" lock on the next card-initiated
+  start; (4) first real dock fault → tank issue rows + `⚠ dock` token + dock
+  error row. VERIFIED by run 6: pit-stop/washing/emptying labels, elapsed time,
+  title-line state word, `main_brush_jammed` issue path, drying hours unit.
+- **Progress ceiling re-measure** after the owner's map-eraser edit (see the
+  cleaning_progress finding) — expect the completion % to rise from ~61.
+- **Post the re-based upstream issue** (`claude/roborock-upstream-issue-draft.md`,
+  owner posts; optionally fill the exact July CLI version in the baseline) + a
+  short "confirmed on a298" comment on #914 (draft in this chat, owner's call).
+- **#914 watch (seq_type setter)** — if a typed `vac_then_mop` mode lands upstream
+  and reaches HA, build the per-profile single-pass/two-sweep feature on it; if
+  #914 stalls past ~October, revisit the raw `send_command` version. Also close
+  #896 (fixed in 5.37.1, confirmed 2026.9.0) — owner housekeeping.
+- **Upstream watches that touch this robot:** #931 (WaterModes 235 alias — why
+  `cleaning_mode` reads unknown; may break the select's setter on the a298),
+  #702 (dock "water empty" error latching in HA after refill — retest on the
+  first real dock fault), #738 (maintainers' missing-V1-features checklist =
+  where the section-6 typed-getter PR would go).
 - **Upstream #929 watch** (`in_cleaning` code 4, posted 2026-08-28) — if the
   maintainer responds asking for captures, CLI-probe `get_status` during a
   recharge stall vs idle-docked; when the field becomes readable in HA, swap the
@@ -500,26 +641,29 @@ single-pass run fits one charge ✓ · away mop mode → deep_plus set ✓.
 **CLOSED 2026-08-27/28:** restore-mid-recharge fix shipped ✓ · card history 6h
 pairing cap fixed (v2.7rev4) ✓ · away profile incl. deep_plus applied on a real
 run ✓ · presence verified on renewal day ✓ · #929 posted ✓.
+**CLOSED 2026-09-03 (dock-fix session):** python-roborock bump landed (7.1.1) ✓ ·
+dock entities surveyed (14) ✓ · strainer re-added to the overdue notify ✓ · `⚠ Dock:
+unknown.` guard fixed ✓ · card v2.8 shipped + byte-verified ✓ · `deep` dropped from
+helpers ✓ · deprecated drying binary sensor disabled + repair cleared ✓ · `deep_plus`
+(303) live-verified ✓ · issue draft re-based ✓.
 
 **Do NOT re-offer:** folding the old Q Revo's run history into the card, the rev7
 history sanitizer, or a `smart_mode` profile.
 
 ## v-NEXT wishlist (ideas only)
 
-- **Elapsed run time on the card** (owner request 2026-07-26). Backing entities both
-  live-count during a run: `sensor.qx_revo_ultra_2_cleaning_time` (minutes, float,
-  excludes dock time) and `sensor.qx_revo_ultra_2_cleaning_progress` (%). Header
-  secondary line is the obvious home. Placement/format undecided.
-- **Recharge-stall header state** (docked + charging + progress mid-range →
-  "Charging to resume · N% done") — queued for v2.8, spec in the handoff Step 3.
-- Optimistic "Starting…" header state locking the two-tap play ~30 s after any start
-  command (fixes the double run-record, see bugs).
+Shipped in v2.8 (2026-09-03) and removed from this list: elapsed run time,
+recharge-stall header state, "Starting…" lock, post-code-38 rev (tank rows, empty
+mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
+
+- **Area-based progress** ("58 m² · vac pass" / % of typical final area from
+  the card's own history) replacing the robot's whole-map % — only if the ~61
+  ceiling keeps bothering the owner after the map edit; the cheap alternative
+  is a rescale-by-ceiling YAML number.
 - "Skip next scheduled clean" one-shot toggle.
 - Per-run map snapshot from a History row.
-- Post-code-38 card rev (tank binaries as issue rows, empty mode, wash/dry controls)
-  — survey first, then one deliberate rev. Candidate for the same rev: filter
-  `deep` out of the mop-mode pickers (Config + profile popup) the way `smart_mode`
-  already is — the device rejects it (301 bug).
+- `select.qx_revo_ultra_2_cleaning_mode` as a Config row once the library maps
+  the "Vac followed by Mop" position (reads `unknown` on this robot today).
 - Room-batch rotation via `app_segment_clean` (segments: 1 Hall, 2 Living room,
   3 Guest bedroom, 4 Master bedroom, 5 Bathroom, 6 Bathroom1, 7 Kitchen) — fallback
   if single-pass ever stops fitting one charge (moot while the owner runs
@@ -527,6 +671,18 @@ history sanitizer, or a `smart_mode` profile.
 - Mop mode `standard` → `fast` in the Default profile (offered, declined for now).
 
 ## Fixed bugs (formerly Known open bugs)
+
+- **`⚠ Dock: unknown.` IN EVERY WARNING NOTIFICATION — FIXED 2026-09-03.** Both
+  notify branches guard `not in ['ok','unknown','unavailable']` now (config_hash
+  `02d67387d8db6ec3` → `e951107809120179`; template rendered live: empty tail at
+  `ok`, empty against a nonexistent sensor).
+- **DOUBLE RUN-RECORD — FIXED 2026-09-03 (v2.8 starting lock).** Card-issued starts
+  hide play/arm for 30 s or until the vacuum leaves docked/idle, so the 15–20 s
+  cloud-poll gap can no longer take a second start.
+- **DRYING REMAINING TIME UNIT — FIXED 2026-09-03 (v2.8).** 7.1.1 reports
+  `_dock_mop_drying_remaining_time` in HOURS; v2.7 printed the raw number as
+  "min left". The row now honors `unit_of_measurement` (h → ×60).
+- **MOP-ROUTE `deep` (301) — FIXED UPSTREAM in 7.1.1**, see findings.
 
 - **RESTORE-MID-RECHARGE — FIXED 2026-08-27** (found 2026-08-14; recurred
   2026-08-27 at 17:13:31, which prompted the owner to green-light shipping the
@@ -550,19 +706,8 @@ history sanitizer, or a `smart_mode` profile.
 
 ## Known open bugs (diagnosed, not fixed — owner deferring)
 
-- **`deep` mop route rejected by the device (library bug)** — full write-up under
-  Device/integration findings; user-visible symptom was away runs mopping on
-  standard while History claimed deep. **Profile mitigation DONE 2026-08-17
-  (away = deep_plus).** Still open: card-side option filter (wishlist), upstream
-  issue section (drafted, held).
-- **Double run-record on the 2026-07-24 start.** Card Start chip answered the
-  backstop warning; the robot took 17 s to undock (cloud-polled) and the still-live
-  two-tap play was tapped again in the gap, overwriting `backstop…D:` with
-  `manual…M:`. Fix candidate in the wishlist.
-- **`⚠ Dock: unknown.` in every warning notification.** Both notify branches render
-  the dock token when `sensor.…_dock_dock_error != 'ok'` — a MISSING entity returns
-  `unknown`, so it fires every time. One-line fix (guard on
-  `not in ['ok','unknown','unavailable']`), deferred until the dock entities land.
+- None as of 2026-09-03. (The three that lived here — `deep`/301, the double
+  run-record, `⚠ Dock: unknown.` — all moved to Fixed bugs.)
 
 ## Teardown order (if ever dismantling)
 
