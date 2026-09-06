@@ -57,6 +57,29 @@ The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
 - Battery thresholds are tiered: amber at `battery_warn` (default 20), red at
   `battery_crit` (default 10). Filters amber at `filter_warn` (default 30).
   Non-numeric values are never coerced to 0.
+- Rechargeable batteries (v1.7): a battery whose registry device also owns a
+  `sensor.*` with an `options` attribute containing `charging` (a charge-state
+  enum, e.g. a battery doorbell's discharging/charging/chargecomplete sensor)
+  is rechargeable. It gets its own bar row plus a sub-line with the drain rate
+  — a least-squares fit over `recorder/statistics_during_period` hourly means
+  (window `forecast_window_days`, default 7), restricted to the segment after
+  the last charge (a rise of more than 2 points), needing at least 12 points
+  spanning 24 h, else "trend pending" — and the date `battery_warn` will be
+  reached. An amber "battery low soon | ~N days" alert fires when that date is
+  within `forecast_days` (default 3) while the level is still above the warn
+  line; at or below it the ordinary low/critical alerts take over. While
+  charging the bar turns green and the sub-line says so (no forecast, no
+  alert); "chargecomplete" reads "charged". Statistics are fetched once an
+  hour, also while collapsed, so the alert strip works without a tap.
+  Non-rechargeables are unchanged and the "N others" summary excludes the
+  rechargeables.
+- Wi-Fi watch (v1.7): a sibling `sensor.*` with `device_class: signal_strength`
+  whose entity_id matches `wi_?fi` (Bluetooth RSSI sensors are ignored) is
+  watched per battery device. Below `wifi_warn` dBm (default -70) it renders an
+  amber Connectivity row "<device> | Wi-Fi -74 dBm" plus an alert (device-page
+  tap); at or above it nothing renders. Header wording when it is the only
+  issue: "<device> Wi-Fi weak - -74 dBm"; a lone forecast issue reads
+  "<device> battery 23% - charge in ~2 days".
 
 ## Example YAML
 ```yaml
@@ -85,6 +108,9 @@ banner_threshold: 5
 history_hours: 24         # LAST 24H lanes; 0 disables the section
 history_max_lanes: 6      # fold point; "+N more" expands
 history_event_window_s: 120
+forecast_days: 3          # rechargeable: alert when battery_warn is this close (days)
+forecast_window_days: 7   # rechargeable: statistics window for the drain fit
+wifi_warn: -70            # dBm; a watched Wi-Fi signal below this = amber row + alert
 filters:
   - name: Purifier Living Room
     entity: sensor.my_purifier_filter_life
@@ -132,11 +158,28 @@ devices:                # optional manual extras
   pushState + `location-changed`) instead of more-info on one arbitrary
   canary entity — tapping a camera's lane had opened its IR-light toggle.
   Manual `devices:` entries, battery and filter rows keep more-info.
-- v1.6 (2026-08-26, 46,887 B, FNV-1a 906d5861, CURRENT): the lane cap is a
+- v1.6 (2026-08-26, 46,887 B, FNV-1a 906d5861): the lane cap is a
   FOLD, not a crop — "+N more" is tappable and reveals every lane, "show less"
   folds back; the fold and any open network-event member list reset when the
   card collapses. Owner caught a 12-device night showing six lanes and an
   inert "+6 more".
+- v1.7 (2026-09-04, 57,569 B, FNV-1a 83c06c49, CURRENT): rechargeable battery
+  forecast + Wi-Fi watch (semantics above). Discovery records a charge-state
+  sibling and a Wi-Fi sibling per battery device; `_maybeFetchForecast` makes
+  one hourly `recorder/statistics_during_period` call (period hour, mean) for
+  all rechargeables; `_fitDrain` does the post-charge least-squares fit;
+  `_compute` adds the rechargeable list, the forecast alerts and the weak-Wi-Fi
+  list; the render signature includes the fetch stamp. New YAML keys
+  `forecast_days` (3), `forecast_window_days` (7), `wifi_warn` (-70) — an
+  existing YAML needs no change. Owner picked the plain sub-line mockup of
+  three. Two render-check fixes before delivery: the forecast alert truncated
+  at the dashboard column width (now "battery low soon | ~2 days") and the
+  charging row repeated "charging". Verified: jsdom harness, 8 scenarios
+  (healthy collapsed fetch; low-soon + weak Wi-Fi; forecast-only header;
+  below-warn falls through to the existing low alert; charging; charge event
+  mid-window uses only the post-charge segment; empty statistics -> trend
+  pending; non-rechargeable low battery unchanged) + headless-Chromium render
+  + node --check + zero non-ASCII.
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

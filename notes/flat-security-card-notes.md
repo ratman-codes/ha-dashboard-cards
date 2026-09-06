@@ -12,7 +12,8 @@ private project archive — this copy is the spec.
   orange entry-delay / blue+check armed / red+alert triggered), state word in the
   flat-hero type (22px, weight 400), summary sub-line, a notable-glyph slot
   (amber icons for open sensors — dashed when bypassed; green person glyph while
-  camera occupancy is on; empty = all quiet), chevron. A 3px countdown strip
+  camera occupancy is on; v1.5: orange box glyph + age while an optional
+  `package` entity is on, tap = its more-info; empty = all quiet), chevron. A 3px countdown strip
   pins to the header's bottom edge during exit/entry delays, so the collapsed
   row still shows the countdown. Header zone toggles collapse (edge-to-edge
   hover wash, 0fr↔1fr grid-rows animation); shield taps to the alarm more-info.
@@ -49,7 +50,9 @@ optional battery, optional group) · `camera` / `occupancy` / `last_person` /
 `collapsed_default` (false) · `exit_delay` / `entry_delay` (60/15 — countdowns
 are computed card-side from the alarm's last_changed plus these values, since
 Alarmo exposes no remaining time; keep in sync with the Alarmo config) ·
-`battery_low` (25) · `camera_refresh` (10) · `camera_name` (chip label).
+`battery_low` (25) · `camera_refresh` (10) · `camera_name` (chip label) ·
+`package` (optional on/off entity, v1.5 — e.g. a package-waiting helper set by
+a doorbell automation).
 
 Two-placement pattern: the same card runs pre-expanded on a security view
 (`collapsed_default: false`, replacing a stock alarm panel + sensor list +
@@ -84,3 +87,7 @@ ASCII-clean source; zero dependencies; data-URL resource hosting.
   failed. Superseded same night.
 - v1.4.1 — ARM NOW rebuilt on Alarmo's dedicated `alarmo.skip_delay` service
   (verified against the live service schema); live-tested working.
+- v1.5 — optional `package` entity -> header box glyph + age (icon + age only,
+  so the armed-away subtitle never ellipsizes). Built for a delivery-mode
+  helper; the household later moved the glyph to the front-door card, so the
+  key is dormant in the live YAML but the feature stays.

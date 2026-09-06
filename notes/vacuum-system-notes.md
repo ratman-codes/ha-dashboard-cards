@@ -123,8 +123,9 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
 - `input_number.vacuum_notify_delay` 0.25–30 MIN, 0.25 step. Card slider soft-max 10
   (`notify_slider_max`); label-edit reaches 30. Tuned: 3 (doc previously said 5).
 - `input_text.vacuum_run_trigger` — run record (trigger + timestamp + profile). Do
-  not repurpose. Card-armed manual starts also write it
-  (`"manual <ISO> M:fan|mopi|mopm"` with LIVE device values).
+  not repurpose. Card-started runs write it too: since v2.9 `"manual <ISO>
+  A:..."` / `"D:..."` (the profile picked on the card); `"M:fan|mopi|mopm"` (live
+  device values) is only the pre-v2.9 form / the missing-helper fallback.
 - Six profile `input_select`s, options synced to the Edge 2's real lists:
   - `vacuum_suction_away` / `_default` — quiet, balanced, turbo, max, max_plus
   - `vacuum_mop_intensity_away` / `_default` — off, slight, low, medium, moderate,
@@ -158,10 +159,21 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   internet, inside HA backups. Resource id `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
   Install path: **Card Manager** (preferred). Deploy loop: edit source →
   `node --check` → grep non-ASCII (must be 0) → base64 → paste over the resource URL
-  → hard refresh.
-- **Deployed: v2.8.1, FNV-1a `33f14a36`, 106,793 bytes** — owner-installed via
+  → hard refresh. **The data-URL prefix MUST be
+  `data:text/javascript;name=flat-vacuum-card;base64,`** — Card Manager's
+  validator rejects a bare `data:text/javascript;base64,` ("Not a valid
+  data:text/javascript;name=…;base64,… URL", write blocked; first-ever
+  validation failure, 2026-09-04, caused by rebuilding the wrapper from memory).
+  Before delivering a data-URL file, diff its prefix against the last accepted
+  one (`head -c 52 | cmp`).
+- **Deployed: v2.9.2, FNV-1a `d4376f7e`, 111,784 bytes** — delivered
+  2026-09-05 for owner install via Card Manager (confirm: the resource header
+  shows `d4376f7e`); NOT yet byte-verified against the live blob. Lineage:
+  **v2.9 `9cb7619e` / 110,052 B** (owner-installed 2026-09-04, Card Manager
+  validated, first live profile start 16:47 PT) → **v2.9.1 `043e8e0a` /
+  111,074 B** (owner-installed mid-run 7) → v2.9.2. Previous: v2.8.1 `33f14a36` / 106,793 B — owner-installed via
   Card Manager 2026-09-03 evening; live blob byte-verified = archive = local
-  build (subagent registry read, `cmp` BYTE_IDENTICAL). Same-day lineage: v2.8
+  build (subagent registry read, `cmp` BYTE_IDENTICAL). 09-03 lineage: v2.8
   `8df41b74` / 104,301 B (installed + verified that afternoon) → v2.8.1
   iterated through three superseded blobs (`34919e7b` dot title, `1cb1ee28`
   colon title, `d0934fd4` em-dash title, `5b1e92bd` + pit-stop label) → final
@@ -171,7 +183,8 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
 - Structure: status header + four accordion groups:
   - HEADER: warning-first amber prefix tokens (blocked > dock > water) ahead of
     state-colored text; "34% done"; current room while cleaning; dock-activity
-    states (washing_the_mop / going_to_wash_the_mop / emptying_the_bin from
+    states (washing_the_mop / going_to_wash_the_mop / emptying_the_bin /
+    attaching_the_mop / detaching_the_mop from
     `sensor.qx_revo_ultra_2_status`) render as run-in-progress with pause + dock +
     map controls (`charging` and stale `paused` deliberately excluded). Contextual
     controls: two-tap-arm play / warning Start+Abort / map+pause+dock; long-press =
@@ -199,6 +212,24 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     `washing_the_mop` → "Washing mops", `emptying_the_bin` → "Emptying bin",
     and NEW `attaching_the_mop` → "Attaching mops" (the ~10 s pad pick-up
     between passes; previously fell through to the idle Docked line).
+    **v2.9 (2026-09-04) PROFILE PICKER:** tapping play arms two chips for
+    5 s (was one "Start?" chip for 3 s) — **Away** (translucent cyan) and
+    **Default** (solid cyan). A pick reads that profile's three helpers, writes
+    them to the robot in the automation's order (`vacuum.set_fan_speed`, mop
+    intensity `select_option`, mop mode `select_option` — promise-chained,
+    each failure swallowed = `continue_on_error`), writes the run record
+    `manual <ISO> A:…`/`D:…`, then `vacuum.start` + the starting lock. The
+    helpers are read-only to the card; an Away pick is a per-run visitor like
+    a backstop away run (restore automation reverts at run end). If a helper
+    is missing/unknown the pick falls back to the v2.8 path (live values, `M:`
+    record) so a start is never blocked. **v2.9.1 STALE ELAPSED:** elapsed is
+    hidden while progress reads exactly 0 AND `cleaning_time`'s `last_changed`
+    predates the vacuum entity's — the counter still holds the previous run's
+    total (see findings); progress > 0 never hides it, so pit-stop/stall
+    lines are unaffected. **v2.9.2 (2026-09-05):** `detaching_the_mop` →
+    "Detaching mops" joins the dock-activity map (the ~8 s pad drop at the
+    dock when a two-sweep run starts; run 7 16:48:02–16:48:10). 84-probe
+    harness.
   - AUTO-CLEAN: toggle + 7 setting rows + Away profile / Default profile rows
     (summary chips "max+ · high · deep ›"; tap → popup editor with segmented
     Suction / Mop intensity / Mop mode pickers, Save writes the helpers) +
@@ -223,8 +254,9 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     reads `switch.…_dock_mop_drying`, gained a toggle; remaining-time text honors
     the sensor's unit — hours on 7.1.1), Battery status.
   - HISTORY: last 4 runs (day · time · trigger · duration · area) with a settings
-    second line — cyan = away profile (A:), dim = default (D:) or card-manual (M:),
-    absent = app-started — aligned under the time text (61px), condensed rows,
+    second line — cyan = away profile (A:), dim = default (D:) or legacy
+    card-manual (M:), absent = app-started (since v2.9 card starts are A:/D:
+    too, so a "manual" row with a cyan line = card-picked Away) — aligned under the time text (61px), condensed rows,
     14-day strip. Websocket history fetch (4 entities, 14 days), 5-min cache,
     refresh on group open. Begin/end pairing window is **12h** (v2.7rev4; was 6h —
     see Fixed bugs). **Caveat (2026-08-14): the settings line shows the
@@ -266,7 +298,12 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   → **v2.8.1 33f14a36 / 106,793 B (2026-09-03 evening: cleaning state word on
   the title line "Vacuum — Cleaning", secondary "N% done · elapsed · room";
   "Returning for pit stop" + "Attaching mops" dock-activity labels; 66-probe
-  harness)**.
+  harness)** → **v2.9 9cb7619e / 110,052 B (2026-09-04: Away/Default profile
+  picker on the armed play; A:/D: run records from the card; `_svcP`
+  promise-chained service helper)** → **v2.9.1 043e8e0a / 111,074 B
+  (2026-09-04: stale elapsed hidden at run start; 82-probe harness)** →
+  **v2.9.2 d4376f7e / 111,784 B (2026-09-05: "Detaching mops" label;
+  84-probe harness)**.
   A rev7 `48405154` history "sanitizer" (hide sub-5-minute runs) was built and
   REVERTED the same day — the owner rejected display filtering; all runs show as
   recorded. Don't rebuild it.
@@ -404,12 +441,26 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   reachable rooms at ~70 % of mapped area, and furniture/no-go boxes account
   for the rest of the 61-vs-70 gap (~1 progress point ≈ 2 m²). So "61% done"
   immediately before "finished" is the robot's honest ratio, not a fault.
-  **Owner is erasing the phantom regions with the app's map eraser
-  (2026-09-03, `isMapEraserSupported` true) — the ceiling WILL move; re-measure
-  on the next run before quoting 61 again.** Display options recorded, none
-  built (owner: leave it for now): rescale by the ceiling (one YAML number,
+  **Owner erased the phantom regions with the app's map eraser before run 7
+  (2026-09-04) — and run 7 STILL ended at 61 % with the identical curve
+  (27 → 52–54 → 37 → 61), so the mirror/window slivers were not a material
+  part of the denominator; the gated rooms (pet gate + virtual wall) are.
+  The ceiling is now considered a fixed property of this map: ~61 % =
+  complete.** Display options recorded, none built (owner: leave it for now): rescale by the ceiling (one YAML number,
   drifts on any map edit) or area-based progress from the card's own history
   (truthful, self-calibrating, a real feature).
+- **`sensor.qx_revo_ultra_2_cleaning_time` keeps the PREVIOUS run's total until
+  the robot's first in-run status report** (run 7: start 16:47:59, robot left
+  the dock 16:48:10, counter still 174.6 min = run 6's total until 16:48:40,
+  then 0.5) — so v2.8/v2.8.1 opened every run with "0% done · 2h 55m". Fixed
+  in the card (v2.9.1); the sensor itself is fine. The counter also PAUSES
+  during a recharge stall (117.8 min at 18:47 → resumed counting 21:16) and
+  reads total cleaning time, not wall clock: run 7 = 251.8 min over 7h05m.
+- **Mop-intensity select reads `unknown` (`--`) for ~40 s after a write while
+  the robot spins up** (run 7: `high` at 16:47:59 → `unknown` 16:48:00 →
+  `high` 16:48:40; mop mode and fan speed did NOT flicker). The robot echoes
+  an unmapped water-box code in its first status report — #931 family. The
+  written value took; nothing to fix card-side.
 - Guide images soften if dialogs exceed ~660px width (640px sources).
 - Service intervals are **identical to the Q Revo's** (main 300 h, side 200 h,
   filter 150 h + rinse every 2 weeks, sensors 30 h, cleaning tray monthly, dust bag
@@ -556,6 +607,28 @@ Measured so nobody re-diagnoses "the robot is too slow" as a fault:
   that exposed the card's 6h pairing cap (fixed, v2.7rev4) and re-triggered the
   restore-mid-recharge bug at 17:13:31 (fixed same day, see Fixed bugs).
   Presence worked end-to-end ON the Nabu Casa renewal date itself.
+- **Run 7 (2026-09-04 16:47 PT, CARD-STARTED AWAY via the v2.9 picker —
+  first ever; two-sweep config; progress-ceiling re-measure candidate if the
+  map-eraser edit was made):** record `manual 2026-09-04T23:47:59Z
+  A:max|high|deep_plus`; all three settings applied (recorder: fan `max`,
+  intensity `high`, mode `deep_plus`); robot left the dock 11 s after the
+  chip tap; "Starting…" lock exercised (live watch 3 ✓); `detaching_the_mop`
+  16:48:02–16:48:10 (→ v2.9.2 label). Card v2.9 → v2.9.1 mid-run.
+  **OUTCOME (recorder audit 2026-09-05): 16:48 → 23:53, 251.8 min cleaning,
+  105.1 m², 7h05m wall, no errors, final progress 61 %.** Vacuum pass
+  16:48–18:49 reached 23 % and drained 100 → 14 % (~0.72 %/min vs ~0.42 on
+  Default) → **RECHARGE STALL 18:49:54–21:16:28 (2h26m, charged 14 → 80 %;
+  the robot resumes when it judges the remainder fits — not at 100)**;
+  progress HELD at 23 through the stall; vacuum pass finished 21:16–21:45 at
+  27 % / ~60 m²; pit stop 21:45–21:49 (emptying bin → attaching mops 10 s →
+  wash); mop pass 21:49–23:53 (5 washes ~20 min apart), battery 80 → 18 %;
+  post-run wash 23:53–23:57, recharge to 100 % at 02:57. **Away profile
+  SURVIVED the stall** (mop mode `deep_plus` / intensity `high` unchanged
+  until run end — the 08-27 restore-fix's progress gate held at 23) and the
+  **run-end restore fired at 23:53:15** (`last_clean_end` change → standard /
+  medium / balanced, intensity via a 0-s `unknown` transient). Away vs
+  Default two-sweep cost: +77 min cleaning and a 2.5 h stall (run 6: 174.6
+  min, 3h11m wall, no stall). Owner did not watch the stall header.
 - The "1 min/m²" folk benchmark is a single vacuum-only pass in open rooms — never
   compare a mop-carrying 7-room run against it.
 
@@ -603,15 +676,22 @@ State as of 2026-07-27 (probe session), except where dated:
 
 ## Open items
 
-- **v2.8/v2.8.1 LIVE WATCHES** (not exercised by run 6 — no stall, backstop
-  start, no dock fault): (1) "Charging to resume" header on the next recharge
-  stall; (2) the stall dock button = `vacuum.stop` (untested — press only to
-  actually cancel a run); (3) "Starting…" lock on the next card-initiated
-  start; (4) first real dock fault → tank issue rows + `⚠ dock` token + dock
-  error row. VERIFIED by run 6: pit-stop/washing/emptying labels, elapsed time,
-  title-line state word, `main_brush_jammed` issue path, drying hours unit.
-- **Progress ceiling re-measure** after the owner's map-eraser edit (see the
-  cleaning_progress finding) — expect the completion % to rise from ~61.
+- **Confirm v2.9.2 `d4376f7e` is the live blob** (owner install pending at
+  doc time); History row for run 7 should read "manual · 7h 05m · 105 m²"
+  with a cyan `max · high · deep+` line — glance once.
+- **v2.8–v2.9.2 LIVE WATCHES:** (1) "Charging to resume" header — the data
+  says the card was in that state 18:50–21:16 on run 7 (docked + charging +
+  progress 23) but nobody looked; an eyes-on confirmation is still wanted;
+  (2) the stall dock button = `vacuum.stop` (untested — press only to
+  actually cancel a run); (4) first real dock fault → tank issue rows +
+  `⚠ dock` token + dock error row; (5) v2.9.1 stale-elapsed suppression on
+  the next run start (expect "0% done · <room>" with no elapsed for the first
+  ~40 s); (6) "Detaching mops" at the next start (v2.9.2). VERIFIED by run 6:
+  pit-stop/washing/emptying labels, elapsed time, title-line state word,
+  `main_brush_jammed` issue path, drying hours unit. VERIFIED by run 7: the
+  profile picker's three writes + A: record + start, "Starting…" lock,
+  attaching label, the restore-mid-recharge fix on a real stall, run-end
+  restore after a card-picked Away run.
 - **Post the re-based upstream issue** (`claude/roborock-upstream-issue-draft.md`,
   owner posts; optionally fill the exact July CLI version in the baseline) + a
   short "confirmed on a298" comment on #914 (draft in this chat, owner's call).
@@ -628,9 +708,6 @@ State as of 2026-07-27 (probe session), except where dated:
   maintainer responds asking for captures, CLI-probe `get_status` during a
   recharge stall vs idle-docked; when the field becomes readable in HA, swap the
   restore automation's progress-gate condition to it.
-- **Restore fix live test** — the 2026-08-27 stall-guard condition has NOT yet
-  seen a real recharge stall; verify the away profile survives on the next long
-  away run.
 - **First maintenance loop** — replace side brush / wipe sensors, reset in app.
 - **Dock-activity header vocabulary** — glance at the card during a dock mop wash.
 - **Presence flap watch** — see the wrinkle above.
@@ -646,6 +723,12 @@ dock entities surveyed (14) ✓ · strainer re-added to the overdue notify ✓ �
 unknown.` guard fixed ✓ · card v2.8 shipped + byte-verified ✓ · `deep` dropped from
 helpers ✓ · deprecated drying binary sensor disabled + repair cleared ✓ · `deep_plus`
 (303) live-verified ✓ · issue draft re-based ✓.
+**CLOSED 2026-09-04/05:** profile picker on the card's manual start (v2.9) ✓ ·
+first card-started away run end-to-end (apply → stall → restore) ✓ · starting
+lock live-verified ✓ · stale-elapsed fix (v2.9.1) ✓ · restore-mid-recharge
+fix live-proven on a real 2h26m stall ✓ · progress ceiling re-measured after
+the map edit: unchanged at 61 % (closed as a map property) ✓ · "Detaching
+mops" label (v2.9.2) ✓.
 
 **Do NOT re-offer:** folding the old Q Revo's run history into the card, the rev7
 history sanitizer, or a `smart_mode` profile.
@@ -683,6 +766,11 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
   `_dock_mop_drying_remaining_time` in HOURS; v2.7 printed the raw number as
   "min left". The row now honors `unit_of_measurement` (h → ×60).
 - **MOP-ROUTE `deep` (301) — FIXED UPSTREAM in 7.1.1**, see findings.
+- **STALE ELAPSED AT RUN START — FIXED 2026-09-04 (v2.9.1).** v2.8/v2.8.1
+  showed the previous run's total ("2h 55m") for the first ~40 s of a run
+  because `cleaning_time` only resets on the robot's first in-run report.
+  Now hidden while progress = 0 and the sensor predates the vacuum's last
+  state change.
 
 - **RESTORE-MID-RECHARGE — FIXED 2026-08-27** (found 2026-08-14; recurred
   2026-08-27 at 17:13:31, which prompted the owner to green-light shipping the
@@ -695,8 +783,10 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
   `6dcb9192d8198459`; entity re-verified on; read-back verified. Residual edge
   (accepted): a run ending with NO clean record logged AND stuck mid-range
   progress skips the restore until the next run's end (one run on stale
-  settings, self-heals). Live test pending (see Open items). Clean long-term
-  fix = `in_cleaning` (#929).
+  settings, self-heals). **LIVE-PROVEN 2026-09-04 (run 7): the away profile
+  survived a 2h26m recharge stall with progress held at 23, and the restore
+  fired on `last_clean_end` at run end.** Clean long-term fix =
+  `in_cleaning` (#929).
 - **CARD HISTORY 6-HOUR PAIRING CAP — FIXED 2026-08-27 (v2.7rev4).** `_parseHist`
   refused to pair a run begin with an end more than 6h later; run 5 (6h16m wall
   with its recharge stall) therefore showed NO duration, its END time as its

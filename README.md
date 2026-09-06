@@ -106,9 +106,10 @@ header.)*
   graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
   label toggles the rest. Used as `type: custom:flat-sensor-stack-card`.
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.8.1. Roborock control card (Qrevo Edge 2): status
+- `flat-vacuum-card.js` — v2.9.2. Roborock control card (Qrevo Edge 2): status
   header (state word on the title line while cleaning; mid-run pit-stop, recharge
-  stall and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors),
+  stall and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors;
+  play arms an Away/Default picker that applies the profile for one run and starts),
   maintenance counters + dock issue rows (dock error, water tanks), dock config
   (empty mode, wash/empty actions, mop drying toggle), run history. Needs the
   HA 2026.9+ Roborock integration (python-roborock 7.1.1) for the dock entities;
@@ -153,7 +154,7 @@ header.)*
   curves with an in-card anchor editor. All entities via YAML config. Used as
   `type: custom:flat-music-card` (see notes for the YAML shape).
   HA resource id: `87772b46cd93458f86bb144df94f502c`.
-- `flat-security-card.js` — v1.4.1. Collapsible Alarmo security card: a one-line
+- `flat-security-card.js` — v1.5. Collapsible Alarmo security card: a one-line
   sentinel header (state-colored shield, flat-hero state word, open-sensor and
   person glyphs, and a slim countdown strip during exit/entry delays — visible
   even when collapsed) that expands to a camera-forward panel — entry-camera
@@ -165,7 +166,9 @@ header.)*
   no-signal states, quiet-twin row merging, and sub-25% battery badges; the list
   focuses to the tripped sensor during entry delay and alarm, and the card
   surface pulses while triggered. Card chrome (background/border/radius) comes
-  from the theme's card variables. All entities via YAML config. Used as
+  from the theme's card variables. v1.5 adds an optional `package` entity that
+  shows an orange box glyph + age in the header's notable slot while on (a
+  package-waiting helper). All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
 - `flat-climate-card.js` — v2.1.1. Whole-house climate card for a fleet of BLE
@@ -234,7 +237,7 @@ header.)*
   hygiene). All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.6. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.7. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
@@ -247,7 +250,11 @@ header.)*
   tap to list its members; worst-first, folded past a cap with a tappable
   "+N more", absent when the day was clean),
   Batteries (tiered amber/red thresholds with bars and a quiet
-  "all > N%" summary) and Filters (purifier filter life, hidden until low;
+  "all > N%" summary; v1.7: a battery whose device also carries a
+  charge-state sensor is treated as rechargeable and gets a drain-rate
+  sub-line fitted from recorder statistics, a "low soon" alert a few days
+  before the warn line, and a green bar while charging; a sibling Wi-Fi
+  signal sensor surfaces as an amber Connectivity row only when weak) and Filters (purifier filter life, hidden until low;
   no-data rows stay dim). AUTO-DISCOVERING: reads the frontend entity/device/area
   registries, so every device owned by the configured integrations (default:
   matter) and every battery-% sensor is watched with zero YAML upkeep — new
@@ -258,6 +265,20 @@ header.)*
   a device). Device rows, alerts and lanes open the HA device page (v1.5);
   battery/filter/manual rows open more-info. Used as `type: custom:flat-maintenance-card` (see notes for the
   YAML shape). HA resource id: `3d1d66cbc6d14336b43358bde2782a91`.
+- `flat-front-door-card.js` — v1.4.2. Front-door activity card for a battery
+  video doorbell (never renders the camera entity — that wakes a battery
+  doorbell): collapsed header with a doorbell glyph and a "1 package - 1
+  lingering - 23 walkers today" subtitle plus an optional package-waiting glyph,
+  expanding to LAST 24H tick rows (ring / package / lingering / vehicle, times
+  labeled) over a per-hour walkers density strip and a SNAPSHOTS gallery of the
+  newest dated snapshot files; a single `history >` pop-out shows a weekday x
+  hour walkway heatmap (7d/30d/90d/1y from a long-term-statistics counter, or
+  7d/14d from raw history), summary tiles and every snapshot. Lingering marks
+  come from per-event snapshot files (HA does not record an automation's
+  last_triggered). Zero HA entities created; all data via recorder / statistics
+  / media-source websocket calls. Used as `type: custom:flat-front-door-card`
+  (see notes for the YAML shape). Resource identified by its
+  `name=flat-front-door-card` label.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -279,7 +300,7 @@ header.)*
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
   `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
   `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md`,
-  `notes/flat-maintenance-card-notes.md` —
+  `notes/flat-maintenance-card-notes.md`, `notes/flat-front-door-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 

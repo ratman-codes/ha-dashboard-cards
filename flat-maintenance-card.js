@@ -1,4 +1,19 @@
-/* flat-maintenance-card v1.6
+/* flat-maintenance-card v1.7
+ *
+ * v1.7: RECHARGEABLE BATTERY FORECAST + WI-FI WATCH. A battery whose device also
+ * carries a charge-state enum sensor (options include 'charging' - e.g. the
+ * Reolink doorbell's battery_state) is treated as RECHARGEABLE: it gets its own
+ * bar row plus a dim sub-line with the 7-day drain (%/day, least-squares fit over
+ * recorder statistics, segment after the last charge only) and the date the
+ * battery_warn line is reached. Alert when that date is within forecast_days
+ * (default 3), even while the % is still above battery_warn - the
+ * charge-it-this-weekend nudge. While charging the bar turns green and the
+ * sub-line says so. A sibling signal_strength sensor whose id contains 'wifi' /
+ * 'wi_fi' is watched: below wifi_warn dBm (default -70) it becomes an amber
+ * Connectivity row + alert; silent otherwise (green is boring). One
+ * recorder/statistics_during_period call per rechargeable per hour, also while
+ * collapsed (the alert strip must work collapsed). Zero HA entities, as always.
+ * YAML: forecast_days (3), forecast_window_days (7), wifi_warn (-70).
  *
  * (Renamed from flat-health-card in v1.2 - same card, owner preferred the name.)
  * Device maintenance card: Matter connectivity + battery levels + purifier filter
@@ -80,6 +95,9 @@
  *   history_hours: 24       # LAST 24H lanes window; 0 = no history section
  *   history_max_lanes: 6    # worst-first fold, then a tappable "+N more"
  *   history_event_window_s: 120  # drops within this many seconds = one network event
+ *   forecast_days: 3        # rechargeable: alert when battery_warn is this close (days)
+ *   forecast_window_days: 7 # rechargeable: statistics window for the drain fit
+ *   wifi_warn: -70          # dBm; a watched Wi-Fi signal below this = amber row + alert
  *   devices:                # OPTIONAL manual extras (or full manual mode w/ auto: false)
  *     - name: Extra Device
  *       entity: sensor.my_extra_canary
@@ -149,6 +167,12 @@
     "M16 18H8V6h8m.67-2H15V2H9v2H7.33C6.6 4 6 4.6 6 5.33v15.34C6 21.4 6.6 22 7.33 22h9.34c.73 0 1.33-.6 1.33-1.33V5.33C18 4.6 17.4 4 16.67 4z";
   const ICON_CLOCK =
     "M12 2A10 10 0 002 12a10 10 0 0010 10 10 10 0 0010-10A10 10 0 0012 2m1 5v6l4.25 2.52.77-1.28-3.52-2.09V7H13z";
+  const ICON_WIFI =
+    "M12 3C7.79 3 3.7 4.41.38 7 4.41 12.06 7.89 16.37 12 21.5c4.08-5.08 8.24-10.26 11.65-14.5C20.32 4.41 16.22 3 12 3z";
+  const fmtDate = (ms) => {
+    try { return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+    catch (e) { return ""; }
+  };
 
   const CSS = `
     :host { display: block; }
@@ -238,6 +262,12 @@
     .bar i{ display:block; height:100%; border-radius:3px; background: rgba(155,155,155,.55); }
     .bar.warn i{ background:#ffc107; }
     .bar.err i{ background:#f4511e; }
+    .bar.chg i{ background:#7cb342; }
+    .row.sub{ padding:0 0 6px 0; margin-top:-3px; font-size:12px; }
+    .row.sub .k{ color:#6f6f6f; }
+    .row.sub .v{ color: var(--secondary-text-color, #9b9b9b); font-size:12px; }
+    .row.sub.warn .v, .row.sub.err .v{ color:#ffc107; }
+    .row.sub.err .v{ color:#f4511e; }
     .pct{
       width:38px; text-align:right; font-size:12.5px; flex:none;
       color: var(--secondary-text-color, #9b9b9b); font-variant-numeric: tabular-nums;
@@ -298,6 +328,10 @@
       this._histError = false;
       this._evtOpen = {};
       this._moreOpen = false;
+      this._fc = {};
+      this._fcAt = 0;
+      this._fcPending = false;
+      this._fcStamp = 0;
     }
 
     setConfig(config) {
@@ -332,16 +366,22 @@
         banner_threshold: num(config.banner_threshold, 5),
         history_hours: num(config.history_hours, 24),
         history_max_lanes: num(config.history_max_lanes, 6),
-        history_event_window_s: num(config.history_event_window_s, 120)
+        history_event_window_s: num(config.history_event_window_s, 120),
+        forecast_days: num(config.forecast_days, 3),
+        forecast_window_days: num(config.forecast_window_days, 7),
+        wifi_warn: num(config.wifi_warn, -70)
       };
       this._open = config.collapsed_default === false;
       this._sig = "";
       this._disc = null;
       this._hist = null;
       this._histAt = 0;
+      this._fc = {};
+      this._fcAt = 0;
       this._build();
       if (this._hass) {
         this._update();
+        this._maybeFetchForecast(true);
         if (this._open) this._maybeFetchHistory(true);
       }
     }
@@ -351,6 +391,7 @@
       this._hass = hass;
       if (this._built) {
         this._update();
+        if (first || Date.now() - this._fcAt > 3600000) this._maybeFetchForecast(false);
         if (this._open && (first || Date.now() - this._histAt > 300000)) this._maybeFetchHistory(false);
       }
     }
@@ -681,6 +722,78 @@
       return out;
     }
 
+    // ---------- RECHARGEABLE FORECAST (v1.7) ----------
+
+    _maybeFetchForecast(force) {
+      const H = this._hass;
+      if (!H || this._fcPending || typeof H.callWS !== "function") return;
+      if (!force && Date.now() - this._fcAt < 3600000) return;
+      const disc = this._discover(H);
+      const ids = disc.autoBats.filter((b) => b.rech).map((b) => b.ent);
+      this._fcAt = Date.now();
+      if (!ids.length) { this._fc = {}; return; }
+      const days = Math.max(1, this._cfg.forecast_window_days);
+      const now = Date.now();
+      this._fcPending = true;
+      H.callWS({
+        type: "recorder/statistics_during_period",
+        start_time: new Date(now - days * 86400000).toISOString(),
+        end_time: new Date(now).toISOString(),
+        statistic_ids: ids,
+        period: "hour",
+        types: ["mean"]
+      }).then((raw) => {
+        this._fcPending = false;
+        const fc = {};
+        for (const id of ids) fc[id] = this._fitDrain((raw && raw[id]) || []);
+        this._fc = fc;
+        this._fcStamp++;
+        this._sig = "";
+        if (this._built) this._update();
+      }).catch(() => {
+        this._fcPending = false;
+        this._fc = {};
+        this._fcStamp++;
+        this._sig = "";
+        if (this._built) this._update();
+      });
+    }
+
+    _statTime(r) {
+      const s = r.start;
+      if (typeof s === "number") return s > 1e12 ? s : s * 1000;
+      if (typeof s === "string") return Date.parse(s);
+      return NaN;
+    }
+
+    _fitDrain(rows) {
+      // least-squares slope (%/day) over the segment after the last charge (a >2 pt hour-to-hour rise)
+      const pts = [];
+      for (const r of rows) {
+        const t = this._statTime(r);
+        const v = typeof r.mean === "number" ? r.mean : parseFloat(r.mean);
+        if (isFinite(t) && isFinite(v)) pts.push({ t: t, v: v });
+      }
+      pts.sort((a, b) => a.t - b.t);
+      let segStart = 0;
+      for (let i = 1; i < pts.length; i++) if (pts[i].v > pts[i - 1].v + 2) segStart = i;
+      const seg = pts.slice(segStart);
+      if (seg.length < 12 || seg[seg.length - 1].t - seg[0].t < 24 * 3600000) {
+        return { slope: null, hours: seg.length ? (seg[seg.length - 1].t - seg[0].t) / 3600000 : 0 };
+      }
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      const t0 = seg[0].t;
+      for (const p of seg) {
+        const x = (p.t - t0) / 86400000;
+        sx += x; sy += p.v; sxx += x * x; sxy += x * p.v;
+      }
+      const n = seg.length;
+      const den = n * sxx - sx * sx;
+      if (den <= 0) return { slope: null, hours: 0 };
+      const slope = (n * sxy - sx * sy) / den; // %/day, negative = draining
+      return { slope: slope, hours: (seg[seg.length - 1].t - t0) / 3600000 };
+    }
+
     _areaName(hass, areaId) {
       if (!areaId || !hass.areas || !hass.areas[areaId]) return null;
       return hass.areas[areaId].name || null;
@@ -770,10 +883,25 @@
             (a.friendly_name ? String(a.friendly_name).replace(/\s*battery.*$/i, "") : eid);
           if (this._excluded(rawName, [eid])) continue;
           if (devId) seenBatDevice[devId] = true;
+          // v1.7: siblings on the same device - charge-state enum => rechargeable; Wi-Fi signal => watched
+          let chargeEnt = null, wifiEnt = null;
+          const sib = devId && byDevice[devId] ? byDevice[devId].ents : [];
+          for (const se of sib) {
+            if (se.indexOf("sensor.") !== 0) continue;
+            const ss = hass.states[se];
+            const sa = ss && ss.attributes;
+            if (!sa) continue;
+            if (!chargeEnt && Array.isArray(sa.options) && sa.options.indexOf("charging") !== -1) chargeEnt = se;
+            if (!wifiEnt && sa.device_class === "signal_strength" && /wi_?fi/.test(se)) wifiEnt = se;
+          }
           autoBats.push({
             name: Object.prototype.hasOwnProperty.call(C.rename, rawName) ? C.rename[rawName] : rawName,
             area: this._areaOf(hass, eid),
-            ent: eid
+            ent: eid,
+            dev: devId || null,
+            chargeEnt: chargeEnt,
+            wifiEnt: wifiEnt,
+            rech: !!chargeEnt
           });
         }
         autoBats.sort((a, b) => a.name.localeCompare(b.name));
@@ -797,7 +925,8 @@
       const disc = this._discover(H);
 
       const conn = { total: 0, up: 0, down: [], settling: [], missing: [] };
-      const bats = { total: 0, low: [], lowest: null, nodata: [] };
+      const bats = { total: 0, low: [], lowest: null, lowestOther: null, nodata: [], rech: [], forecast: [] };
+      const wifi = { weak: [] };
       const seenBatEnt = {};
 
       // auto-discovered connectivity devices: down = ALL present entities unavailable
@@ -837,8 +966,35 @@
         if (!isFinite(v)) continue; // silent skip: text/unavailable auto batteries
         bats.total++;
         if (bats.lowest === null || v < bats.lowest) bats.lowest = v;
+        if (!b.rech && (bats.lowestOther === null || v < bats.lowestOther)) bats.lowestOther = v;
         if (v <= C.battery_warn) {
-          bats.low.push({ name: b.name, area: b.area, ent: b.ent, v: v, crit: v <= C.battery_crit });
+          bats.low.push({ name: b.name, area: b.area, ent: b.ent, v: v, crit: v <= C.battery_crit, rech: b.rech });
+        }
+        if (b.rech) {
+          const cs = b.chargeEnt && H.states[b.chargeEnt] ? String(H.states[b.chargeEnt].state) : "";
+          const charging = cs === "charging";
+          const full = cs === "chargecomplete";
+          const f = this._fc[b.ent] || null;
+          let slope = f && typeof f.slope === "number" ? f.slope : null;
+          let daysTo = null, whenMs = null;
+          if (!charging && slope !== null && slope < 0 && v > C.battery_warn) {
+            daysTo = (v - C.battery_warn) / -slope;
+            whenMs = now + daysTo * 86400000;
+          }
+          const r = {
+            name: b.name, area: b.area, ent: b.ent, dev: b.dev, v: v,
+            crit: v <= C.battery_crit, low: v <= C.battery_warn,
+            charging: charging, full: full, slope: slope, daysTo: daysTo, whenMs: whenMs,
+            pending: !charging && slope === null
+          };
+          bats.rech.push(r);
+          if (!r.low && daysTo !== null && daysTo <= C.forecast_days) bats.forecast.push(r);
+        }
+        if (b.wifiEnt && H.states[b.wifiEnt]) {
+          const wv = parseFloat(H.states[b.wifiEnt].state);
+          if (isFinite(wv) && wv < C.wifi_warn) {
+            wifi.weak.push({ name: b.name, area: b.area, ent: b.wifiEnt, dev: b.dev, v: wv });
+          }
         }
       }
 
@@ -864,6 +1020,7 @@
           if (isFinite(v)) {
             bats.total++;
             if (bats.lowest === null || v < bats.lowest) bats.lowest = v;
+            if (bats.lowestOther === null || v < bats.lowestOther) bats.lowestOther = v;
             if (v <= C.battery_warn) {
               bats.low.push({
                 name: d.name, area: this._areaOf(H, d.battery), ent: d.battery,
@@ -895,8 +1052,9 @@
       filt.low.sort((a, b) => a.v - b.v);
 
       const banner = conn.down.length >= C.banner_threshold;
-      const issues = conn.down.length + conn.missing.length + bats.low.length + filt.low.length;
-      return { conn, bats, filt, banner, issues };
+      const issues = conn.down.length + conn.missing.length + bats.low.length + filt.low.length +
+        bats.forecast.length + wifi.weak.length;
+      return { conn, bats, filt, wifi, banner, issues };
     }
 
     _update() {
@@ -911,6 +1069,9 @@
         m.bats.total, m.bats.lowest,
         m.bats.low.map((x) => [x.name, x.area, x.v, x.crit]),
         m.bats.nodata.map((x) => x.name),
+        this._fcStamp,
+        m.bats.rech.map((x) => [x.name, x.v, x.charging, x.full, x.pending, x.slope === null ? null : Math.round(x.slope * 100), x.daysTo === null ? null : Math.round(x.daysTo * 10)]),
+        m.wifi.weak.map((x) => [x.name, x.v]),
         m.filt.total, m.filt.lowest,
         m.filt.low.map((x) => [x.name, x.v]),
         m.filt.nodata.map((x) => x.name)
@@ -930,6 +1091,11 @@
       if (m.banner) {
         el.s.textContent =
           "Matter mesh trouble - " + conn.down.length + " of " + conn.total + " unreachable";
+      } else if (m.issues === 1 && m.bats.forecast.length === 1) {
+        const r = m.bats.forecast[0];
+        el.s.textContent = r.name + " battery " + r.v + "% - charge in " + this._fmtDays(r.daysTo);
+      } else if (m.issues === 1 && m.wifi.weak.length === 1) {
+        el.s.textContent = m.wifi.weak[0].name + " Wi-Fi weak - " + m.wifi.weak[0].v + " dBm";
       } else if (m.issues > 0) {
         el.s.textContent =
           m.issues + (m.issues === 1 ? " issue" : " issues") +
@@ -954,7 +1120,8 @@
       el.sect.innerHTML = this._sectHtml(m);
       el.foot.innerHTML = m.banner
         ? "Wait out the ~10 min reconnect storm before battery reseats - reseats during the storm fail."
-        : "Reachable is not proven alive - a sleepy remote can die silently; press a button to truly verify after Matter trouble.";
+        : "Reachable is not proven alive - a sleepy remote can die silently; press a button to truly verify after Matter trouble." +
+          (m.bats.rech.length ? " Rechargeable forecast = " + this._cfg.forecast_window_days + "-day drain fit; Wi-Fi rows appear only when weak." : "");
     }
 
     _alertsHtml(m) {
@@ -979,6 +1146,12 @@
         for (const x of m.bats.low.filter((b) => !b.crit)) {
           alerts.push(this._alert("", ICON_BATT, this._label(x) + " battery low", x.v + "%", x.ent));
         }
+        for (const x of m.bats.forecast) {
+          alerts.push(this._alert("", ICON_BATT, this._label(x) + " battery low soon", this._fmtDays(x.daysTo), x.ent));
+        }
+        for (const x of m.wifi.weak) {
+          alerts.push(this._alert("", ICON_WIFI, this._label(x) + " Wi-Fi weak", x.v + " dBm", null, this._tgt(x)));
+        }
         for (const x of m.filt.low) {
           alerts.push(this._alert("", ICON_CLOCK, esc(x.name) + " filter", x.v + "%", x.ent));
         }
@@ -989,6 +1162,41 @@
         alerts.push(this._alert("plain", ICON_ALERT, "+ " + extra + " more (expand for details)", "", null));
       }
       return alerts.join("");
+    }
+
+    _fmtDays(d) {
+      if (d === null || !isFinite(d)) return "?";
+      if (d < 1) return "under a day";
+      const n = Math.round(d);
+      return "~" + n + (n === 1 ? " day" : " days");
+    }
+
+    _rechRows(x) {
+      const C = this._cfg;
+      const cls = x.crit ? "err" : x.low ? "warn" : "";
+      let h = "";
+      if (x.charging) {
+        h += '<div class="row' + (cls ? " " + cls : "") + '" data-ent="' + esc(x.ent) + '">' +
+          '<span class="k">' + this._kName(x) + '</span>' +
+          '<span class="bar chg"><i style="width:' + Math.max(0, Math.min(100, x.v)) + '%"></i></span>' +
+          '<span class="pct">' + x.v + "%</span></div>";
+        h += this._row("sub", "rechargeable", "charging", x.ent);
+        return h;
+      }
+      h += this._barRow(cls, this._kName(x), x.v, x.ent);
+      let k, v;
+      if (x.slope === null) {
+        k = "rechargeable"; v = x.full ? "charged" : '<span class="dim">trend pending</span>';
+      } else {
+        const perDay = Math.abs(x.slope) < 0.05 ? "0.0" : (x.slope > 0 ? "+" : "-") + Math.abs(x.slope).toFixed(1);
+        k = "rechargeable - " + perDay + " %/day";
+        if (x.low) v = "below " + C.battery_warn + "%";
+        else if (x.daysTo === null) v = "holding";
+        else v = C.battery_warn + "% in " + this._fmtDays(x.daysTo).replace("~", "~").replace(" days", " d").replace(" day", " d") +
+          ' <span class="dim">- ' + esc(fmtDate(x.whenMs)) + "</span>";
+      }
+      h += this._row("sub" + (cls ? " " + cls : ""), k, v, x.ent);
+      return h;
     }
 
     _tgt(x) {
@@ -1030,6 +1238,9 @@
       for (const x of conn.settling) {
         h += this._row("dim", this._kName(x), "settling - " + fmtDur(x.age), null, this._tgt(x));
       }
+      for (const x of m.wifi.weak) {
+        h += this._row("warn", this._kName(x), "Wi-Fi " + x.v + " dBm", null, this._tgt(x));
+      }
       if (conn.down.length || conn.missing.length) {
         h += this._row("", "Everything else", conn.up + " / " + conn.up + " reachable", null);
       } else {
@@ -1039,15 +1250,19 @@
       h += this._histHtml();
 
       h += '<div class="sname">Batteries</div>';
-      for (const x of bats.low) {
+      for (const x of bats.rech) h += this._rechRows(x);
+      const lowOther = bats.low.filter((b) => !b.rech);
+      for (const x of lowOther) {
         h += this._barRow(x.crit ? "err" : "warn", this._kName(x), x.v, x.ent);
       }
-      const okBats = bats.total - bats.low.length;
+      const okBats = bats.total - lowOther.length - bats.rech.length;
       if (bats.total === 0) {
         h += this._row("dim", "No battery data", "", null);
-      } else if (bats.low.length) {
+      } else if (okBats <= 0) {
+        // every battery is itemized above
+      } else if (lowOther.length || bats.rech.length) {
         h += this._row("", okBats + (okBats === 1 ? " other" : " others"),
-          "all &gt; " + C.battery_warn + "%", null);
+          "all &gt; " + C.battery_warn + "%" + (bats.rech.length && !lowOther.length && bats.lowestOther !== null ? ' <span class="dim">- lowest ' + bats.lowestOther + "%</span>" : ""), null);
       } else {
         h += this._row("", bats.total + " devices",
           "all &gt; " + C.battery_warn + '% <span class="dim">- lowest ' + bats.lowest + "%</span>", null);

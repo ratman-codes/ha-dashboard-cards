@@ -1,4 +1,39 @@
-/* flat-vacuum-card v2.8.1 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.9.2 - custom Lovelace card for the main dashboard.
+   v2.9.2 (2026-09-05, run-7 audit): "Detaching mops" added to the dock-activity
+   map - the robot reports detaching_the_mop for ~8 s at the start of a
+   two-sweep run (pads dropped at the dock for the vacuum pass; run 7:
+   16:48:02-16:48:10). Card-started runs had it masked by the starting lock;
+   app-started runs showed the plain Docked line. Now renders like the other
+   dock states (cyan, run controls). Run 7 also LIVE-VERIFIED, no card change:
+   the recharge-stall path (docked 18:49 at 14 % -> resumed 21:16 at 80 %,
+   progress held at 23) and the restore-mid-recharge automation fix (away
+   profile survived the stall; restore fired at run end 23:53:15).
+   v2.9.1 (2026-09-04, first live profile start): STALE ELAPSED HIDDEN. The
+   robot's cleaning_time counter keeps the PREVIOUS run's total until its
+   first in-run status report (~30-40 s after leaving the dock), so a fresh
+   run opened with "0% done - 2h 55m". Elapsed is now suppressed while
+   progress reads exactly 0 AND the time sensor has not changed since the
+   vacuum entity's last state change (= still the old run's number); the
+   first tick of the new counter clears both conditions. Mid-run and stall
+   lines are unaffected (progress > 0). Also seen on that start, NOT a card
+   issue: the mop-intensity select read unknown ("--") for ~40 s after the
+   write - the robot echoes an unmapped water-box code while spinning up
+   (#931 family) - then settled on the written value.
+   v2.9 (2026-09-03): PROFILE PICKER on the card's manual start. Tapping play
+   now arms two chips, "Away" and "Default", for 5 s (was one "Start?" chip
+   for 3 s). Tapping one reads the three helper values of that profile
+   (input_select.vacuum_{suction,mop_intensity,mop_mode}_{away,default}),
+   pushes them to the robot exactly the way the auto-clean automation does
+   (vacuum.set_fan_speed + two select.select_option, each allowed to fail
+   without blocking the start = the automation's continue_on_error), writes
+   the run record as "manual <ISO> A:..." / "D:..." (History renders the
+   away line cyan, same as automation away runs), then vacuum.start + the
+   30-s starting lock. The helpers are never written: an Away start is a
+   per-run visitor like a backstop away run, and the restore automation puts
+   Default back on the robot at run end. The v2.8 "start with whatever is on
+   the robot" path (M: record) is gone - if a profile helper is missing the
+   chip falls back to it so a start is never blocked. Chip styling: Default
+   solid cyan (the normal case), Away translucent cyan (the History colour).
    v2.8.1 (2026-09-03, first live run on v2.8): two header wording changes.
    (1) CLEANING LINE DECLUTTERED: while cleaning, the state word moves UP to
        the title line ("Vacuum \u2014 Cleaning": white label, grey em dash,
@@ -113,7 +148,8 @@
    rows show it as a tiny second line (cyan = away profile, dim grey =
    default, absent = pre-feature or app-started run). Card-armed manual
    starts write their own record with the LIVE settings ("manual <iso>
-   M:fan|mopi|mopm") - only app-started runs stay unannotated (the card
+   M:fan|mopi|mopm"; since v2.9 the card records A:/D: and M: is only the
+   missing-helper fallback) - only app-started runs stay unannotated (the card
    cannot see those coming). Group height flexes.
    v2.5: STICKY-DEFAULT SUCTION PROFILES - two dropdown rows in Auto-clean
    (Away suction / Default suction, input_select.vacuum_suction_away /
@@ -347,6 +383,13 @@ class FlatVacuumCard extends HTMLElement {
   }
   _svc(domain, service, data) {
     if (this._hass) this._hass.callService(domain, service, data);
+  }
+  /* promise form: resolves when HA has processed the call (or at once with no
+     hass); a rejection is swallowed so a chained start is never blocked */
+  _svcP(domain, service, data) {
+    let p = null;
+    try { if (this._hass) p = this._hass.callService(domain, service, data); } catch (err) { p = null; }
+    return Promise.resolve(p).catch(() => null);
   }
   _optv(key, fallback) {
     return (this._opt[key] != null && (this._dragKey === key || Date.now() < this._optUntil))
@@ -590,7 +633,8 @@ class FlatVacuumCard extends HTMLElement {
           <span class="hctl" id="hctl">
             <span class="vbtn" id="hmap" style="display:none"><ha-icon icon="mdi:map-outline"></ha-icon></span>
             <span class="vbtn" id="hplay" style="display:none"><ha-icon icon="mdi:play" style="color:${ACCENT_TEXT}"></ha-icon></span>
-            <span class="chip armc" id="harm" style="display:none">Start?</span>
+            <span class="chip startc" id="haway" style="display:none">Away</span>
+            <span class="chip armc" id="hdef" style="display:none">Default</span>
             <span class="chip startc" id="hstart" style="display:none">Start</span>
             <span class="chip abortc" id="habort" style="display:none">Abort</span>
             <span class="vbtn" id="hpause" style="display:none"><ha-icon id="hpico" icon="mdi:pause"></ha-icon></span>
@@ -845,7 +889,7 @@ class FlatVacuumCard extends HTMLElement {
       </div>
     `;
     this._el = {};
-    const ids = ['hdr','hico','hsub','httl','hctl','hmap','hplay','harm','hstart','habort','hpause','hpico','hdock',
+    const ids = ['hdr','hico','hsub','httl','hctl','hmap','hplay','haway','hdef','hstart','habort','hpause','hpico','hdock',
       'body','g_auto','auico','ch_auto','asw','b_auto',
       'rdays','dminus','dval','dplus','rwin','cws','cwe','rback','cbk',
       'rdelay','track_delay','dlval','dlin','rnotif','nseg','rwarn','track_notify','ntval','ntin',
@@ -922,7 +966,7 @@ class FlatVacuumCard extends HTMLElement {
     });
     /* header controls: keep presses off the header */
     el.hctl.addEventListener('pointerdown', (e) => e.stopPropagation());
-    [el.hplay, el.harm, el.hstart, el.habort, el.hpause, el.hdock].forEach(b => this._press(b));
+    [el.hplay, el.haway, el.hdef, el.hstart, el.habort, el.hpause, el.hdock].forEach(b => this._press(b));
     const disarm = () => {
       this._armUntil = 0;
       if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }
@@ -930,30 +974,50 @@ class FlatVacuumCard extends HTMLElement {
     };
     el.hplay.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._armUntil = Date.now() + 3000;
+      this._armUntil = Date.now() + 5000;
       if (this._armTimer) clearTimeout(this._armTimer);
-      this._armTimer = setTimeout(disarm, 3000);
+      this._armTimer = setTimeout(disarm, 5000);
       this._render();
     });
-    el.harm.addEventListener('click', (e) => {
-      e.stopPropagation();
+    /* v2.9 PROFILE START: apply the chosen profile's helper values to the
+       robot (same three writes as the auto-clean automation, each tolerant
+       of failure), record the run as A:/D:, then start. Sequential so the
+       record and the start follow the settings; a rejected setting never
+       blocks the start (= continue_on_error). If a helper is missing/unknown
+       the start falls back to the v2.8 behaviour: live values, M: record. */
+    const startProfile = (kind) => {
       const s = this._st(c.vacuum);
       const st = s ? s.state : '';
       const a = this._st(c.automation);
-      if ((st === 'docked' || st === 'idle') && !(a && (a.attributes.current || 0) > 0)) {
-        /* record the LIVE settings this manual run will use (M: prefix),
-           mirroring the automation's A:/D: records */
+      if (!((st === 'docked' || st === 'idle') && !(a && (a.attributes.current || 0) > 0))) { disarm(); return; }
+      const hv = (id) => { const h = this._st(id); const v = h ? h.state : '';
+        return (v && v !== 'unknown' && v !== 'unavailable') ? v : ''; };
+      const fanP = hv(kind === 'away' ? c.suction_away_entity : c.suction_default_entity);
+      const miP = hv(kind === 'away' ? c.mop_intensity_away_entity : c.mop_intensity_default_entity);
+      const mmP = hv(kind === 'away' ? c.mop_mode_away_entity : c.mop_mode_default_entity);
+      const iso = new Date().toISOString();
+      this._lockStart();
+      disarm();
+      let chain;
+      let rec;
+      if (fanP && miP && mmP) {
+        chain = this._svcP('vacuum', 'set_fan_speed', { entity_id: c.vacuum, fan_speed: fanP })
+          .then(() => this._svcP('select', 'select_option', { entity_id: c.mop_intensity_entity, option: miP }))
+          .then(() => this._svcP('select', 'select_option', { entity_id: c.mop_mode_entity, option: mmP }));
+        rec = 'manual ' + iso + ' ' + (kind === 'away' ? 'A:' : 'D:') + fanP + '|' + miP + '|' + mmP;
+      } else {
+        chain = Promise.resolve();
         const fan = (s && s.attributes.fan_speed) || '';
         const mi = (this._st(c.mop_intensity_entity) || {}).state || '';
         const mm = (this._st(c.mop_mode_entity) || {}).state || '';
-        if (fan && mi && mm)
-          this._svc('input_text', 'set_value', { entity_id: c.run_trigger_entity,
-            value: 'manual ' + new Date().toISOString() + ' M:' + fan + '|' + mi + '|' + mm });
-        this._svc('vacuum', 'start', { entity_id: c.vacuum });
-        this._lockStart();
+        rec = (fan && mi && mm) ? 'manual ' + iso + ' M:' + fan + '|' + mi + '|' + mm : '';
       }
-      disarm();
-    });
+      chain
+        .then(() => rec ? this._svcP('input_text', 'set_value', { entity_id: c.run_trigger_entity, value: rec }) : null)
+        .then(() => this._svcP('vacuum', 'start', { entity_id: c.vacuum }));
+    };
+    el.haway.addEventListener('click', (e) => { e.stopPropagation(); startProfile('away'); });
+    el.hdef.addEventListener('click', (e) => { e.stopPropagation(); startProfile('default'); });
     /* STARTING LOCK (v2.8): the cloud-polled robot takes ~15-20 s to leave
        'docked' after a start command; during that gap the header reads
        "Starting..." and play/arm stay hidden so a second tap cannot issue a
@@ -1646,7 +1710,10 @@ class FlatVacuumCard extends HTMLElement {
     const pTxt = prog != null ? ' \u00b7 ' + Math.round(prog) + '% done' : '';
     /* elapsed run time (v2.8): the sensor holds the last run's value while
        idle, so it is only appended to run-in-progress lines */
-    const elMin = this._num(c.cleaning_time_sensor);
+    const elSt = this._st(c.cleaning_time_sensor);
+    const elStale = prog === 0 && elSt && vs && elSt.last_changed && vs.last_changed
+      && Date.parse(elSt.last_changed) < Date.parse(vs.last_changed);
+    const elMin = elStale ? null : this._num(c.cleaning_time_sensor);
     const eTxt = elMin != null && elMin >= 1
       ? ' \u00b7 ' + (elMin >= 60 ? Math.floor(elMin / 60) + 'h ' + String(Math.round(elMin % 60)).padStart(2, '0') + 'm'
         : Math.round(elMin) + 'm') : '';
@@ -1671,7 +1738,7 @@ class FlatVacuumCard extends HTMLElement {
     const statusRaw = (this._st(c.status_sensor) || {}).state || '';
     const DOCK_ACT = { washing_the_mop: 'Washing mops',
       going_to_wash_the_mop: 'Returning for pit stop', emptying_the_bin: 'Emptying bin',
-      attaching_the_mop: 'Attaching mops' };
+      attaching_the_mop: 'Attaching mops', detaching_the_mop: 'Detaching mops' };
     const dockAct = !warning && (idleish || vstate === 'returning') && DOCK_ACT[statusRaw]
       ? DOCK_ACT[statusRaw] : null;
     /* RECHARGE STALL (v2.8): docked + charging + progress mid-range = the
@@ -1747,7 +1814,8 @@ class FlatVacuumCard extends HTMLElement {
     const idleCtl = idleish && !warning && !dockAct && !unavailable && !stall && !starting;
     show(el.hmap, running || vstate === 'returning' || !!dockAct || stall);
     show(el.hplay, idleCtl && !armed);
-    show(el.harm, idleCtl && armed);
+    show(el.haway, idleCtl && armed);
+    show(el.hdef, idleCtl && armed);
     show(el.hstart, warning);
     show(el.habort, warning);
     show(el.hpause, running || !!dockAct);

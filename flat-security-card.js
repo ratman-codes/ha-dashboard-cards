@@ -1,4 +1,10 @@
-/* flat-security-card v1.4.1
+/* flat-security-card v1.5
+   v1.5: PACKAGE WAITING glyph. Optional `package:` = an input_boolean (or any on/off
+   entity) that is ON while a delivery sits outside. While on, the header glyph slot
+   shows a box icon + its age ("1h 12m") in the bypass orange, visible even collapsed;
+   tap = that entity's more-info (clear it by hand if the door-contact clear ever
+   misses). Off or unconfigured = nothing renders (absence is good news).
+
    Sentinel-row security card for Alarmo: a one-line collapsible header (shield,
    state word, summary, notable glyphs, countdown strip) that expands to a
    camera-forward monitoring body (live entry-cam view, ARM/DISARM strip,
@@ -19,6 +25,7 @@
      camera: camera.entry_cam                        # optional
      frigate_url: https://frigate.local:8971         # optional - ENTRY CAM chip opens this
      occupancy: binary_sensor.entry_cam_person       # optional (PERSON chip, shown only when on)
+     package: input_boolean.package_waiting          # optional (v1.5: header box glyph + age while on)
      last_person: image.entry_cam_person             # optional
      collapsed_default: false                        # true = sentinel row
      exit_delay: 60                                  # match Alarmo config
@@ -97,6 +104,7 @@
     return '<svg class="' + (cls || '') + '" viewBox="0 0 24 24" fill="none" stroke-width="1.5">' + body + '</svg>';
   }
   var PERSON_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="' + C.green + '" stroke-width="1.6"><circle cx="12" cy="7" r="3"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg>';
+  var PKG_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="' + C.warn + '" stroke-width="1.6"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>';
   var CHEV = '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="' + C.ink + '" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>';
   var LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 11V8a4 4 0 018 0v3"/><rect x="6" y="11" width="12" height="9" rx="1.5"/></svg>';
   var SHIELD_SMALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="' + SHIELD_BASE + '"/></svg>';
@@ -147,6 +155,8 @@
     '.l2{font-size:11.5px;color:' + C.inkDim + ';margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '.gl{display:flex;gap:10px;align-items:center;flex:none}' +
     '.gl svg{width:18px;height:18px}' +
+    '.gl-pkg{display:none;align-items:center;gap:5px;color:' + C.warn + ';font-size:11px;letter-spacing:.3px;white-space:nowrap;cursor:pointer;padding:2px 4px;border-radius:5px}' +
+    '@media (hover:hover){.gl-pkg:hover{background:' + C.wash + '}}' +
     '.chev{width:16px;height:16px;opacity:.4;transition:transform .35s cubic-bezier(.4,0,.2,1)}' +
     '.chev.up{transform:rotate(180deg)}' +
     '.hdbar{height:3px;background:' + C.track + '}' +
@@ -296,7 +306,7 @@
     hd.innerHTML =
       '<div class="sh">' + shieldSvg("shsvg") + '</div>' +
       '<div class="tx"><div class="l1"></div><div class="l2"></div></div>' +
-      '<div class="gl"><span class="gl-open"></span><span class="gl-person" style="display:none">' + PERSON_GLYPH + '</span>' + CHEV + '</div>';
+      '<div class="gl"><span class="gl-open"></span><span class="gl-person" style="display:none">' + PERSON_GLYPH + '</span><span class="gl-pkg">' + PKG_GLYPH + '<span class="gl-pkg-tx"></span></span>' + CHEV + '</div>';
     card.appendChild(hd);
     this._elHd = hd;
     this._elShield = hd.querySelector(".sh");
@@ -304,6 +314,8 @@
     this._elL2 = hd.querySelector(".l2");
     this._elGlOpen = hd.querySelector(".gl-open");
     this._elGlPerson = hd.querySelector(".gl-person");
+    this._elGlPkg = hd.querySelector(".gl-pkg");
+    this._elGlPkgTx = hd.querySelector(".gl-pkg-tx");
     this._elChev = hd.querySelector(".chev");
 
     var bar = document.createElement("div");
@@ -399,6 +411,12 @@
       e.stopPropagation();
       self._moreInfo(cfg.alarm);
     });
+    if (cfg.package) {
+      this._elGlPkg.addEventListener("click", function (e) {
+        e.stopPropagation();
+        self._moreInfo(cfg.package);
+      });
+    }
 
     if (this._elCam) {
       pressable(this._elCam);
@@ -624,6 +642,16 @@
     if (this._elGlOpen.innerHTML !== glyphHtml) this._elGlOpen.innerHTML = glyphHtml;
     var personShow = occ ? "inline-flex" : "none";
     if (this._elGlPerson.style.display !== personShow) this._elGlPerson.style.display = personShow;
+    /* v1.5: package-waiting glyph + age (entity on = a delivery is sitting outside) */
+    var pkg = cfg.package ? this._hass.states[cfg.package] : null;
+    var pkgOn = !!(pkg && pkg.state === "on");
+    var pkgShow = pkgOn ? "inline-flex" : "none";
+    if (this._elGlPkg.style.display !== pkgShow) this._elGlPkg.style.display = pkgShow;
+    if (pkgOn) {
+      var ago = fmtAgoShort(now - new Date(pkg.last_changed).getTime());
+      var pkgTx = ago === "just now" ? "<1m" : ago;
+      if (this._elGlPkgTx.textContent !== pkgTx) this._elGlPkgTx.textContent = pkgTx;
+    }
 
     /* ---- camera ---- */
     if (this._elCam) this._updateCamera(occ, now);
