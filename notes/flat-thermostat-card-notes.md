@@ -2,7 +2,7 @@
 
 *(Split out of the single sanitized notes file 2026-07-21 to mirror the private project's per-card doc structure — each card's notes file is updated only by ships of that card.)*
 
-### flat-thermostat-card v2.12.1 (weekly heatmap = days-as-columns 2026-08-31; eco-while-home warning + period-total tile + reactive peak 2026-08-28; permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
+### flat-thermostat-card v2.12.3 (heating scatter vs outdoor low + ribbon catch-up 2026-09-06; source audit bundle 2026-09-06; weekly heatmap = days-as-columns 2026-08-31; eco-while-home warning + period-total tile + reactive peak 2026-08-28; permanent ribbon history + eco-when-away + eco range 2026-08-28; ran-during ribbon + setpoint ticks 2026-08-25; run-once 2026-08-23; runtime views 2026-08-18; never-hide chip 2026-08-11; runtime graph + centering 2026-08-05; runtime chip 2026-07-23; eco toggle 2026-07-20; v2.2 signed off 2026-07-09)
 Slim flat replica of the native HA thermostat dial. Source:
 `flat-thermostat-card.js` in this repo. YAML: `type: custom:flat-thermostat-card`
 + `entity: <climate entity>` + optional `runtime_cooling`/`runtime_heating`
@@ -138,6 +138,41 @@ active but you're home - tap the leaf to exit"). Config key:
 `presence_entity` (the household-away binary_sensor, "on" = away); pure
 flag, zero behavior change, unconfigured = never warns. YAML-authoring
 lesson from the ship: always quote automation aliases containing colons.
+Source audit (2026-09-06, v2.12.2 - no visible change on a healthy card;
+every item reproduced in a jsdom harness that runs in both directions, bug-mode
+against v2.12.1 and fixed-mode against v2.12.2, plus a 42-check render-identity
+run over four card states with the panel and each view open): (1) a failed
+`statistics_during_period` in the runtime panel was re-asked on every hass
+push (the fetch stamp was set only on success) - now a 60 s retry; (2) an
+eco-leaf long-press whose finger slid off before release left the swallow flag
+set, so the NEXT short tap did nothing - flag reset on pointerdown, both
+long-presses ignore non-primary buttons, leaf + strip carry
+user-select/touch-callout none; (3) `set hass` re-renders only when one of the
+card's configured entity ids changed identity (200 unrelated pushes: 200
+renders / ~4,200 DOM mutations -> 0); a 60 s tick runs only while the panel is
+open (15-min refetch, now-marker) and every optimistic hold schedules its own
+expiry render; (4) the mode strip rebuilds when the effective mode list or the
+config changes (it was build-once, and a second setConfig appended a duplicate
+strip); (5) window pointer listeners bind in connectedCallback and unbind in
+disconnectedCallback (a pending debounced delay edit flushes on disconnect);
+(6) the ribbon tooltip says "unavailable"/"unknown" for such history rows
+instead of "off"; (7) the records scatter's dots, trend line and x-axis labels
+share one mapping (dots were on 1..95 % of the plot, labels on 0..100 %); (8)
+quoted numeric `min_temp`/`max_temp`/`step`/`gap` are coerced (a quoted gap
+string-concatenated into the drag math) and a statistics id that returns no
+rows is named under the 14-day bars instead of drawing silent zeros; (9) dead
+`#offlbl` element/CSS and an unused drag variable removed; the header HOW-TO
+now names the `;name=` data-URL form the card manager requires.
+Post-audit revisit (v2.12.3, 2026-09-06; two of three ideas taken): the RECORDS
+scatter pairs the HEATING series with the day's outdoor LOW (statistics `min`
+of the same `outdoor_high_stats` entity; labels "outdoor low" / "low N") -
+heating tracks the overnight low, not the afternoon high; cooling keeps the
+high. RIBBON CATCH-UP: while the runtime panel is open, a change of the
+thermostat's mode, hvac_action or setpoint(s) schedules a refetch of today's
+history after a 20 s settle (dial-turn bursts collapse to one; temperature
+readings alone never trigger it) - the default-layer ribbon and the TODAY view
+(today only) both refresh, nothing fires while the panel is closed. Declined:
+a current-run elapsed readout on the chip caption.
 Version trail: v2.10 2f0cfa12 -> v2.11 745fb705 -> v2.11.1
-1fd75b72 -> v2.11.2 ddd39a78 -> v2.12 def53c9c -> v2.12.1 d4cfc653
-(118,211 -> 135,783 B).
+1fd75b72 -> v2.11.2 ddd39a78 -> v2.12 def53c9c -> v2.12.1 d4cfc653 ->
+v2.12.2 0882e4be -> v2.12.3 a8f778b6 (118,211 -> 146,375 B).

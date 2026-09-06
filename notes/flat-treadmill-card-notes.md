@@ -1,6 +1,6 @@
-# flat-treadmill-card — archive notes (v2.11, 2026-07-09)
+# flat-treadmill-card — archive notes (v2.13, 2026-09-06)
 
-Companion source file: `claude/flat-treadmill-card.js` (v2.11, final as of sign-off).
+Companion source file: `flat-treadmill-card.js` (v2.13 — 36,373 B, FNV-1a `09bf271f`; v2.12 = 34,718 B, `596aa894`; v2.11 = 32,349 B, `505e43be`).
 Sibling of flat-thermostat-card; same hosting pattern, same dashboard.
 
 ## What it is
@@ -126,15 +126,36 @@ kcal hover -> v2.3 mode-tag hover -> v2.4 amber scheme + dialog site link -> v2.
 YOUR BODY WEIGHT label -> v2.6 net/day second headline -> v2.7 caption simplify ->
 v2.8 bar -> history more-info -> v2.9 TODAY toggles distance/time bar (easter egg
 retired; time target helper) -> v2.10 audit fixes (daily-null guard, '--' when
-unavailable; meters got always_available) -> v2.11 availability from status sensor.
+unavailable; meters got always_available) -> v2.11 availability from status sensor
+-> v2.12 (2026-09-06 source audit, one version for everything — see below)
+-> v2.13 (2026-09-06 post-audit revisit: time-to-target estimate on the progress readout
+while walking; stats pill follows the belt — NOW while moving, TODAY when idle, a tap
+overrides until the next start/stop; speed presets offered and declined for now).
 
-## Open / deferred (owner validates passively; NO ACTION NEEDED unless raised)
-- 3am meter reset first firing (tonight); trace check optional next session.
-- Remote-control test: belt start/stop from card play/stop while standing at pad;
-  if play proves decorative, demote visually.
-- Steps calibration: owner reports deck steps + deck distance after a session ->
-  back-solve deck steps/mile, replace 2250 in card config + steps template.
-- Mile target manual bumps during speed ramp (owner does at phase changes).
-- Weight edits at weigh-in milestones via the kcal dialog (owner).
-- Someday: adjustable-incline deck would justify promoting full per-session
-  ShapeSense math into HA (distance bar's validity condition: constant grade).
+## 2026-09-06 source audit (v2.12)
+Per the per-card audit playbook: full-source read, every behavioral finding reproduced in
+a jsdom harness (bug-mode on v2.11, fixed-mode on v2.12), render identity asserted for
+healthy states (walking / idle+TODAY / starting+time-bar / done-day byte-identical).
+1. Speed track pointer handling — any mouse button started a drag and committed
+   (right-click on a PC set belt speed); `pointercancel` committed the half-dragged
+   value; release never re-rendered so the kph preview lingered until the next HA push.
+   Now: primary button only, cancel aborts + snaps back, release re-renders.
+2. Progress bar printed-vs-threshold — 7.96 mi read "8.0 / 8.0 mi" and stayed amber.
+   Now compares on the printed precision (tenths of a mile / whole minutes).
+3. Hands helper unavailable/unmapped silently assumed the Typing 8% discount; now `--`.
+4. Render churn — every HA state change re-rendered with a forced layout; now an
+   entity-identity gate over the config's ids, skipped while dragging or inside the
+   8 s optimistic hold, with one timer render at hold expiry.
+5. Lifecycle — three window pointer listeners per instance were never removed; now
+   added in `connectedCallback`, removed in `disconnectedCallback`.
+6. Redundant `.unavailable` on the nested play/stop buttons (double dimming) removed.
+7. Non-integer `grade` config left the dialog select blank; rounds to the nearest option.
+8. Hygiene: duplicate distance read, double `_attrs()` in `_min`/`_max`.
+Noted, unchanged: `paused` status text is never emitted by the deck; ft/mph assumed from
+HA's unit conversion; no Escape-to-close on the dialog; the overlay is `position: fixed`
+inside the card's shadow root (fine unless an ancestor is transformed).
+
+## Open / deferred
+All July items closed (3am reset validated; belt start/stop validated; steps calibration
+declined — 2250/mi stays). Someday: an adjustable-incline deck would justify promoting
+full per-session ShapeSense math into HA.

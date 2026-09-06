@@ -45,11 +45,31 @@ The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
   header when exactly one device is settling. Controller restarts produce
   transient unavailable storms that drain in ~10 minutes; an HA restart resets
   every device's clock, so a long-dead device re-enters "settling" for one
-  debounce window after each restart.
+  debounce window after each restart. v1.8: a settling spell younger than
+  `blip_min_s` (default 90 s) is still listed in the body but does not rename
+  the collapsed header (a battery doorbell's one-minute poll timeouts used to
+  flip the header several times a day).
 - `banner_threshold` (default 5): at this many simultaneous downs the alert
   strip collapses to a single "widespread outage" banner (header goes red, the
   footer swaps to recovery advice) — but the body ALWAYS lists every down
   device individually (v1.2; suppression was tried in v1.0/v1.1 and removed).
+  v1.8: the wording is platform-aware — discovery records each device's watched
+  platforms; when Matter devices are the majority of the down set the banner
+  says "Matter mesh trouble" / "check Matter Server / OTBR" / the
+  reseat-after-storm footer, otherwise "Widespread outage" / "Outage -
+  switchbot x5, esphome x2" / a check-the-network footer. (v1.2–v1.7 blamed
+  Matter for any outage past the threshold, which a dead BLE proxy plus its
+  meters reaches by itself.)
+- LAST 24H refresh (v1.8): history is fetched at card load and every 5 min
+  whether the card is open or collapsed (v1.4–v1.7 fetched only while
+  expanded, so the collapsed header's "24h: N outages" suffix froze at whatever
+  the last expand saw). A failed refresh keeps the last good lanes; the
+  "History unavailable" row appears only when there is no good data at all.
+- `blip_min_s` (v1.8, default 90): unavailable spells shorter than this are
+  dropped from the timeline (was a hard-coded 30 s) and do not rename the
+  header. Spells between `blip_min_s` and `debounce_minutes` are still grey
+  blip segments; spells past `debounce_minutes` are red outages, alerts and
+  lanes exactly as before.
 - Sleepy battery devices can die silently while still showing available; that
   failure mode is not passively detectable (validated: their battery sensors'
   last_reported pins to restart time, so staleness heuristics don't work). The
@@ -64,7 +84,9 @@ The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
   — a least-squares fit over `recorder/statistics_during_period` hourly means
   (window `forecast_window_days`, default 7), restricted to the segment after
   the last charge (a rise of more than 2 points), needing at least 12 points
-  spanning 24 h, else "trend pending" — and the date `battery_warn` will be
+  spanning 24 h, else "trend pending" (v1.8: "trend unavailable" when the
+  statistics call itself fails; a slope flatter than 0.05 %/day reads
+  "holding" with no date) — and the date `battery_warn` will be
   reached. An amber "battery low soon | ~N days" alert fires when that date is
   within `forecast_days` (default 3) while the level is still above the warn
   line; at or below it the ordinary low/critical alerts take over. While
@@ -108,6 +130,7 @@ banner_threshold: 5
 history_hours: 24         # LAST 24H lanes; 0 disables the section
 history_max_lanes: 6      # fold point; "+N more" expands
 history_event_window_s: 120
+blip_min_s: 90            # v1.8: unavailable spells shorter than this are ignored (timeline + header); real outages unaffected
 forecast_days: 3          # rechargeable: alert when battery_warn is this close (days)
 forecast_window_days: 7   # rechargeable: statistics window for the drain fit
 wifi_warn: -70            # dBm; a watched Wi-Fi signal below this = amber row + alert
@@ -163,7 +186,7 @@ devices:                # optional manual extras
   folds back; the fold and any open network-event member list reset when the
   card collapses. Owner caught a 12-device night showing six lanes and an
   inert "+6 more".
-- v1.7 (2026-09-04, 57,569 B, FNV-1a 83c06c49, CURRENT): rechargeable battery
+- v1.7 (2026-09-04, 57,569 B, FNV-1a 83c06c49): rechargeable battery
   forecast + Wi-Fi watch (semantics above). Discovery records a charge-state
   sibling and a Wi-Fi sibling per battery device; `_maybeFetchForecast` makes
   one hourly `recorder/statistics_during_period` call (period hour, mean) for
@@ -180,6 +203,25 @@ devices:                # optional manual extras
   mid-window uses only the post-charge segment; empty statistics -> trend
   pending; non-rechargeable low battery unchanged) + headless-Chromium render
   + node --check + zero non-ASCII.
+- v1.8 (2026-09-06, 60,954 B, FNV-1a bcfb9aab, CURRENT): AUDIT RELEASE — a
+  full source audit of v1.7 (eight findings, each confirmed in a jsdom harness
+  before being reported; all fixes shipped in one version by owner choice).
+  Platform-aware outage banner; 24h history fetched at load and refreshed
+  every 5 min whether open or collapsed; `blip_min_s` (90) replaces the
+  hard-coded 30-s blip floor and keeps sub-floor settling out of the header;
+  quiet header says "no battery data" / "filters: no data" when nothing is
+  readable (a "(1 no data)" suffix was built, truncated at the dashboard's
+  column width, and removed — the header has ~2 chars of slack); a failed
+  history refresh keeps the last good lanes; a rejected statistics call reads
+  "trend unavailable"; a negligible drain slope reads "holding"; `platforms` /
+  `exclude` accept a bare string and every numeric option accepts a quoted
+  number; open network-event member lists key on the event's start time;
+  setConfig resets fold state; stale header comment + dead code removed. No
+  visible change on a healthy card (render identity vs v1.7 asserted on a
+  live-like config). Verified: 28 asserted exact-string edits, node --check,
+  zero non-ASCII, harness bug-mode 32/32 on v1.7 + fixed-mode 34/34 on v1.8,
+  Playwright/Chromium render at the dashboard's column width with a
+  scrollWidth overflow check, blob decode cmp before delivery.
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

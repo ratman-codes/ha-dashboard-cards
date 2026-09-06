@@ -1,16 +1,20 @@
-/* flat-cat-card v1.22
+/* flat-cat-card v1.25
  * ------------------------------------------------------------------
  * One consolidated card for the household cats (PetKit litter box +
  * two Yumshare feeders + per-cat stats). Card #6 in the flat-card
  * family. Replaces five separate cards on the main dashboard.
  *
  * WHAT IT DOES
- *  - Headerless. Tap anywhere on the card body to expand/collapse
- *    (no glyph, house expander convention). Collapsed = cat rows +
- *    camera strip. Expanded adds litter section + feeder rows.
+ *  - Headerless. The cat-rows block is the title zone: tapping its
+ *    blank space expands/collapses (no glyph; the rest of the body is
+ *    inert). Collapsed = cat rows + camera strip. Expanded adds the
+ *    litter section + feeder rows.
  *  - Cat rows: avatar (photo from entity_picture when available),
- *    weight, last litter visit. Long-press -> more-info.
- *  - Litter: level bar (green / amber <30% / red on problem), stats,
+ *    MEASURED weight (smoothed average of the litter box scale's daily
+ *    long-term statistics; falls back to the last scale reading, then
+ *    "--"; the app-side profile weight is only one long-press away),
+ *    last litter visit. Long-press -> more-info on the profile weight.
+ *  - Litter: level bar (green / amber at 30% or below / red on problem), stats,
  *    Clean button (scoop), More panel (Level / Pause / Start
  *    maintenance). Maintenance mode = amber panel with Dump litter
  *    (hold 2s) / Level / Done; auto-detected if started from the
@@ -21,7 +25,6 @@
  *    feed fires cancel_manual_feed (works while the drop is pending).
  *  - Camera strip (always visible): last-eat-event snapshot per
  *    feeder with timestamp; tap -> live stream more-info.
- *    camera_mode: live embeds live streams instead (experimental).
  *  - Alert strip (top, both states): litter low, bin full, hopper
  *    empty, device offline, frequent-litter-use health flag,
  *    maintenance-active reminder. Occupied dot pulses while a cat is
@@ -50,6 +53,8 @@
  *       last_use: sensor.cat2_last_use_date
  *       color: "#ce93d8"
  *   litter_prefix: my_litter_box        # entity id prefix from the PetKit integration
+ *   deep_deo_suffix: deep_deodorizing   # optional; deep_deodorizing_2 if the
+ *                                       # integration's first entity is a dud duplicate
  *   feeders:                            # list order = row and camera display order
  *     - label: Feeder 01
  *       owner: Cat1
@@ -60,7 +65,6 @@
  *   portions: [5, 10, 20]
  *   default_portion: 10
  *   feed_both: true          # optional, default true; false removes the Both row
- *   camera_mode: snapshot    # snapshot (default) | live (experimental)
  *   camera_image: eat        # eat (default) | visit | feed - which event
  *                            # snapshot the tiles show; also settable
  *                            # per-feeder on a feeder entry. Labels follow:
@@ -69,6 +73,13 @@
  *   trend_days: 90           # weight-trend window in days (14-365);
  *                            # drawn from permanent long-term statistics
  *   history: true            # false disables the per-cat history panels
+ *   feeding_presets:         # optional, see v1.21 - named weekly plans per feeder prefix
+ *     - name: Home
+ *       plans:
+ *         my_feeder_01: [{ time: "5:00p", name: Snack, amount: 10 }]
+ *         my_feeder_02: [{ time: "5:00p", name: Snack, amount: 10 }]
+ *   (per cat, optional: duration: / scale_weight: override the per-visit
+ *    entities derived from last_use)
  *
  * v1.1: header example genericized to placeholder names (no functional
  * change from v1.0).
@@ -236,6 +247,42 @@
  * to live. Modal closes via X, scrim tap, or Escape; the v1.20
  * parent-reset rules still apply (card collapse closes it). The
  * inline schedule panel is gone; the Settings panel remains inline.
+ * v1.23: AVAILABILITY HONESTY (2026-09-06 audit items 1 + 3). Unknown
+ * no longer renders as good: a missing/unavailable bin sensor prints
+ * "bin --" instead of "bin OK"; a missing or unavailable device_status
+ * (HA startup, integration reload, cloud outage) now dims the litter
+ * title / feeder rows and raises an amber "... unavailable" alert
+ * ("PetKit unavailable" when every device is unknown), distinct from
+ * the red device-reported "offline". The Settings panel dims any row
+ * whose entity is missing or unavailable, shows "--" in place of its
+ * toggle/value, and no longer lets a tap fire a service call at it;
+ * the panel re-renders when entities (re)appear.
+ * v1.24: AUDIT BUNDLE (2026-09-06 items 2, 5-11; no visible change on a
+ * healthy card). Feeding-plans errors clear on the next apply / save /
+ * discard / open instead of sticking forever; Apply is disabled (with
+ * the reason) while any feeder in the preset is unavailable and Save
+ * names a dirty feeder it could not write. camera_mode option removed
+ * (it never did anything). set hass re-renders only when one of the
+ * card's own entities changed identity or a timed window (undo,
+ * optimistic hold, maintenance pending) is open. Escape-to-close
+ * listener re-armed on reconnect and de-duplicated on re-setConfig.
+ * "exiting..." label times out like Start; long-press arms on the
+ * primary button only; long-press zones are user-select none. An open
+ * history panel refetches when that cat's last_use changes. Quoted
+ * numeric portions/default_portion coerced; stub config valid; dead
+ * code removed.
+ * v1.25: the cat row shows MEASURED weight instead of the profile
+ * number (owner decision, 2026-09-06 revisit). `number.<cat>_weight`
+ * is a value someone typed into the PetKit app, not a measurement;
+ * the row now shows the same smoothed value the history panel calls
+ * "avg" - the 5-point moving average over zero-filtered daily means of
+ * the scale sensor's long-term statistics across the trend window -
+ * fetched once at card load (one statistics call for all cats, shared
+ * filter code with the panel) and refetched when a cat's last_use
+ * changes. Until stats arrive, or when the window holds none, the row
+ * shows the cat's last scale reading; if that is unavailable too,
+ * "--". The profile number is never shown silently; long-press still
+ * opens its more-info. Same display unit/conversion as the panel.
  * ------------------------------------------------------------------
  */
 (() => {
@@ -269,11 +316,11 @@
       this._undoTimer = null;
       this._optCleanUntil = 0;
       this._holdTimer = null;
-      this._holdFired = false;
       this._lpTimer = null;
       this._lpFired = false;
       this._histOpen = -1;         // index of the cat whose history panel is open
       this._hist = {};             // per-cat fetched history cache
+      this._wt = null;             // row weights: {at, lastUse[], val[]} (v1.25)
       this._histDay = {};          // per-cat day-bar filter (dayKey string or null)
       this._setOpen = false;       // litter settings panel open
       this._optSet = {};           // entity_id -> {state, until} optimistic overlay
@@ -281,7 +328,7 @@
       this._delayTimer = null;
       this._schedOpen = false;     // schedule modal open
       this._schedView = 'current'; // 'current' or preset index (number)
-      this._sched = {};            // per-feeder {model, dirty, saving, doneUntil}
+      this._sched = {};            // per-feeder {model, deviceId, dirty, saving}
       this._schedEdit = null;      // meal key with editor open ("fi:idx")
       this._schedLoaded = null;    // preset name loaded into the draft, or null
       this._schedSaving = false;   // save-all in flight
@@ -292,6 +339,14 @@
 
     disconnectedCallback() {
       if (this._escHandler) window.removeEventListener('keydown', this._escHandler);
+    }
+
+    connectedCallback() {
+      // re-arm the Escape listener after a detach/re-attach (remove first: idempotent)
+      if (this._escHandler) {
+        window.removeEventListener('keydown', this._escHandler);
+        window.addEventListener('keydown', this._escHandler);
+      }
     }
 
     /* ---------------- config ---------------- */
@@ -413,19 +468,32 @@
         });
         return { name: p.name || 'Preset', plans };
       }).filter((p) => Object.keys(p.plans).length);
-      this._portions = (config.portions && config.portions.length)
-        ? config.portions.slice(0, 4) : [5, 10, 20];
-      const def = config.default_portion != null
-        ? config.default_portion
+      const ports = (config.portions || []).slice(0, 4).map(Number)
+        .filter((n) => !isNaN(n) && n > 0);
+      this._portions = ports.length ? ports : [5, 10, 20];
+      const defN = Number(config.default_portion);
+      const def = (config.default_portion != null && !isNaN(defN))
+        ? defN
         : this._portions[Math.min(1, this._portions.length - 1)];
       this._fdrs.forEach((f, i) => {
         if (this._sel[i] == null) this._sel[i] = def;
       });
       if (this._sel.both == null) this._sel.both = def;
       this._feedBoth = config.feed_both !== false && this._fdrs.length > 1;
-      this._camLive = config.camera_mode === 'live';
       this._histOn = config.history !== false;
       this._trendDays = Math.max(14, Math.min(365, Number(config.trend_days) || 90));
+      // entity ids whose identity change triggers a re-render (v1.24)
+      const watch = [];
+      Object.keys(this._lit).forEach((k) => watch.push(this._lit[k]));
+      Object.keys(this._setEnts).forEach((k) => watch.push(this._setEnts[k]));
+      this._fdrs.forEach((f) => Object.keys(f).forEach((k) => {
+        if (typeof f[k] === 'string' && f[k].indexOf('.') !== -1) watch.push(f[k]);
+      }));
+      config.cats.forEach((c) => {
+        [c.weight, c.last_use, this._catDuration(c), this._catScale(c)]
+          .forEach((id) => { if (id) watch.push(id); });
+      });
+      this._watch = watch.filter((id, i) => watch.indexOf(id) === i);
       this._built = false;
     }
 
@@ -440,15 +508,41 @@
     }
 
     set hass(hass) {
+      const prev = this._hass;
       this._hass = hass;
       if (!this._built) this._build();
+      // v1.24: skip the pass unless one of the card's own entities changed
+      // identity or a timed window needs the clock advanced
+      if (prev && !this._renderPending() && !this._watchChanged(prev, hass)) return;
       this._update();
+    }
+
+    _watchChanged(a, b) {
+      const sa = a && a.states, sb = b && b.states;
+      if (!sa || !sb) return true;
+      if (sa === sb) return false;
+      for (const id of this._watch) if (sa[id] !== sb[id]) return true;
+      return false;
+    }
+
+    _renderPending() {
+      const now = Date.now();
+      if (now < this._optCleanUntil || this._maintPending || this._exitPending ||
+          this._undo || this._delayPend != null || this._schedSaving ||
+          this._presetBusy || now < this._schedDone) return true;
+      if (this._presetOpt && now < this._presetOpt.until) return true;
+      for (const k in this._optSet) if (now < this._optSet[k].until) return true;
+      return false;
     }
 
     getCardSize() { return this._expanded ? 9 : 4; }
 
     static getStubConfig() {
-      return { cats: [], litter_prefix: '', feeders: [] };
+      return {
+        cats: [{ name: 'Cat1', weight: 'number.cat1_weight', last_use: 'sensor.cat1_last_use_date' }],
+        litter_prefix: 'my_litter_box',
+        feeders: [{ label: 'Feeder 01', owner: 'Cat1', prefix: 'my_feeder_01' }]
+      };
     }
 
     /* ---------------- helpers ---------------- */
@@ -472,12 +566,22 @@
 
     _isOn(id) { return this._sv(id) === 'on'; }
 
-    _offline(devStatusId) {
-      const s = this._st(devStatusId);
-      if (!s) return false;
-      const v = s.state.toLowerCase();
-      return v === 'unavailable' || v === 'offline';
+    // three-valued: true / false / null (unavailable, unknown or missing)
+    _tri(id) {
+      const v = this._sv(id);
+      return v == null ? null : v === 'on';
     }
+
+    // 'online' | 'offline' (device-reported) | 'unknown' (HA has no reading)
+    _devState(devStatusId) {
+      const s = this._st(devStatusId);
+      if (!s) return 'unknown';
+      const v = s.state.toLowerCase();
+      if (v === 'unavailable' || v === 'unknown') return 'unknown';
+      return v === 'offline' ? 'offline' : 'online';
+    }
+
+    _offline(devStatusId) { return this._devState(devStatusId) !== 'online'; }
 
     _fmtWhen(str) {
       if (!str) return '--';
@@ -586,6 +690,9 @@
           min-width: 0; max-width: 100%;
           cursor: pointer; border-radius: 8px;
           padding: 2px 8px 2px 2px; margin-left: -2px;
+        }
+        .cathit, .lpzone {
+          user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
         }
         .cathit .cinfo { flex: 0 1 auto; min-width: 0; }
         @media (hover: hover) {
@@ -1059,7 +1166,8 @@
       // long-press -> more-info
       const lp = (el, entityFn) => {
         if (!el) return;
-        el.addEventListener('pointerdown', () => {
+        el.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0) return; // primary button / touch only
           this._lpFired = false;
           clearTimeout(this._lpTimer);
           this._lpTimer = setTimeout(() => {
@@ -1120,11 +1228,9 @@
       const dump = this.$.dumpbtn;
       dump.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
-        if (dump.disabled) return;
-        this._holdFired = false;
+        if (dump.disabled || e.button !== 0) return;
         dump.classList.add('holding');
         this._holdTimer = setTimeout(() => {
-          this._holdFired = true;
           dump.classList.remove('holding');
           this._press(this._lit.dump);
         }, HOLD_MS);
@@ -1178,6 +1284,8 @@
         e.stopPropagation();
         this._schedOpen = !this._schedOpen;
         if (!this._schedOpen) this._schedEdit = null;
+        this._presetErr = null;
+        this._schedErr = null;
         this._update();
       });
       this.$.schedscrim.addEventListener('click', (e) => {
@@ -1186,6 +1294,7 @@
           this._schedOpen = false; this._schedEdit = null; this._update();
         }
       });
+      if (this._escHandler) window.removeEventListener('keydown', this._escHandler);
       this._escHandler = (e) => {
         if (e.key === 'Escape' && this._schedOpen) {
           this._schedOpen = false; this._schedEdit = null; this._update();
@@ -1292,10 +1401,17 @@
         (sub ? '<div class="ssub">' + sub + '</div>' : '') + '</div>' + control + '</div>';
     }
 
+    // entity readable (or held by an optimistic overlay)?
+    _setAvail(ent) {
+      const o = this._optSet[ent];
+      if (o && Date.now() < o.until) return true;
+      return this._sv(ent) != null;
+    }
+
     _tglHtml(ent) {
-      const missing = !this._st(ent);
+      if (!this._setAvail(ent)) return '<span class="tert">--</span>';
       return '<div class="tgl' + (this._setOn(ent) ? ' on' : '') +
-        '" data-tgl="' + ent + '"' + (missing ? ' style="opacity:.3;"' : '') + '></div>';
+        '" data-tgl="' + ent + '"></div>';
     }
 
     _renderSetPanel() {
@@ -1308,11 +1424,8 @@
       const ltSt = this._st(E.litterType);
       const ltOpts = ltSt && ltSt.attributes.options ? ltSt.attributes.options : [];
       const key = [delayShow, rep, lt,
-        E.autoClean, this._setOn(E.autoClean), this._setOn(E.schedClean),
-        this._setOn(E.avoidRepeat), this._setOn(E.deepClean), this._setOn(E.litterSave),
-        this._setOn(E.wasteCover), this._setOn(E.autoDeo), this._setOn(E.schedDeo),
-        this._setOn(E.deepDeo), this._setOn(E.rotation), this._setOn(E.display),
-        this._setOn(E.dnd), this._setOn(E.childLock), this._setOn(E.kitten),
+        Object.keys(E).map((k) =>
+          (this._setAvail(E[k]) ? '1' : '0') + ':' + this._selVal(E[k])).join(','),
         ltOpts.join(',')].join('|');
       if ($.setpanel.dataset.render === key) return;
       $.setpanel.dataset.render = key;
@@ -1321,40 +1434,43 @@
         '<button class="stepbtn" data-step="' + which + '" data-d="-1">&#8722;</button>' +
         '<div class="stepval">' + valHtml + '</div>' +
         '<button class="stepbtn" data-step="' + which + '" data-d="1">+</button></div>';
-      const ltChips = '<div class="chips" style="flex:0 0 auto;">' +
+      const ltAvail = this._setAvail(E.litterType) && ltOpts.length > 0;
+      const ltChips = !ltAvail ? '<span class="tert">--</span>' :
+        '<div class="chips" style="flex:0 0 auto;">' +
         ltOpts.map((o) => '<button class="pchip' + (o === lt ? ' sel' : '') +
           '" data-lt="' + this._esc(o) + '">' + this._esc(o) + '</button>').join('') +
         '</div>';
+      const na = (ent) => !this._setAvail(ent);
       $.setpanel.innerHTML =
         '<div class="grouphead">CLEANING</div>' +
-        this._setRowHtml('Auto clean', 'cycle after each visit', this._tglHtml(E.autoClean)) +
+        this._setRowHtml('Auto clean', 'cycle after each visit', this._tglHtml(E.autoClean), na(E.autoClean)) +
         this._setRowHtml('Cleaning delay', 'wait after cat exits',
-          stepperHtml('delay', (delayShow == null ? '--' : delayShow) + ' <span>min</span>')) +
+          stepperHtml('delay', (delayShow == null ? '--' : delayShow) + ' <span>min</span>'), na(E.delay)) +
         this._setRowHtml('Scheduled cleaning', 'scheduled cycles &middot; times set in PetKit app',
-          this._tglHtml(E.schedClean)) +
+          this._tglHtml(E.schedClean), na(E.schedClean)) +
         this._setRowHtml('Avoid repeat cleaning', 'skip re-clean within interval',
-          this._tglHtml(E.avoidRepeat)) +
+          this._tglHtml(E.avoidRepeat), na(E.avoidRepeat)) +
         this._setRowHtml('Repeat interval', 'fixed steps: 5m&#8211;2h',
-          stepperHtml('repeat', this._esc(rep))) +
+          stepperHtml('repeat', this._esc(rep)), na(E.repeatIvl)) +
         '<div class="grouphead">DEEP CLEANING</div>' +
-        this._setRowHtml('Deep cleaning', 'extended sift cycle', this._tglHtml(E.deepClean)) +
-        this._setRowHtml('Litter saving', 'use less litter per cycle', this._tglHtml(E.litterSave)) +
-        this._setRowHtml('Waste covering', 'bury waste during the delay', this._tglHtml(E.wasteCover)) +
+        this._setRowHtml('Deep cleaning', 'extended sift cycle', this._tglHtml(E.deepClean), na(E.deepClean)) +
+        this._setRowHtml('Litter saving', 'use less litter per cycle', this._tglHtml(E.litterSave), na(E.litterSave)) +
+        this._setRowHtml('Waste covering', 'bury waste during the delay', this._tglHtml(E.wasteCover), na(E.wasteCover)) +
         '<div class="grouphead">DEODORIZING</div>' +
-        this._setRowHtml('Auto deodorizing', 'spray cycle after cleans', this._tglHtml(E.autoDeo)) +
+        this._setRowHtml('Auto deodorizing', 'spray cycle after cleans', this._tglHtml(E.autoDeo), na(E.autoDeo)) +
         this._setRowHtml('Scheduled deodorizing', 'scheduled runs &middot; times set in PetKit app',
-          this._tglHtml(E.schedDeo)) +
-        this._setRowHtml('Deep deodorizing', 'intensive deodorize cycle', this._tglHtml(E.deepDeo)) +
+          this._tglHtml(E.schedDeo), na(E.schedDeo)) +
+        this._setRowHtml('Deep deodorizing', 'intensive deodorize cycle', this._tglHtml(E.deepDeo), na(E.deepDeo)) +
         '<div class="grouphead">BOX</div>' +
-        this._setRowHtml('Uninterrupted rotation', 'no pause mid-cycle', this._tglHtml(E.rotation)) +
+        this._setRowHtml('Uninterrupted rotation', 'no pause mid-cycle', this._tglHtml(E.rotation), na(E.rotation)) +
         this._setRowHtml('Screen display', 'on-box screen &middot; schedule set in PetKit app',
-          this._tglHtml(E.display)) +
-        this._setRowHtml('Litter type', '', ltChips) +
-        this._setRowHtml('Do not disturb', 'quiet hours per app schedule', this._tglHtml(E.dnd)) +
-        this._setRowHtml('Child lock', 'panel buttons disabled', this._tglHtml(E.childLock)) +
+          this._tglHtml(E.display), na(E.display)) +
+        this._setRowHtml('Litter type', '', ltChips, na(E.litterType)) +
+        this._setRowHtml('Do not disturb', 'quiet hours per app schedule', this._tglHtml(E.dnd), na(E.dnd)) +
+        this._setRowHtml('Child lock', 'panel buttons disabled', this._tglHtml(E.childLock), na(E.childLock)) +
         this._setRowHtml('Kitten mode',
           '<span style="color:' + AMBER_TXT + ';">&#9888; disables all auto-cleaning</span>',
-          this._tglHtml(E.kitten));
+          this._tglHtml(E.kitten), na(E.kitten));
     }
 
     /* ---------------- feeder schedule (v1.19) ---------------- */
@@ -1399,8 +1515,7 @@
           })) : null,
           deviceId: live ? live.deviceId : null,
           dirty: (s && s.dirty) || false,
-          saving: (s && s.saving) || false,
-          doneUntil: (s && s.doneUntil) || 0
+          saving: (s && s.saving) || false
         };
       }
       return s;
@@ -1457,6 +1572,22 @@
       this._schedEdit = null;
       this._schedLoaded = null;
       this._schedErr = null;
+      this._presetErr = null;
+    }
+
+    _fdrName(fi) {
+      const f = this._fdrs[fi];
+      return f ? (f.owner || f.label) : '?';
+    }
+
+    // feeders in a preset whose live plan / device id is not readable right now
+    _presetMissing(p) {
+      const preset = this._presets[p];
+      if (!preset) return [];
+      return Object.keys(preset.plans).filter((fi) => {
+        const live = this._parseSched(Number(fi));
+        return !live || live.deviceId == null;
+      }).map((fi) => this._fdrName(Number(fi)));
     }
 
     _anyDirty() {
@@ -1465,10 +1596,13 @@
 
     _schedSaveAll() {
       if (this._schedSaving) return;
+      this._presetErr = null;
       const jobs = [];
+      const skipped = [];
       this._fdrs.forEach((f, i) => {
         const s = this._sched[i];
-        if (!s || !s.dirty || !s.model || s.deviceId == null) return;
+        if (!s || !s.dirty || !s.model) return;
+        if (s.deviceId == null) { skipped.push(this._fdrName(i)); return; }
         const list = [];
         for (let d = 1; d <= 7; d++) {
           list.push({
@@ -1482,13 +1616,20 @@
           device_id: Number(s.deviceId), feed_daily_list: list
         }) });
       });
-      if (!jobs.length) return;
+      const skipNote = skipped.length
+        ? skipped.join(', ') + ' unavailable \u2014 not saved' : null;
+      if (!jobs.length) {
+        this._schedErr = skipNote;
+        this._update();
+        return;
+      }
       this._schedSaving = true;
       this._schedErr = null;
       this._update();
       Promise.all(jobs.map((j) => j.call())).then(() => {
         jobs.forEach((j) => { j.s.dirty = false; });
         this._schedSaving = false;
+        this._schedErr = skipNote;
         this._schedDone = Date.now() + 1500;
         this._schedLoaded = null;
         this._schedEdit = null;
@@ -1513,11 +1654,12 @@
             time: m.time, name: m.name, amount: m.amount, days: m.days.slice()
           })),
           deviceId: live ? live.deviceId : null,
-          dirty: true, saving: false, doneUntil: 0
+          dirty: true, saving: false
         };
       });
       this._schedLoaded = preset.name;
       this._schedEdit = null;
+      this._presetErr = null;
       this._schedView = 'current';
     }
 
@@ -1564,6 +1706,14 @@
       const pi = this._schedView;
       const preset = this._presets[pi];
       if (typeof pi !== 'number' || !preset || this._presetBusy) return;
+      this._presetErr = null;
+      // all-or-nothing: never write one feeder and silently skip the other
+      const missing = this._presetMissing(pi);
+      if (missing.length) {
+        this._presetErr = missing.join(', ') + ' unavailable \u2014 nothing applied';
+        this._update();
+        return;
+      }
       const jobs = [];
       Object.keys(preset.plans).forEach((fiStr) => {
         const fi = Number(fiStr);
@@ -1658,9 +1808,10 @@
         return s ? JSON.stringify([s.model, s.dirty]) : 'live:' +
           JSON.stringify((this._parseSched(i) || {}).meals || null);
       }).join('~');
+      const avail = this._fdrs.map((f, i) => (this._parseSched(i) ? 1 : 0)).join('');
       const key = JSON.stringify([view, active, this._schedEdit, modelsKey,
         this._schedLoaded, this._schedSaving, this._schedDone > Date.now(),
-        this._schedErr || '', this._presetBusy, this._presetErr || '']);
+        this._schedErr || '', this._presetBusy, this._presetErr || '', avail]);
       if ($.schedmodal.dataset.render === key) return;
       $.schedmodal.dataset.render = key;
 
@@ -1697,6 +1848,7 @@
       if (typeof view === 'number' && this._presets[view]) {
         const pname = this._esc(this._presets[view].name);
         const isActive = view === active;
+        const missing = this._presetMissing(view);
         previewbar = '<div class="previewbar">' +
           '<div class="row">' +
           '<div class="tert grow">Previewing <b style="color:var(--primary-text-color);">' +
@@ -1704,14 +1856,17 @@
             : ' \u00b7 read-only') + '</div>' +
           '<button class="loadbtn" data-pload="1">&#9998; Load into editor</button>' +
           (isActive ? '' :
-            '<button class="feedbtn" data-vapply="1"' + (this._presetBusy ? ' disabled' : '') +
+            '<button class="feedbtn" data-vapply="1"' +
+            ((this._presetBusy || missing.length) ? ' disabled' : '') +
             '>' + (this._presetBusy ? 'Applying&hellip;' : 'Apply') + '</button>') +
           '</div>' +
           '<div class="pnote">' + (isActive
             ? 'Load copies these meals into Current for tweaking'
-            : 'Apply replaces BOTH feeders\' weekly plans' +
-              (this._anyDirty() ? ' \u00b7 discards unsaved edits' : '') +
-              ' \u00b7 Load copies these meals into Current for tweaking without applying') +
+            : (missing.length
+              ? this._esc(missing.join(', ')) + ' unavailable \u2014 Apply disabled until the feeder reports its plan'
+              : 'Apply replaces BOTH feeders\' weekly plans' +
+                (this._anyDirty() ? ' \u00b7 discards unsaved edits' : '') +
+                ' \u00b7 Load copies these meals into Current for tweaking without applying')) +
           '</div></div>';
       }
 
@@ -1725,7 +1880,8 @@
         const ownerTxt = f.owner ? this._esc(f.owner.toUpperCase()) : this._esc(f.label.toUpperCase());
         body += '<div class="fdrhead"><span class="fdot" style="background:' + col + ';"></span>' +
           '<span style="color:' + col + ';">' + ownerTxt + '</span>' +
-          '<span class="fsub">\u00b7 ' + this._esc(f.label) + '</span></div>';
+          '<span class="fsub">\u00b7 ' + this._esc(f.label) +
+          (this._parseSched(fi) ? '' : ' \u00b7 unavailable') + '</span></div>';
         if (view === 'current') {
           const s = this._schedLocal(fi);
           if (!s.model) {
@@ -1832,15 +1988,19 @@
       this._update();
     }
 
-    _loadHist(i) {
+    _loadHist(i, force) {
       const cached = this._hist[i];
-      if (cached && cached.data && Date.now() - cached.at < 300000) return;
+      if (!force && cached && cached.data && Date.now() - cached.at < 300000) return;
       const c = this._cfg.cats[i];
+      const lastUse = this._sv(c.last_use);
       const ids = [c.last_use, this._catDuration(c), this._catScale(c)]
         .filter(Boolean);
       const end = new Date();
       const start = new Date(end.getTime() - 10 * 86400000);
-      this._hist[i] = { at: Date.now(), loading: true };
+      // a forced refresh keeps the old data on screen until the new arrives
+      this._hist[i] = force && cached && cached.data
+        ? Object.assign({}, cached, { lastUse })
+        : { at: Date.now(), loading: true, lastUse };
       const histP = this._hass.callWS({
         type: 'history/history_during_period',
         start_time: start.toISOString(),
@@ -1861,15 +2021,106 @@
         types: ['mean', 'min', 'max']
       }).catch(() => null) : Promise.resolve(null);
       Promise.all([histP, statsP]).then(([res, stats]) => {
-        this._hist[i] = { at: Date.now(), data: res || {}, stats: stats || {} };
+        this._hist[i] = { at: Date.now(), data: res || {}, stats: stats || {}, lastUse };
         this._update();
       }).catch((err) => {
         this._hist[i] = {
-          at: Date.now(),
+          at: Date.now(), lastUse,
           error: String((err && err.message) || 'history unavailable')
         };
         this._update();
       });
+    }
+
+    // display-unit conversion for a cat's scale readings (v1.25: shared
+    // by the row and the history panel)
+    _wtConv(c) {
+      const scaleSt = this._st(this._catScale(c));
+      const scaleUnit = scaleSt && scaleSt.attributes.unit_of_measurement;
+      const dispSt = this._st(c.weight);
+      const dispUnit = (dispSt && dispSt.attributes.unit_of_measurement) || 'lb';
+      const toDisp = (kg) => {
+        let v = Number(kg);
+        if (scaleUnit === 'kg' && dispUnit !== 'kg') v = v * 2.20462;
+        return v;
+      };
+      return { toDisp, dispUnit };
+    }
+
+    // daily series from statistics rows through the zero-poisoning
+    // filter + median guard (v1.10 rules), in display units
+    _dailyFromStats(stRows, toDisp) {
+      let daily = (stRows || []).map((r) => {
+        const t = typeof r.start === 'number' ? r.start : Date.parse(r.start);
+        let v = null;
+        if (r.min != null && Number(r.min) > 0 && r.mean != null) {
+          v = Number(r.mean);            // clean day: trust the mean
+        } else if (r.max != null && Number(r.max) > 0) {
+          v = Number(r.max);             // tainted day: use the real reading
+        }
+        return { t, v };
+      }).filter((p) => p.v != null && p.v > 0 && !isNaN(p.v) && !isNaN(p.t))
+        .sort((a, b) => a.t - b.t)
+        .map((p) => ({ t: p.t, v: toDisp(p.v) }));
+      if (daily.length >= 3) {
+        const sorted = daily.map((p) => p.v).slice().sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        daily = daily.filter((p) => p.v >= median * 0.5);
+      }
+      return daily;
+    }
+
+    // 5-point moving average (same as the panel's smoothed line)
+    _smooth(daily) {
+      return daily.map((p, j) => {
+        const win = daily.slice(Math.max(0, j - 2), Math.min(daily.length, j + 3));
+        return { t: p.t, v: win.reduce((a, q) => a + q.v, 0) / win.length };
+      });
+    }
+
+    /* ---------------- row weights (v1.25) ---------------- */
+
+    _loadWeights(force) {
+      const cur = this._wt;
+      if (!force && cur && !cur.loading) return;
+      if (cur && cur.loading) return;
+      const cats = this._cfg.cats;
+      const ids = cats.map((c) => this._catScale(c)).filter(Boolean);
+      const lastUse = cats.map((c) => this._sv(c.last_use));
+      const end = new Date();
+      this._wt = Object.assign({}, cur || {}, { loading: true, lastUse });
+      if (!ids.length) { this._wt = { at: Date.now(), val: [], lastUse }; return; }
+      this._hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: new Date(end.getTime() - this._trendDays * 86400000).toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: ids,
+        period: 'day',
+        types: ['mean', 'min', 'max']
+      }).then((stats) => {
+        const val = cats.map((c) => {
+          const id = this._catScale(c);
+          const daily = this._dailyFromStats(stats && id ? stats[id] : [], this._wtConv(c).toDisp);
+          if (daily.length < 2) return null;
+          const sm = this._smooth(daily);
+          return sm[sm.length - 1].v;
+        });
+        this._wt = { at: Date.now(), val, lastUse };
+        this._update();
+      }).catch(() => {
+        this._wt = { at: Date.now(), val: cats.map(() => null), lastUse };
+        this._update();
+      });
+    }
+
+    // row weight in display units: smoothed stats mean -> last scale
+    // reading -> null. Never the profile number.
+    _rowWeight(c, i) {
+      const wt = this._wt;
+      if (wt && wt.val && wt.val[i] != null) return wt.val[i];
+      const last = this._num(this._catScale(c));
+      if (last != null && last > 0) return this._wtConv(c).toDisp(last);
+      return null;
     }
 
     _histRows(data, id) {
@@ -1982,15 +2233,7 @@
         });
         return best;
       };
-      const scaleSt = this._st(this._catScale(c));
-      const scaleUnit = scaleSt && scaleSt.attributes.unit_of_measurement;
-      const dispSt = this._st(c.weight);
-      const dispUnit = (dispSt && dispSt.attributes.unit_of_measurement) || 'lb';
-      const toDisp = (kg) => {
-        let v = Number(kg);
-        if (scaleUnit === 'kg' && dispUnit !== 'kg') v = v * 2.20462;
-        return v;
-      };
+      const { toDisp, dispUnit } = this._wtConv(c);
 
       const filtDay = filt ? days.find((d) => d.k === filt) : null;
       const logSrc = filt
@@ -2017,25 +2260,8 @@
       // weight trend: long-term daily means (preferred), raw-reading fallback
       let sparkHtml;
       const stRows = (h.stats && h.stats[this._catScale(c)]) || [];
-      // zero-poisoning filter: the integration writes 0s around
-      // reloads/dropouts and they contaminate time-weighted means.
-      let daily = stRows.map((r) => {
-        const t = typeof r.start === 'number' ? r.start : Date.parse(r.start);
-        let v = null;
-        if (r.min != null && Number(r.min) > 0 && r.mean != null) {
-          v = Number(r.mean);            // clean day: trust the mean
-        } else if (r.max != null && Number(r.max) > 0) {
-          v = Number(r.max);             // tainted day: use the real reading
-        }
-        return { t, v };
-      }).filter((p) => p.v != null && p.v > 0 && !isNaN(p.v) && !isNaN(p.t))
-        .sort((a, b) => a.t - b.t)
-        .map((p) => ({ t: p.t, v: toDisp(p.v) }));
-      if (daily.length >= 3) {
-        const sorted = daily.map((p) => p.v).slice().sort((a, b) => a - b);
-        const median = sorted[Math.floor(sorted.length / 2)];
-        daily = daily.filter((p) => p.v >= median * 0.5);
-      }
+      // zero-poisoning filter + median guard live in _dailyFromStats
+      const daily = this._dailyFromStats(stRows, toDisp);
       if (daily.length >= 2) {
         const nowMs = new Date().getTime();
         const w0 = nowMs - this._trendDays * 86400000;
@@ -2045,10 +2271,7 @@
         lo -= vpad; hi += vpad;
         const X = (t) => 6 + Math.max(0, Math.min(1, (t - w0) / (nowMs - w0))) * 208;
         const Y = (v) => 28 - (v - lo) / (hi - lo) * 22;
-        const sm = daily.map((p, j) => {
-          const win = daily.slice(Math.max(0, j - 2), Math.min(daily.length, j + 3));
-          return { t: p.t, v: win.reduce((a, q) => a + q.v, 0) / win.length };
-        });
+        const sm = this._smooth(daily);
         let grid = '';
         const gd = new Date(w0);
         gd.setHours(0, 0, 0, 0); gd.setDate(1); gd.setMonth(gd.getMonth() + 1);
@@ -2092,13 +2315,11 @@
           ' <span>avg ' + this._esc(dispUnit) + '</span></div>' + deltaHtml + '</div></div>' +
           '<div class="haxis"><span>' + MONTHS[axStart.getMonth()] + ' ' + axStart.getDate() +
           '</span><span>' + MONTHS[axMid.getMonth()] + '</span><span>today</span></div>';
-        // fallthrough skips the raw path below
-      }
-      const pts = daily.length >= 2 ? [] : wts.slice().sort((a, b) => a.t - b.t).slice(-12)
+      } else {
+      // raw-reading fallback (fewer than 2 daily statistics)
+      const pts = wts.slice().sort((a, b) => a.t - b.t).slice(-12)
         .map((e) => ({ t: e.t, v: toDisp(e.s) }));
-      if (daily.length >= 2) {
-        // already built above
-      } else if (pts.length < 2) {
+      if (pts.length < 2) {
         sparkHtml = '<div class="histhead" style="margin:0;">weight trend &middot; not enough data yet</div>';
       } else {
         const t0 = pts[0].t, t1 = pts[pts.length - 1].t || t0 + 1;
@@ -2133,6 +2354,8 @@
           ' <span>avg ' + this._esc(dispUnit) + '</span></div></div>';
       }
 
+      }
+
       panel.innerHTML =
         '<div class="histhead"><b>VISITS / DAY</b> &middot; past 7 days &middot; avg ' +
         avg.toFixed(1) + '</div>' +
@@ -2150,6 +2373,14 @@
       const $ = this.$;
 
       /* cats */
+      // measured row weights (v1.25): fetch once, refetch when a cat's
+      // last_use changes (a new visit = a new scale reading)
+      if (!this._wt) {
+        this._loadWeights();
+      } else if (this._wt.val && !this._wt.loading &&
+          this._cfg.cats.some((c, i) => this._wt.lastUse[i] !== this._sv(c.last_use))) {
+        this._loadWeights(true);
+      }
       this._cfg.cats.forEach((c, i) => {
         const av = $['cat' + i + 'av'];
         const ws = this._st(c.weight);
@@ -2169,8 +2400,8 @@
           av.style.background = 'rgba(255,255,255,.07)';
         }
         $['cat' + i + 'nm'].textContent = c.name;
-        const w = this._num(c.weight);
-        const unit = ws && ws.attributes.unit_of_measurement ? ws.attributes.unit_of_measurement : 'lb';
+        const w = this._rowWeight(c, i);
+        const unit = this._wtConv(c).dispUnit;
         const when = this._fmtWhen(this._sv(c.last_use));
         $['cat' + i + 'in'].innerHTML =
           '<b>' + (w == null ? '--' : w.toFixed(1) + ' ' + this._esc(unit)) + '</b>' +
@@ -2193,7 +2424,12 @@
           car.dataset.open = String(open);
           car.innerHTML = open ? '&#9652;' : '&#9662;';
         }
-        if (open) this._renderHist(i, panel);
+        if (open) {
+          // a new visit while the panel is open -> refetch (v1.24)
+          const h = this._hist[i];
+          if (h && h.data && h.lastUse !== this._sv(c.last_use)) this._loadHist(i, true);
+          this._renderHist(i, panel);
+        }
       });
 
       /* expansion (grid-rows 0fr->1fr animates the height) */
@@ -2213,6 +2449,9 @@
         this._maintPending = 0;
       }
       if (!maintActive && this._exitPending) {
+        this._exitPending = 0;
+      }
+      if (this._exitPending && Date.now() - this._exitPending > MAINT_PENDING_TIMEOUT_MS) {
         this._exitPending = 0;
       }
       const showMaint = maintActive || !!this._maintPending;
@@ -2236,8 +2475,9 @@
       /* litter section */
       const lvl = this._num(this._lit.level);
       const sandLack = this._isOn(this._lit.sandLack);
-      const binFull = this._isOn(this._lit.binFull);
-      const litOffline = this._offline(this._lit.devStatus);
+      const binFull = this._tri(this._lit.binFull);
+      const litDev = this._devState(this._lit.devStatus);
+      const litOffline = litDev !== 'online';
       let stateTxt = this._sv(this._lit.state) || '--';
       if (Date.now() < this._optCleanUntil &&
           stateTxt.toLowerCase() === 'idle') stateTxt = 'cleaning\u2026';
@@ -2249,7 +2489,8 @@
         (lastBy ? ' &middot; last: ' + this._esc(this._capitalize(lastBy)) +
           (lastWhen && lastWhen !== '--' ? ' ' + this._esc(lastWhen) : '') : '');
       if (occ) $.litsub.innerHTML = '&middot; occupied';
-      const barCol = (sandLack || litOffline) ? RED : (lvl != null && lvl <= 30 ? AMBER : GREEN);
+      const barCol = (sandLack || litDev === 'offline') ? RED
+        : (lvl == null ? 'rgba(160,160,160,.35)' : (lvl <= 30 ? AMBER : GREEN));
       $.litbar.style.background = barCol;
       $.litbar.style.opacity = '.85';
       $.litbar.style.width = (lvl == null ? 0 : Math.max(0, Math.min(100, lvl))) + '%';
@@ -2259,7 +2500,7 @@
       $.litstats.textContent =
         (kg == null ? '--' : kg.toFixed(1) + ' kg') +
         ' \u00b7 ' + (uses == null ? '--' : uses) + ' uses today' +
-        ' \u00b7 ' + (binFull ? 'bin FULL' : 'bin OK');
+        ' \u00b7 ' + (binFull == null ? 'bin --' : (binFull ? 'bin FULL' : 'bin OK'));
       $.littitle.classList.toggle('unavail', litOffline);
 
       /* more panel */
@@ -2340,15 +2581,21 @@
       if (lvl != null && lvl <= 30) alerts.push('Litter ' + lvl + '%');
       if (sandLack && (lvl == null || lvl > 30)) alerts.push('Litter low');
       if (binFull) alerts.push('Bin full');
-      this._fdrs.forEach((f) => {
+      const fdrDev = this._fdrs.map((f) => this._devState(f.devStatus));
+      const allUnknown = litDev === 'unknown' && fdrDev.every((d) => d === 'unknown');
+      this._fdrs.forEach((f, i) => {
         if (this._isOn(f.hopper)) {
           alerts.push((f.owner ? f.owner + "'s" : f.label) + ' hopper empty');
         }
-        if (this._offline(f.devStatus)) {
-          alerts.push((f.owner ? f.owner + "'s" : f.label) + ' feeder offline');
+        if (!allUnknown && fdrDev[i] !== 'online') {
+          alerts.push((f.owner ? f.owner + "'s" : f.label) +
+            (fdrDev[i] === 'offline' ? ' feeder offline' : ' feeder unavailable'));
         }
       });
-      if (litOffline) alerts.push('Litter box offline');
+      if (!allUnknown && litOffline) {
+        alerts.push(litDev === 'offline' ? 'Litter box offline' : 'Litter box unavailable');
+      }
+      if (allUnknown) alerts.push('PetKit unavailable');
       if (alerts.length) {
         const txt = '\u26a0 ' + alerts.join(' \u00b7 ');
         if ($.alerts.textContent !== txt) $.alerts.textContent = txt;

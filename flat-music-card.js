@@ -1,4 +1,4 @@
-/* flat-music-card v1.26
+/* flat-music-card v1.28
    Whole-home music control card for Music Assistant sync groups.
    Flat-family bespoke card. Header row is a mini-player: album art,
    title/artist, prev/play/next - always visible, fixed ~60px.
@@ -6,8 +6,9 @@
    solo-playing room, else the armed selection. Expanding reveals:
    a source line (which output + which app), shuffle / seek / stop /
    repeat, a progress line, group master volume ("Everywhere") above
-   per-room group toggles + volume sliders (level-matchers), and an
-   action strip: MA / playlists / balance / lock.
+   per-room group toggles + volume sliders (level-matchers), and a
+   chip strip: MA / playlists / cast / balance split-chip (apply |
+   lock | gear = baseline + anchor editor).
    Row interactions: tick = join/leave the sync group; label click =
    switch output there (transfer_queue while playing, arm when idle);
    number click = mute toggle (where supported); slider = volume.
@@ -114,6 +115,43 @@
    every other room to the same level. Balance apply = BASE row in
    both modes. Rooms missing anchor entities fall back to linear.
    Mute-wins policy unchanged in both modes.
+   v1.27: audit pass. (1) Availability honesty: when the active
+   target (group, or the armed room) is unavailable/unknown the
+   header reads "Unavailable" (amber) instead of "Idle", the source
+   line says UNAVAILABLE, and prev/play/next/shuffle/stop/repeat go
+   dim and inert (a solo-playing room still wins as before).
+   (2) Mute-wins extended to the muted row itself: a muted room's
+   slider (and the Everywhere slider while the group is muted) is
+   inert - a volume_set would audibly un-mute it while the M stays;
+   tap the M to un-mute first. The Everywhere slider is also inert
+   while the group entity is unavailable (rooms already were).
+   (3) Playlist picker: a failed get_library no longer sticks for
+   the page session (reopen retries), and every open refreshes the
+   list in the background (cached list shown at once). (4) Root
+   listeners bound once - a second setConfig (editor preview) no
+   longer fires every tap twice; editor/picker state resets on
+   setConfig. (5) set hass re-renders only when one of the card's
+   own entities changed identity (ids harvested from the config);
+   the 1 s tick repaints when an optimistic hold expires so a miss
+   is bounded. (6) Baseline/anchor save: the saved draft is held
+   until the helpers echo it (no snap-back flicker between save and
+   echo). (7) Lock chip dims when lock_entity is unavailable (tap
+   ignored) rather than reading as plain off. (8) Config: a quoted
+   numeric balance ("70") and lock_default "false" are honored;
+   slider drags start on the primary button only; strip labels are
+   HTML-escaped; dead _els.prog removed.
+   v1.28: DROPPED-MEMBER flag. A room that was in the sync group and
+   leaves it (or goes unavailable) while the group keeps playing gets
+   an amber "! " tick, an amber name and a "dropped Nm" age on its row,
+   and the album art shows an amber corner dot (visible collapsed).
+   Shown only after the drop has lasted drop_show_s (30 s - short
+   drops that self-heal stay silent), cleared when the room rejoins,
+   when the group stops playing (a pause ends the episode), or after
+   drop_max_s (600 s). A room you unticked from this card is never
+   flagged (15 s grace). Card-side memory only: it sees drops that
+   happen while a dashboard is open, and cannot tell a device dropout
+   from an unjoin done in the MA app. Config: drop_show_s / drop_max_s
+   (seconds; 0 disables the feature).
 
    HOW-TO (hosting/update):
    - Ships as a base64 data: URL Lovelace resource:
@@ -153,6 +191,8 @@
      lock_entity: input_boolean.my_music_lock  # shared lock helper
      mode_entity: input_select.my_scaling_mode # linear | anchored
      show_progress: true     # thin progress line
+     drop_show_s: 30         # flag a dropped room after this long (0 = off)
+     drop_max_s: 600         # and clear the flag after this long
 */
 (function () {
   "use strict";
@@ -220,6 +260,9 @@
     self._ancStored = null;
     self._ancCol = 1;
     self._blModeShown = null;
+    self._drop = {};
+    self._wasIn = {};
+    self._selfUnjoin = {};
     return self;
   };
   FlatMusicCard.prototype = Object.create(HTMLElement.prototype);
@@ -231,8 +274,52 @@
     if (!config.rooms || !config.rooms.length) throw new Error("rooms list is required");
     this._config = config;
     this._open = !!config.start_open;
-    this._lock = config.lock_default !== false;
+    this._lock = config.lock_default !== false && String(config.lock_default) !== "false";
     this._built = false;
+    this._pickerOpen = false;
+    this._blOpen = false;
+    this._blDraft = null; this._blStored = null;
+    this._ancDraft = null; this._ancStored = null;
+    this._blHold = 0;
+    this._drop = {};
+    this._wasIn = {};
+    var ds = parseFloat(config.drop_show_s), dm = parseFloat(config.drop_max_s);
+    this._dropShowMs = (isNaN(ds) ? 30 : Math.max(0, ds)) * 1000;
+    this._dropMaxMs = (isNaN(dm) ? 600 : Math.max(0, dm)) * 1000;
+    this._ids = this._harvestIds(config);
+  };
+
+  /* every entity id anywhere in the config (any depth) - the render gate key */
+  FlatMusicCard.prototype._harvestIds = function (cfg) {
+    var out = {};
+    var re = /^[a-z_]+\.[a-z0-9_]+$/;
+    (function walk(v) {
+      if (typeof v === "string") { if (re.test(v)) out[v] = true; return; }
+      if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) walk(v[i]); return; }
+      if (v && typeof v === "object") { for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) walk(v[k]); }
+    })(cfg);
+    return Object.keys(out);
+  };
+
+  FlatMusicCard.prototype._relevantChanged = function (prev, next) {
+    if (!prev || !prev.states || !next || !next.states) return true;
+    var ids = this._ids || [];
+    for (var i = 0; i < ids.length; i++) {
+      if (prev.states[ids[i]] !== next.states[ids[i]]) return true;
+    }
+    return false;
+  };
+
+  /* an optimistic hold that expired since the last paint -> repaint once */
+  FlatMusicCard.prototype._optSweep = function () {
+    if (!this._built || !this._hass) return;
+    var now = Date.now();
+    for (var k in this._opt) {
+      if (Object.prototype.hasOwnProperty.call(this._opt, k) && this._opt[k] && now >= this._opt[k].until) {
+        this._update();
+        return;
+      }
+    }
   };
 
   FlatMusicCard.prototype.getCardSize = function () { return this._open ? 8 : 2; };
@@ -240,16 +327,17 @@
   Object.defineProperty(FlatMusicCard.prototype, "hass", {
     get: function () { return this._hass; },
     set: function (hass) {
+      var prev = this._hass;
       this._hass = hass;
       if (!this._config) return;
-      if (!this._built) this._build();
-      this._update();
+      if (!this._built) { this._build(); this._update(); return; }
+      if (this._relevantChanged(prev, hass)) this._update();
     }
   });
 
   FlatMusicCard.prototype.connectedCallback = function () {
     var self = this;
-    if (!this._timer) this._timer = setInterval(function () { self._updateProgress(); }, 1000);
+    if (!this._timer) this._timer = setInterval(function () { self._updateProgress(); self._optSweep(); self._paintDrops(); }, 1000);
   };
   FlatMusicCard.prototype.disconnectedCallback = function () {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
@@ -261,10 +349,11 @@
     var c = this._config;
     var root = this.shadowRoot || this.attachShadow({ mode: "open" });
     var showProg = c.show_progress !== false;
-    var castLabel = c.cast_label === undefined ? "pc" : String(c.cast_label);
+    var castLabel = c.cast_label === undefined ? "pc" : this._escHtml(c.cast_label);
     var L = c.labels || {};
+    var self = this;
     function lbl(key, def) {
-      var v = L[key] === undefined ? def : String(L[key]);
+      var v = L[key] === undefined ? def : self._escHtml(L[key]);
       return v ? "<span>" + v + "</span>" : "";
     }
     var chips = {
@@ -306,10 +395,15 @@
       ".hdr{display:flex;align-items:center;gap:12px;padding:8px 12px 8px 8px;min-height:60px;cursor:pointer;position:relative;transition:background .12s ease}" +
       ".hdr.pressed{background:rgba(70,70,70,.22)}" +
       "@media (hover:hover){.hdr:hover{background:rgba(255,193,7,.10)}}" +
-      ".hart{width:46px;height:46px;border-radius:8px;background:rgba(70,70,70,.25);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:rgba(160,160,160,.55);background-size:cover;background-position:center;margin-left:4px}" +
+      ".hart{width:46px;height:46px;border-radius:8px;background:rgba(70,70,70,.25);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:rgba(160,160,160,.55);background-size:cover;background-position:center;margin-left:4px;position:relative}" +
+      ".hart .dd{display:none;position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:" + AMBER + ";border:2px solid var(--ha-card-background,var(--card-background-color,#1c1c1c))}" +
+      ".hart.drop .dd{display:block}" +
       ".htxt{min-width:0;flex:1}" +
       ".ht{font-size:13.5px;font-weight:600;color:var(--primary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
       ".hs{font-size:11.5px;color:" + SUB + ";margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+      ".hs.unk{color:" + AMBER + "}" +
+      ".hctl .sk.off,.hctl .pp.off{opacity:.35;cursor:default}" +
+      "@media (hover:hover){.hctl .sk.off:hover,.hctl .pp.off:hover{background:transparent}.hctl .pp.off:hover{background:rgba(70,70,70,.3)}}" +
       ".hctl{display:flex;align-items:center;gap:8px;flex-shrink:0;position:relative;z-index:2}" +
       ".sk,.pp{display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .12s ease,background .12s ease;color:var(--primary-text-color);border-radius:50%}" +
       ".hctl .sk{width:38px;height:38px;color:" + SUB + "}" +
@@ -341,6 +435,12 @@
       ".room{display:flex;align-items:center;gap:11px;height:42px}" +
       ".tick{width:19px;height:19px;border-radius:5px;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;border:1.5px solid rgba(70,70,70,.6);color:transparent;transition:background .15s ease,border-color .15s ease,transform .12s ease}" +
       ".tick.on{background:" + ACCENT_SOFT + ";color:" + ACCENT_TXT + ";border-color:transparent}" +
+      ".tick{position:relative}" +
+      ".tick.drop{border-color:" + AMBER + ";color:transparent}" +
+      ".tick.drop::after{content:'!';position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;color:" + AMBER + ";font-size:12px;font-weight:700;line-height:1}" +
+      ".room.drop .rn{color:" + AMBER + ";flex:0 1 auto;max-width:170px}" +
+      ".room.drop.dim .rn{opacity:.75}" +
+      ".rn .dt{font-size:10px;margin-left:3px;color:" + AMBER + ";white-space:nowrap}" +
       ".rn{font-size:13px;flex:0 0 88px;color:var(--primary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
       ".rn.pick{cursor:pointer;border-radius:7px;padding:4px 6px;margin-left:-6px;transition:background .12s ease}" +
       "@media (hover:hover){.rn.pick:hover{background:rgba(255,193,7,.14)}}" +
@@ -353,6 +453,7 @@
       ".slider.muted .fill{background:rgba(120,120,120,.35)}" +
       ".slider .cap{position:absolute;top:50%;left:0%;transform:translate(-50%,-50%);width:11px;height:11px;border-radius:50%;background:#fff}" +
       ".slider.muted .cap{background:#9a9ba0}" +
+      ".slider.muted{cursor:default}" +
       ".room.dim .slider .cap,.mrow.dim .slider .cap{display:none}" +
       ".room.dim .slider,.mrow.dim .slider{cursor:default}" +
       ".pct{font-size:11.5px;color:" + SUB + ";width:38px;flex-shrink:0;text-align:center;font-variant-numeric:tabular-nums;padding:5px 0;border-radius:9px;transition:background .12s ease,color .12s ease}" +
@@ -364,6 +465,7 @@
       ".chip.castchip.on{color:" + ACCENT_TXT + ";border-color:rgba(76,175,80,.5);background:rgba(76,175,80,.12)}" +
       ".chip.active{color:var(--primary-text-color);background:rgba(70,70,70,.22)}" +
       ".chip.split .zlock.active{color:#ffc107;background:rgba(255,193,7,.14)}" +
+      ".chip.split .zlock.unk{opacity:.45}" +
       "@media (hover:hover){.chip:hover{background:rgba(70,70,70,.22);color:var(--primary-text-color)}}" +
       ".pickerwrap{display:grid;grid-template-rows:0fr;transition:grid-template-rows .35s cubic-bezier(.4,0,.2,1)}" +
       ".pickerwrap.open{grid-template-rows:1fr}" +
@@ -431,7 +533,7 @@
       "</style>" +
       "<ha-card>" +
         '<div class="hdr" data-act="toggle">' +
-          '<div class="hart">' + svg(ICONS.note, 20) + "</div>" +
+          '<div class="hart">' + svg(ICONS.note, 20) + '<span class="dd"></span>' + "</div>" +
           '<div class="htxt"><div class="ht"></div><div class="hs"></div></div>' +
           '<div class="hctl">' +
             '<div class="sk" data-act="prev">' + svg(ICONS.prev, 19) + "</div>" +
@@ -466,6 +568,9 @@
       ht: root.querySelector(".ht"),
       hs: root.querySelector(".hs"),
       pp: root.querySelector('[data-act="pp"]'),
+      prev: root.querySelector('[data-act="prev"]'),
+      next: root.querySelector('[data-act="next"]'),
+      stop: root.querySelector('[data-act="stop"]'),
       shuffle: root.querySelector('[data-act="shuffle"]'),
       repeat: root.querySelector('[data-act="repeat"]'),
       seekback: root.querySelector('[data-act="seekback"]'),
@@ -473,7 +578,6 @@
       srcline: root.querySelector(".srcline"),
       srctxt: root.querySelector(".srctxt"),
       bodywrap: root.querySelector(".bodywrap"),
-      prog: root.querySelector(".prog"),
       progzone: root.querySelector(".progzone"),
       pf: root.querySelector(".pf"),
       rooms: root.querySelectorAll(".room"),
@@ -508,6 +612,24 @@
       });
     }
 
+    press(this._els.hdr);
+    var pressables = root.querySelectorAll(".sk,.pp,.tick,.chip:not(.split),.xb,.zone");
+    for (var i = 0; i < pressables.length; i++) press(pressables[i]);
+
+    var sliders = root.querySelectorAll(".slider, .progzone");
+    for (var s = 0; s < sliders.length; s++) {
+      (function (slider) {
+        slider.addEventListener("pointerdown", function (ev) {
+          ev.stopPropagation();
+          if (ev.button !== undefined && ev.button !== 0) return;
+          self._sliderStart(slider, ev);
+        });
+      })(sliders[s]);
+    }
+
+    if (this._rootBound) return;
+    this._rootBound = true;
+
     root.addEventListener("click", function (ev) {
       var el = ev.target;
       while (el && el !== root && !(el.dataset && el.dataset.act)) el = el.parentNode;
@@ -515,15 +637,15 @@
       var act = el.dataset.act;
       if (act !== "toggle") ev.stopPropagation();
       if (act === "toggle") self._toggleOpen();
-      else if (act === "pp") self._svc("media_play_pause", self._target().entity);
-      else if (act === "prev") self._svc("media_previous_track", self._target().entity);
-      else if (act === "next") self._svc("media_next_track", self._target().entity);
+      else if (act === "pp") self._tsvc("media_play_pause");
+      else if (act === "prev") self._tsvc("media_previous_track");
+      else if (act === "next") self._tsvc("media_next_track");
       else if (act === "tick") self._toggleRoom(parseInt(el.dataset.i, 10));
       else if (act === "pick") self._pickOutput(el.dataset.g ? -1 : parseInt(el.dataset.i, 10));
       else if (act === "mute") self._toggleMute(el.dataset.g ? -1 : parseInt(el.dataset.i, 10));
       else if (act === "shuffle") self._toggleShuffle();
       else if (act === "repeat") self._cycleRepeat();
-      else if (act === "stop") self._svc("media_stop", self._target().entity);
+      else if (act === "stop") self._tsvc("media_stop");
       else if (act === "seekback") self._seek(-30);
       else if (act === "seekfwd") self._seek(30);
       else if (act === "ma") self._openMA();
@@ -545,19 +667,6 @@
       else if (act === "pkplay") self._playPlaylist(el.dataset.uri);
     });
 
-    press(this._els.hdr);
-    var pressables = root.querySelectorAll(".sk,.pp,.tick,.chip:not(.split),.xb,.zone");
-    for (var i = 0; i < pressables.length; i++) press(pressables[i]);
-
-    var sliders = root.querySelectorAll(".slider, .progzone");
-    for (var s = 0; s < sliders.length; s++) {
-      (function (slider) {
-        slider.addEventListener("pointerdown", function (ev) {
-          ev.stopPropagation();
-          self._sliderStart(slider, ev);
-        });
-      })(sliders[s]);
-    }
     root.addEventListener("pointermove", function (ev) { self._sliderMove(ev); });
     ["pointerup", "pointercancel"].forEach(function (t) {
       root.addEventListener(t, function (ev) { self._sliderEnd(ev); });
@@ -596,6 +705,18 @@
     return { entity: c.group_entity, isGroup: true, idx: -1, st: g };
   };
 
+  /* the active target has no usable state (integration down, entity gone) */
+  FlatMusicCard.prototype._targetDead = function () {
+    var st = this._target().st;
+    return !st || st.state === "unavailable" || st.state === "unknown";
+  };
+
+  /* transport call on the active target; inert while the target is dead */
+  FlatMusicCard.prototype._tsvc = function (service, data) {
+    if (this._targetDead()) return;
+    this._svc(service, this._target().entity, data);
+  };
+
   FlatMusicCard.prototype._pickOutput = function (idx) {
     var c = this._config;
     var dest = idx < 0 ? c.group_entity : c.rooms[idx].entity;
@@ -622,6 +743,12 @@
     if (kind === "room") {
       var st = this._roomState(idx);
       if (!st || st.unavailable) return;
+      if (this._optVal("mute" + idx, st.muted)) return;
+    }
+    if (kind === "master") {
+      var mg = this._hass && this._hass.states[this._config.group_entity];
+      if (!mg || mg.state === "unavailable" || mg.state === "unknown") return;
+      if (this._optVal("mutemaster", !!mg.attributes.is_volume_muted)) return;
     }
     if (kind === "prog") {
       var t = this._target();
@@ -711,7 +838,12 @@
         if (!isNaN(v) && v >= 0) return v;
       }
     }
-    return typeof room.balance === "number" ? room.balance : null;
+    if (typeof room.balance === "number") return room.balance;
+    if (typeof room.balance === "string" && room.balance.trim() !== "") {
+      var lit = parseFloat(room.balance);
+      if (!isNaN(lit)) return lit;
+    }
+    return null;
   };
 
   FlatMusicCard.prototype._lockScale = function (srcIdx, srcVal) {
@@ -810,6 +942,7 @@
   };
 
   FlatMusicCard.prototype._toggleShuffle = function () {
+    if (this._targetDead()) return;
     var t = this._target();
     var cur = !!(t.st && t.st.attributes.shuffle);
     this._opt.shuffle = { val: !cur, until: Date.now() + OPT_MS };
@@ -818,6 +951,7 @@
   };
 
   FlatMusicCard.prototype._cycleRepeat = function () {
+    if (this._targetDead()) return;
     var t = this._target();
     var cur = (t.st && t.st.attributes.repeat) || "off";
     var next = cur === "off" ? "all" : cur === "all" ? "one" : "off";
@@ -845,6 +979,7 @@
     var key = "tick" + idx;
     if (st.inGroup) {
       this._opt[key] = { val: 0, until: Date.now() + OPT_MS };
+      this._selfUnjoin[idx] = Date.now();
       this._hass.callService("media_player", "unjoin", { entity_id: room.entity });
     } else {
       this._opt[key] = { val: 1, until: Date.now() + OPT_MS };
@@ -853,6 +988,16 @@
       });
     }
     this._update();
+  };
+
+  /* lock_entity configured but its state is missing/unavailable/unknown */
+  FlatMusicCard.prototype._lockUnknown = function () {
+    var e = this._config && this._config.lock_entity;
+    if (!e || !this._hass) return false;
+    var o = this._opt.lock;
+    if (o && Date.now() < o.until) return false;
+    var st = this._hass.states[e];
+    return !st || st.state === "unavailable" || st.state === "unknown";
   };
 
   FlatMusicCard.prototype._lockOn = function () {
@@ -867,6 +1012,7 @@
   };
 
   FlatMusicCard.prototype._toggleLock = function () {
+    if (this._lockUnknown()) return;
     var on = !this._lockOn();
     if (this._config.lock_entity && this._hass) {
       this._opt.lock = { val: on, until: Date.now() + OPT_MS };
@@ -1012,6 +1158,10 @@
   FlatMusicCard.prototype._blRefreshClean = function () {
     if (!this._blOpen || !this._blStored || this._blDirty()) return;
     var fresh = this._blReadStored();
+    if (this._blHold && Date.now() < this._blHold) {
+      if (this._sameList(fresh, this._blStored)) this._blHold = 0;
+      return;
+    }
     for (var i = 0; i < fresh.length; i++) {
       if (fresh[i] !== this._blStored[i]) {
         this._blStored = fresh;
@@ -1056,7 +1206,19 @@
       });
     }
     this._blStored = this._blDraft.slice();
+    this._blHold = Date.now() + OPT_MS;
     this._renderBl();
+  };
+
+  FlatMusicCard.prototype._sameList = function (a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  };
+  FlatMusicCard.prototype._sameGrid = function (a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (!this._sameList(a[i], b[i])) return false;
+    return true;
   };
 
   FlatMusicCard.prototype._blHeadHtml = function (title, dirty) {
@@ -1173,6 +1335,10 @@
   FlatMusicCard.prototype._ancRefreshClean = function () {
     if (!this._blOpen || !this._ancStored || this._ancDirty()) return;
     var fresh = this._ancReadStored();
+    if (this._blHold && Date.now() < this._blHold) {
+      if (this._sameGrid(fresh, this._ancStored)) this._blHold = 0;
+      return;
+    }
     for (var i = 0; i < fresh.length; i++) {
       for (var c = 0; c < 3; c++) {
         if (fresh[i][c] !== this._ancStored[i][c]) {
@@ -1222,6 +1388,7 @@
       }
     }
     this._ancStored = this._cloneAnc(this._ancDraft);
+    this._blHold = Date.now() + OPT_MS;
     this._renderBl();
   };
 
@@ -1313,8 +1480,10 @@
 
   FlatMusicCard.prototype._togglePicker = function () {
     this._setPicker(!this._pickerOpen);
-    if (this._pickerOpen && !this._pickerItems && !this._pickerLoading) this._loadPlaylists();
-    else if (this._pickerOpen) this._renderPicker();
+    if (!this._pickerOpen) return;
+    var cached = !!(this._pickerItems && !this._pickerError);
+    if (cached) this._renderPicker();
+    if (!this._pickerLoading) this._loadPlaylists(cached);
   };
   FlatMusicCard.prototype._setPicker = function (open) {
     if (open && this._blOpen) this._setBl(false);
@@ -1324,11 +1493,15 @@
     fireEvent(this, "card-size-changed", {});
   };
 
-  FlatMusicCard.prototype._loadPlaylists = function () {
+  /* quiet = a cached list is on screen; refresh behind it, keep it on failure */
+  FlatMusicCard.prototype._loadPlaylists = function (quiet) {
     var self = this;
     this._pickerLoading = true;
-    this._pickerError = false;
-    this._renderPicker();
+    if (!quiet) {
+      this._pickerError = false;
+      this._pickerItems = null;
+      this._renderPicker();
+    }
     this._fetchLibrary(true).then(function (items) {
       if (items && items.length) { self._pickerFallback = false; return items; }
       self._pickerFallback = true;
@@ -1340,8 +1513,9 @@
       self._pickerLoading = false;
       self._renderPicker();
     }).catch(function () {
-      self._pickerItems = [];
       self._pickerLoading = false;
+      if (quiet && self._pickerItems) return;
+      self._pickerItems = null;
       self._pickerError = true;
       self._renderPicker();
     });
@@ -1367,7 +1541,7 @@
 
   FlatMusicCard.prototype._renderPicker = function () {
     var el = this._els.pkInner;
-    if (this._pickerLoading) { el.innerHTML = '<div class="pkfoot">loading...</div>'; return; }
+    if (this._pickerLoading && !this._pickerItems) { el.innerHTML = '<div class="pkfoot">loading...</div>'; return; }
     if (this._pickerError) {
       el.innerHTML = '<div class="pkfoot">could not load playlists - check config_entry_id</div>';
       return;
@@ -1472,10 +1646,12 @@
     if (!this._built || !this._hass) return;
     var c = this._config;
     this._els.lockChip.classList.toggle("active", this._lockOn());
+    this._els.lockChip.classList.toggle("unk", this._lockUnknown());
     var t = this._target();
     var st = t.st;
     var playing = st && st.state === "playing";
     var paused = st && st.state === "paused";
+    var dead = this._targetDead();
     if (!this._didInitOpen) {
       this._didInitOpen = true;
       if (!this._open && (playing || paused)) {
@@ -1493,9 +1669,13 @@
       this._els.hs.textContent = artist || (paused ? "Paused" : "Playing");
     } else {
       this._els.ht.textContent = c.title || "Music";
-      this._els.hs.textContent = "Idle";
+      this._els.hs.textContent = dead ? "Unavailable" : "Idle";
     }
+    this._els.hs.classList.toggle("unk", !!dead);
     this._els.pp.innerHTML = svg(playing ? ICONS.pause : ICONS.play, 18);
+    this._els.pp.classList.toggle("off", !!dead);
+    this._els.prev.classList.toggle("off", !!dead);
+    this._els.next.classList.toggle("off", !!dead);
     var pic = st && st.attributes.entity_picture;
     if (pic) {
       this._els.hart.style.backgroundImage = "url(" + pic + ")";
@@ -1512,13 +1692,16 @@
     this._els.srcline.classList.toggle("live", !!playing);
     this._els.srctxt.innerHTML = "<b>" + this._escHtml(tname) + "</b>" +
       (app ? DOT_CH + this._escHtml(app) : "") +
-      (noDur ? DOT_CH + "LIVE" : ((playing || paused) ? "" : DOT_CH + "IDLE"));
+      (noDur ? DOT_CH + "LIVE" : ((playing || paused) ? "" : DOT_CH + (dead ? "UNAVAILABLE" : "IDLE")));
 
     // extras (follow target)
     var seekable = st && (playing || paused) &&
       typeof st.attributes.media_duration === "number" && st.attributes.media_duration > 0;
     this._els.seekback.classList.toggle("off", !seekable);
     this._els.seekfwd.classList.toggle("off", !seekable);
+    this._els.shuffle.classList.toggle("off", !!dead);
+    this._els.repeat.classList.toggle("off", !!dead);
+    this._els.stop.classList.toggle("off", !!dead);
     var shuf = this._optVal("shuffle", !!(st && st.attributes.shuffle));
     this._els.shuffle.classList.toggle("on", !!shuf);
     var rep = this._optVal("repeat", (st && st.attributes.repeat) || "off");
@@ -1553,9 +1736,11 @@
     }
 
     // rooms
+    var gPlayingNow = !!(g && g.state === "playing");
     for (var i = 0; i < c.rooms.length; i++) {
       var row = this._els.rooms[i];
       var rst = this._roomState(i);
+      this._trackDrop(i, rst, gPlayingNow);
       var rname = c.rooms[i].name || c.rooms[i].entity;
       var rLive = !t.isGroup && t.idx === i && (playing || paused);
       row.classList.toggle("dim", !!rst.unavailable);
@@ -1586,6 +1771,7 @@
       }
     }
 
+    this._paintDrops();
     if (this._els.castChip) this._els.castChip.classList.toggle("on", this._castActive());
     if (this._blOpen) {
       var blMode = this._scalingMode();
@@ -1607,6 +1793,60 @@
       }
     }
     this._updateProgress();
+  };
+
+  /* ---------- dropped-member flag (v1.28) ---------- */
+
+  /* per push: remember who was really in the group, open/close drop episodes */
+  FlatMusicCard.prototype._trackDrop = function (i, rst, gPlaying) {
+    if (!this._dropShowMs) return;
+    var now = Date.now();
+    var present = !!rst.inGroup && !rst.unavailable;
+    var was = this._wasIn[i];
+    if (!gPlaying) {
+      delete this._drop[i];
+    } else if (was && !present && !this._drop[i]) {
+      var su = this._selfUnjoin[i];
+      if (!(su && now - su < 15000)) this._drop[i] = { at: now };
+    } else if (present && this._drop[i]) {
+      delete this._drop[i];
+    }
+    this._wasIn[i] = present;
+  };
+
+  FlatMusicCard.prototype._dropShown = function (i) {
+    var d = this._drop[i];
+    if (!d) return false;
+    var age = Date.now() - d.at;
+    if (age >= this._dropMaxMs) { delete this._drop[i]; return false; }
+    return age >= this._dropShowMs;
+  };
+
+  FlatMusicCard.prototype._fmtDropAge = function (ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return s < 60 ? s + "s" : Math.round(s / 60) + "m";
+  };
+
+  /* paints the row tags + art dot from the episode table; safe to call every second */
+  FlatMusicCard.prototype._paintDrops = function () {
+    if (!this._built || !this._config) return;
+    var any = false;
+    for (var i = 0; i < this._config.rooms.length; i++) {
+      var row = this._els.rooms[i];
+      var shown = this._dropShown(i);
+      any = any || shown;
+      row.classList.toggle("drop", shown);
+      row.querySelector(".tick").classList.toggle("drop", shown);
+      var rn = row.querySelector(".rn");
+      var dt = rn.querySelector(".dt");
+      if (shown) {
+        if (!dt) { dt = document.createElement("span"); dt.className = "dt"; rn.appendChild(dt); }
+        dt.textContent = DOT_CH + "dropped " + this._fmtDropAge(Date.now() - this._drop[i].at);
+      } else if (dt) {
+        rn.removeChild(dt);
+      }
+    }
+    this._els.hart.classList.toggle("drop", any);
   };
 
   FlatMusicCard.prototype._updateProgress = function () {

@@ -1,4 +1,25 @@
-/* flat-weather-card v1.5.1 - custom Lovelace card for the main dashboard.
+/* flat-weather-card v1.6 - custom Lovelace card for the main dashboard.
+   v1.6: audit bundle (2026-09-06) - (1) the hourly curve and the 5-day strip
+   re-evaluate against the clock on a once-a-minute tick (labels no longer
+   freeze at the last forecast push; the strip's Today cell rolls over at
+   midnight) and forecast subscriptions restart when EITHER the hourly or
+   the daily entity comes back from missing/unavailable (was: daily only);
+   (2) hour labels are positioned under their own curve points instead of
+   spread evenly across the row (they sat up to ~27px off); (3) today's
+   cell stays in the strip when the source drops the day's high after ~3pm
+   ("--" high, real low) so the strip keeps its width; (4) calm wind prints
+   "Wind 0 mph" with no compass point, a missing or non-numeric bearing
+   prints no fabricated direction (a cardinal string passes through);
+   (5) the strip, today's H/L and the curve dim when their source entity is
+   unavailable (both stations down / hourly source down) instead of printing
+   stale numbers at full strength; (6) long-press only on the primary
+   button, leaving the card cancels a pending long-press, tap-throughs open
+   with noopener, day-cell hover only on hover-capable devices, no text
+   selection on press zones; (7) set hass re-renders only when one of the
+   card's own entities changed identity (plus the minute tick); (8) a
+   second setConfig ends the old subscriptions and re-applies accent;
+   getStubConfig is valid. No visible change on a healthy card except
+   items 2, 3 and 4.
    v1.5.1: sanitization fix - this comment's example de-localized; no
    behavior change.
    v1.5: named backup tag - optional fallback_name labels backup mode with
@@ -45,8 +66,8 @@
      base64 decoder (or atob() in a browser console). You get this file.
    - To MODIFY it: edit the decoded JS (ASCII only - use &deg; in innerHTML
      and unicode escapes in JS strings, never a literal degree sign),
-     node --check it, re-encode to base64, then in
-     Settings > Dashboards > Resources replace this resource's URL.
+     node --check it, re-encode to base64, then replace this resource's URL
+     (Card Manager card row Update, or Settings > Dashboards > Resources).
      Hard-refresh the browser.
    - All entity ids and tap-through URLs come from the card YAML on the
      dashboard (kept out of this source on purpose). Example shape:
@@ -103,33 +124,61 @@ const COND_TEXT = {
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 class FlatWeatherCard extends HTMLElement {
-  static getStubConfig() { return { station_entity: '', hourly_entity: '', daily_entity: '' }; }
+  static getStubConfig() {
+    return { station_entity: 'weather.home', hourly_entity: 'weather.home', daily_entity: 'weather.home' };
+  }
 
   setConfig(config) {
     ['station_entity', 'hourly_entity', 'daily_entity'].forEach(k => {
       if (!config[k]) throw new Error('flat-weather-card: "' + k + '" is required');
     });
+    if (this._subsStarted) this._stopSubs(); /* re-setConfig (editor): end the old subscriptions */
     this._config = Object.assign({ hours: 12, days: 5, accent: ACCENT_DEFAULT, chip_path: '' }, config);
+    /* entity ids the card reads - the render gate in set hass compares these by identity */
+    this._ids = Object.keys(this._config)
+      .map(k => this._config[k])
+      .filter(v => typeof v === 'string' && /^[a-z_]+\.[a-z0-9_]+$/.test(v));
     this._hourly = null;
     this._daily = null;
     this._dailyFb = null;
     this._dOk = undefined;
+    this._hOk = undefined;
     this._hourlyKey = '';
     this._dailyKey = '';
+    this._minute = -1;
+    this._force = true;
     this._subsStarted = false;
     if (!this.shadowRoot) this._createDom();
+    this._el.chipdot.style.background = this._config.accent;
   }
 
   getCardSize() { return 4; }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
-    /* auto-heal: when the primary daily source comes back from an outage,
-       restart the forecast subscriptions so its pushes resume cleanly */
+    /* auto-heal: when the daily OR the hourly source comes back from missing/
+       unavailable, restart the forecast subscriptions so pushes resume (a
+       subscription made while the entity was absent may have failed or gone
+       silent; the two sources are separate integrations) */
     const dOk = !this._bad(this._st(this._config.daily_entity));
-    if (this._dOk === false && dOk && this._subsStarted) this._restartSubs();
+    const hOk = !this._bad(this._st(this._config.hourly_entity));
+    if (((this._dOk === false && dOk) || (this._hOk === false && hOk)) && this._subsStarted) this._restartSubs();
     this._dOk = dOk;
+    this._hOk = hOk;
     this._startSubs();
+    /* render gate: skip when none of the card's entities changed identity;
+       a once-a-minute tick still re-evaluates the time-based parts (hourly
+       cutoff, Today label, today's H/L) so nothing freezes without a push */
+    let changed = this._force || !prev;
+    if (!changed) for (const id of this._ids) if (prev.states[id] !== hass.states[id]) { changed = true; break; }
+    const minute = Math.floor(Date.now() / 60000);
+    const tick = minute !== this._minute;
+    this._minute = minute;
+    if (!changed && !tick) return;
+    this._force = false;
+    this._renderHourly();
+    this._renderDaily();
     this._render();
   }
 
@@ -194,24 +243,27 @@ class FlatWeatherCard extends HTMLElement {
         .chip b { color: var(--primary-text-color); font-weight: 500; }
         .hourly { margin: 12px 0 2px; cursor: pointer; }
         .hourly svg { display: block; width: 100%; height: auto; }
-        .hx { display: flex; justify-content: space-between; font-size: 10.5px;
-          color: #7d7d7d; padding: 2px 2px 0; }
+        .hx { position: relative; height: 14px; font-size: 10.5px; color: #7d7d7d;
+          padding: 2px 2px 0; box-sizing: border-box; }
+        .hx span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
         .daily { display: flex; margin-top: 10px; border-top: 1px solid rgba(70,70,70,.35);
           padding-top: 8px; }
         .day { flex: 1; text-align: center; cursor: pointer; border-radius: 8px; padding: 6px 0 4px;
           transition: background .15s; }
-        .day:hover { background: rgba(70,70,70,.25); }
+        @media (hover: hover) { .day:hover { background: rgba(70,70,70,.25); } }
         .day .nm { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 3px; }
         .day ha-icon { --mdc-icon-size: 20px; width: 22px; height: 22px; display: flex;
           align-items: center; justify-content: center; line-height: 0; margin: 0 auto; }
         .day .hi { font-size: 12.5px; margin-top: 3px; color: var(--primary-text-color); }
         .day .lo { font-size: 11px; color: #7d7d7d; }
         .unavailable .cur, .unavailable .cond { opacity: .4; }
+        .stale { opacity: .4; }
+        .row, .chip, .hourly, .daily { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .row, .chip, .hourly, .day { transition: transform .12s ease, background .12s ease; }
         .press { transform: scale(.985); background: rgba(70,70,70,.22); border-radius: 10px; }
         .chip.press { background: rgba(70,70,70,.38); }
       </style>
-      <ha-card>
+      <ha-card id="card">
         <div class="row" id="hdr">
           <div class="cicon"><ha-icon id="cico" icon="mdi:weather-partly-cloudy"></ha-icon></div>
           <div>
@@ -219,7 +271,7 @@ class FlatWeatherCard extends HTMLElement {
             <div class="cond" id="cond"></div>
           </div>
           <div class="right">
-            <div class="hl"><span id="hi">--</span>&deg; <span id="losep">/ </span><span id="lo">--</span><span>&deg;</span></div>
+            <div class="hl" id="hl"><span id="hi">--</span>&deg; <span id="losep">/ </span><span id="lo">--</span><span>&deg;</span></div>
             <div id="hum"></div>
             <div id="wind"></div>
           </div>
@@ -230,9 +282,8 @@ class FlatWeatherCard extends HTMLElement {
       </ha-card>
     `;
     this._el = {};
-    ['hdr', 'cico', 'curv', 'cond', 'hi', 'lo', 'hum', 'wind', 'chip', 'chipdot', 'chiptxt', 'hourly', 'daily']
+    ['card', 'hdr', 'cico', 'curv', 'cond', 'hl', 'hi', 'lo', 'hum', 'wind', 'chip', 'chipdot', 'chiptxt', 'hourly', 'daily']
       .forEach(id => this._el[id] = root.getElementById(id));
-    this._el.chipdot.style.background = this._config.accent;
     this._bindTaps();
   }
 
@@ -241,7 +292,7 @@ class FlatWeatherCard extends HTMLElement {
     const el = this._el;
     const moreInfo = (entity) => this.dispatchEvent(new CustomEvent('hass-more-info',
       { detail: { entityId: entity }, bubbles: true, composed: true }));
-    const openUrl = (url) => { if (url) window.open(url, '_blank'); };
+    const openUrl = (url) => { if (url) window.open(url, '_blank', 'noopener'); };
     const navigate = (path) => {
       if (!path) return;
       history.pushState(null, '', path);
@@ -278,16 +329,17 @@ class FlatWeatherCard extends HTMLElement {
     const entityFor = (t) => el.hourly.contains(t) ? this._config.hourly_entity
       : el.daily.contains(t) ? this._config.daily_entity : this._config.station_entity;
     this.shadowRoot.addEventListener('pointerdown', (e) => {
-      const ent = entityFor(e.target);
       this._lpFired = false;
+      if (e.button !== undefined && e.button !== 0) return; /* primary button only */
+      const ent = entityFor(e.target);
+      clearTimeout(timer);
       timer = setTimeout(() => { this._lpFired = true; moreInfo(ent); }, 550);
     });
-    ['pointerup', 'pointermove', 'pointercancel', 'pointerleave'].forEach(ev =>
-      this.shadowRoot.addEventListener(ev, (e) => {
-        if (ev === 'pointermove' && timer === null) return;
-        if (ev === 'pointermove') return; /* small moves shouldn't cancel; taps are quick anyway */
-        clearTimeout(timer); timer = null;
-      }));
+    /* cancel on the card ELEMENT: pointerleave does not bubble, so a listener
+       on the shadow root never saw it and a press dragged off the card still
+       fired the long-press. pointermove deliberately does not cancel. */
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+      el.card.addEventListener(ev, () => { clearTimeout(timer); timer = null; }));
   }
 
   /* ---------- rendering ---------- */
@@ -329,12 +381,28 @@ class FlatWeatherCard extends HTMLElement {
       const txt = rhTxt ? 'Humidity ' + rhTxt : '';
       if (this._humHtml !== txt) { this._humHtml = txt; el.hum.textContent = txt; }
     }
-    el.wind.textContent = (a.wind_speed != null && !bad)
-      ? 'Wind ' + Math.round(a.wind_speed) + ' mph ' + COMPASS[Math.round(((a.wind_bearing || 0) % 360) / 45) % 8] : '';
+    /* wind: no compass point when calm or when the bearing is missing/non-
+       numeric (a cardinal string from the entity passes through as-is) */
+    let windTxt = '';
+    if (a.wind_speed != null && !isNaN(a.wind_speed) && !bad) {
+      const mph = Math.round(a.wind_speed), wb = a.wind_bearing;
+      let dir = '';
+      if (mph > 0 && typeof wb === 'number' && isFinite(wb)) dir = ' ' + COMPASS[Math.round((((wb % 360) + 360) % 360) / 45) % 8];
+      else if (mph > 0 && typeof wb === 'string' && wb) dir = ' ' + wb;
+      windTxt = 'Wind ' + mph + ' mph' + dir;
+    }
+    el.wind.textContent = windTxt;
     /* today's hi/lo from the daily source */
     const today = this._todayEntry();
     el.hi.textContent = today ? this._fmt(today.temperature) : '--';
     el.lo.textContent = today ? this._fmt(today.templow) : '--';
+    /* staleness honesty: dim forecast sections whose source is down (the
+       last pushed forecast is still the least-wrong thing to show) */
+    const dailyStale = this._bad(this._st(this._config.daily_entity)) &&
+      (!this._config.fallback_entity || this._bad(this._st(this._config.fallback_entity)));
+    el.daily.classList.toggle('stale', dailyStale);
+    el.hl.classList.toggle('stale', dailyStale);
+    el.hourly.classList.toggle('stale', this._bad(this._st(this._config.hourly_entity)));
   }
 
   /* the daily list in force: primary while its entity is alive and has data,
@@ -420,8 +488,10 @@ class FlatWeatherCard extends HTMLElement {
       '<text x="' + x(lastIdx).toFixed(1) + '" y="' + (y(temps[lastIdx]) - 7).toFixed(1) +
         '" fill="' + GREY_TEXT + '" font-size="11" text-anchor="end">' + temps[lastIdx] + '&#176;</text>' +
       '</svg>';
+    /* hour labels sit under their own curve points (same x() as the SVG) */
     const labels = list.map((e, i) =>
-      (i % 3 === 0 || i === lastIdx) ? '<span>' + this._hourLabel(new Date(e.datetime)) + '</span>' : '')
+      (i % 3 === 0 || i === lastIdx) ? '<span style="left:' + (x(i) / W * 100).toFixed(2) + '%">' +
+        this._hourLabel(new Date(e.datetime)) + '</span>' : '')
       .join('');
     el.hourly.innerHTML = svg + '<div class="hx">' + labels + '</div>';
   }
@@ -429,16 +499,18 @@ class FlatWeatherCard extends HTMLElement {
   _renderDaily() {
     const el = this._el; if (!el) return;
     const seen = new Set();
+    const todayKey = new Date().toDateString();
     const list = this._activeDaily().filter(e => {
-      if (e.temperature == null) return false;
       const k = new Date(e.datetime).toDateString();
+      /* the source drops today's high after ~3pm; keep today's cell ("--" high,
+         real low) so the strip keeps its width - other null-high days are skipped */
+      if (e.temperature == null && k !== todayKey) return false;
       if (seen.has(k)) return false;
       seen.add(k); return true;
     }).slice(0, this._config.days);
-    const key = JSON.stringify(list.map(e => [e.datetime, e.temperature, e.templow, e.condition]));
+    const key = JSON.stringify([todayKey, list.map(e => [e.datetime, e.temperature, e.templow, e.condition])]);
     if (key === this._dailyKey) return;
     this._dailyKey = key;
-    const todayKey = new Date().toDateString();
     el.daily.innerHTML = list.map(e => {
       const d = new Date(e.datetime);
       const nm = d.toDateString() === todayKey ? 'Today'

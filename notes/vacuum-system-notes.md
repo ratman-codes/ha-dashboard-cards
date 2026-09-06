@@ -166,12 +166,15 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   validation failure, 2026-09-04, caused by rebuilding the wrapper from memory).
   Before delivering a data-URL file, diff its prefix against the last accepted
   one (`head -c 52 | cmp`).
-- **Deployed: v2.9.2, FNV-1a `d4376f7e`, 111,784 bytes** — delivered
-  2026-09-05 for owner install via Card Manager (confirm: the resource header
-  shows `d4376f7e`); NOT yet byte-verified against the live blob. Lineage:
+- **Deployed: v2.9.2, FNV-1a `d4376f7e`, 111,784 bytes** — owner-confirmed
+  installed 2026-09-06 (not byte-verified against the live blob; Card Manager's
+  post-write verify stands). **DELIVERED 2026-09-06: v2.10, FNV-1a `8212d916`,
+  118,037 bytes** (`Claude outputs\flat-vacuum-card-v2.10.txt`; repo copy = decoded
+  blob = project archive, `cmp` on device) — owner install via Card Manager
+  PENDING; confirm the resource header shows `8212d916`. Lineage:
   **v2.9 `9cb7619e` / 110,052 B** (owner-installed 2026-09-04, Card Manager
   validated, first live profile start 16:47 PT) → **v2.9.1 `043e8e0a` /
-  111,074 B** (owner-installed mid-run 7) → v2.9.2. Previous: v2.8.1 `33f14a36` / 106,793 B — owner-installed via
+  111,074 B** (owner-installed mid-run 7) → v2.9.2 → v2.10. Previous: v2.8.1 `33f14a36` / 106,793 B — owner-installed via
   Card Manager 2026-09-03 evening; live blob byte-verified = archive = local
   build (subagent registry read, `cmp` BYTE_IDENTICAL). 09-03 lineage: v2.8
   `8df41b74` / 104,301 B (installed + verified that afternoon) → v2.8.1
@@ -229,7 +232,10 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     lines are unaffected. **v2.9.2 (2026-09-05):** `detaching_the_mop` →
     "Detaching mops" joins the dock-activity map (the ~8 s pad drop at the
     dock when a two-sweep run starts; run 7 16:48:02–16:48:10). 84-probe
-    harness.
+    harness. **v2.10 (2026-09-06):** the robot error sensor is THREE-VALUED —
+    unavailable / unknown / missing is no claim (no "⚠ blocked" token, no
+    "Robot: …" issue row); the "Unavailable" header line alone carries an
+    outage. Elapsed / drying times round to whole minutes before splitting.
   - AUTO-CLEAN: toggle + 7 setting rows + Away profile / Default profile rows
     (summary chips "max+ · high · deep ›"; tap → popup editor with segmented
     Suction / Mop intensity / Mop mode pickers, Save writes the helpers) +
@@ -252,14 +258,21 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     dust_emptying switches — tap = turn_on, tint cyan + "Washing…"/"Emptying…"
     while on, tap again = turn_off), volume, DND, child lock, **Mop drying** (v2.8:
     reads `switch.…_dock_mop_drying`, gained a toggle; remaining-time text honors
-    the sensor's unit — hours on 7.1.1), Battery status.
+    the sensor's unit — hours on 7.1.1), Battery status. **v2.10:** rows whose
+    entity reads unavailable/unknown dim (`.dim`, chips `.ro`) and go inert —
+    expect ~30 s of dimmed Config rows after every HA restart while Roborock
+    loads; the helper-backed Auto-clean rows never dim.
   - HISTORY: last 4 runs (day · time · trigger · duration · area) with a settings
     second line — cyan = away profile (A:), dim = default (D:) or legacy
     card-manual (M:), absent = app-started (since v2.9 card starts are A:/D:
     too, so a "manual" row with a cyan line = card-picked Away) — aligned under the time text (61px), condensed rows,
     14-day strip. Websocket history fetch (4 entities, 14 days), 5-min cache,
     refresh on group open. Begin/end pairing window is **12h** (v2.7rev4; was 6h —
-    see Fixed bugs). **Caveat (2026-08-14): the settings line shows the
+    see Fixed bugs). **v2.10:** a failed fetch no longer stamps the 5-min cache
+    (opening the group retries at once; pushes retry after 60 s) and the last
+    good rows stay up under a "refresh failed · showing the last good history"
+    line; only a first-ever failure shows "history unavailable". **Caveat
+    (2026-08-14): the settings line shows the
     profile the automation INTENDED, not what the device accepted — the 08-14 away
     run's cyan line reads A:max|high|deep though the route ran standard.**
 - **Design patterns introduced in v2.7 (reusable elsewhere):**
@@ -269,7 +282,8 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     on their own when 2026.9.0 created their entities — zero card change. v2.8's
     tank rows, dock-action chips, drying toggle and elapsed-time text follow the
     same rule. Critically, an **absent dock error sensor means NO error**, never
-    a permanent error.
+    a permanent error. (v2.10 extends the same three-valued reading to the robot
+    error sensor — absent/unavailable/unknown = no claim.)
   - **grid-template-rows 0fr/1fr collapse** — outer body + all four groups. Runtime
     `.gin` wrappers built in `_bind`; `_setGroup` is pure class toggling. **All
     hardcoded group height math is gone** (the old 332 / 330+36n / 335 / 170+12n
@@ -279,7 +293,17 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   - `smart_mode` is **filtered out of the Config dropdowns' pickable options** while
     still displaying as the current value if the app parked the device there — it's
     a one-way door from HA (see SmartPlan hazard). Since v2.8 `deep` is filtered the
-    same way in the Config dropdown AND both profile-popup pickers (`HIDDEN_OPTS`).
+    same way in the Config dropdown AND both profile-popup pickers (`HIDDEN_OPTS`;
+    since v2.10 the popup uses the same list, so it hides `smart_mode` too).
+  - **RENDER GATE (v2.10, the playbook pattern):** `set hass` re-renders only when
+    one of the card's own entities changed identity — ids are harvested from the
+    config (regex `^[a-z_]+\.[a-z0-9_]+$` at any depth, incl. the `maint` table);
+    the warning tick, arm chips, starting lock and optimistic holds render through
+    their own timers (`_hold()` = 8 s hold + a repaint at expiry). A slider drag
+    repaints only its slider (`track._repaint`). Slider move/up listeners live on
+    the track (pointer capture), not `window`; the outside-tap listener that
+    closes a dropdown / sticky tooltip is registered in `connectedCallback` and
+    removed in `disconnectedCallback`. A second `setConfig` rebuilds the DOM.
 - Version history (FNV-1a): v1.0 2aed706c … v2.2 f83dc8fd → v2.3 (warning-first
   tokens, map, dock-activity) → v2.4 f6881983 → v2.4rev d8b6be72 → v2.4rev2 8cbac835
   (issue rows) → v2.5 6c4d7e99 (suction profiles) → v2.6 febc9840 (full profiles +
@@ -303,10 +327,56 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   promise-chained service helper)** → **v2.9.1 043e8e0a / 111,074 B
   (2026-09-04: stale elapsed hidden at run start; 82-probe harness)** →
   **v2.9.2 d4376f7e / 111,784 B (2026-09-05: "Detaching mops" label;
-  84-probe harness)**.
+  84-probe harness)** → **v2.10 8212d916 / 118,037 B (2026-09-06 source
+  audit: three-valued robot error + bundle — see the audit section; 42
+  asserted exact-string edits; jsdom `harness.js` 20/20 bug-mode on v2.9.2 +
+  20/20 fixed-mode on v2.10, `identity.js` 5 states × 4 group opens
+  byte-identical vs v2.9.2, `regress.js` 9/9; no YAML change)**.
   A rev7 `48405154` history "sanitizer" (hide sub-5-minute runs) was built and
   REVERTED the same day — the owner rejected display filtering; all runs show as
   recorded. Don't rebuild it.
+
+## 2026-09-06 source audit (v2.10) — per-item record
+
+Per `claude/card-audit-playbook.md`. Provenance: repo copy = recorded v2.9.2
+deployed hash `d4376f7e` (111,784 B); archive `created_at` = the 09-05 pass; no
+uncommitted repo edits on this card; backup mirror stale at rev4; live blob not
+re-paged (owner confirmed v2.9.2 installed). Ten findings, every one reproduced
+in `harness.js` (bug-mode on the v2.9.2 bytes) before it was reported; owner
+green-lit item 1 + the bundle as ONE version.
+
+| # | Finding (v2.9.2 behaviour, harness-quoted) | Status in v2.10 |
+|---|---|---|
+| 1 | `errVac = state !== 'none'` folded unavailable/unknown/MISSING into "error": header `⚠ blocked · Unavailable`, Maintenance amber `robot issue`, issue row `Robot: unavailable` (outage) / `Robot: undefined` (restart before Roborock loads); eligibility text hidden when only the sensor was unavailable. Reachable on every HA restart + every cloud outage (08-25: two spans, ~7 h). | FIXED — three-valued; a real `main_brush_jammed` still renders blocked + row (1d). |
+| 2 | `_bindSlider` put 9 `pointermove/up/cancel` listeners on `window` per instance, none removed → every HA re-creation of the card leaked a whole card. | FIXED — listeners on the track (pointer capture); harness: 0 window listeners, document listener 1 add / 1 remove per instance. |
+| 3 | Every hass push re-rendered (200 unrelated pushes → 200 renders / 6,403 DOM mutations); a 50-step slider drag → 51 full renders. | FIXED — entity-identity gate (200 unrelated → 0 renders / 3 mutations; own change → 1), drag → 0 full renders; `_hold()` repaint at expiry. |
+| 4 | `floor(min/60)` + `round(min % 60)`: cleaning_time 119.6 → `1h 60m`; drying 1.9958 h → `1h 60m left` (visible ~30 s each hour of a run). | FIXED — `_hm()` rounds first (`2h 00m`). |
+| 5 | A failed history fetch stamped the 5-min throttle: `history unavailable` with no retry on group open; a failed refresh discarded the last good rows. | FIXED — no stamp on failure (open retries at once, pushes after 60 s), rows kept + "refresh failed" line. |
+| 6 | DND / child-lock / drying toggles, Wash / Empty chips and the volume slider fired services at unavailable entities (3 taps → 3 failing `switch.turn_on`). | FIXED — `.dim` rows / `.ro` chips, inert. Accepted downside: ~30 s dimmed Config rows after a restart. |
+| 7 | A second `setConfig` kept the old DOM and old closures (pause targeted the OLD vacuum id) and desynced `_open`/`_grp` from the classes. | FIXED — `_createDom` rebuilds on every setConfig; history re-rendered, `_render` re-run. |
+| 8 | Header long-press and `_press` fired on any pointer button; `.hdr` had no `user-select: none` / `-webkit-touch-callout: none`. | FIXED — primary button only + the CSS. Phone long-press glance owed after paste (jsdom can't test it). |
+| 9 | `cleaned -1 days ago` when last_clean_end is ahead of the browser clock across midnight. | FIXED — clamp at 0 (hygiene rating; narrow). |
+| 10 | Profile popup filtered `deep` but not `smart_mode` (Config dropdown hid both). | FIXED — shared `HIDDEN_OPTS`. |
+| — | Hygiene: duplicated v2.7rev4 header line, "+ 7 helpers", stale "does not (currently) expose a dock error sensor" comment, four identical PRETTY maps, inert +5 s begin slack vs the null-out after it, dead CSS `.row ha-icon.info`, duplicate "maintenance group" comment, map title lost the "Cleaning" word since v2.8.1, dropdown/sticky tip stayed open on a tap outside the card. | CLEANED (map title now `Map · Cleaning · 26% done · …`; outside tap closes menu + tip). |
+
+Reviewed and sound (no change): dormant-entity pattern, stall detector, stale-
+elapsed rule, starting lock, profile-start guard + write order, run-record
+parsing (A:/D:/M:, 12 h pairing, 10-min trigger window, latest-begin, sort after
+the loop), `_histSeries` vs HA's compressed `lu` rows, warning countdown clamp,
+timer cleanup + re-arm, three-valued presence/battery/counters/dock error,
+quoted-numeric config keys, every config key read. Observations, not findings: a
+run cancelled mid-way with `cleaning_progress` held mid-range would show
+"Charging to resume" until progress resets (the restore automation's accepted
+edge; never seen — owner has not cancelled a run); the History profile line
+inserts the `input_text` record unescaped (entity-trusted).
+
+Harness gotchas (this card): events dispatched inside the shadow root need
+`composed: true` to reach `window`; jsdom's nwsapi adds its own `mouseover`/
+`mouseout` document listeners — count only `pointerdown` when checking the
+card's cleanup; `Element.setPointerCapture` is absent in jsdom (the card guards
+it), so dispatch move/up on the track; `_setGroup('hist')` is the cheapest way
+to trigger a history refetch; render-identity compares must exclude the warning
+state (seconds-resolution countdown).
 
 ## Device/integration findings (hard-won)
 
@@ -676,17 +746,23 @@ State as of 2026-07-27 (probe session), except where dated:
 
 ## Open items
 
-- **Confirm v2.9.2 `d4376f7e` is the live blob** (owner install pending at
-  doc time); History row for run 7 should read "manual · 7h 05m · 105 m²"
-  with a cyan `max · high · deep+` line — glance once.
-- **v2.8–v2.9.2 LIVE WATCHES:** (1) "Charging to resume" header — the data
+- **Confirm v2.10 `8212d916` is the live blob** (delivered 2026-09-06, owner
+  install pending; no YAML change). After the paste: one phone long-press on the
+  header (the v2.10 `user-select: none` / touch-callout change is the only item
+  jsdom could not verify) and a glance that the card looks exactly as before on
+  a healthy day. History row for run 7 should still read "manual · 7h 05m ·
+  105 m²" with a cyan `max · high · deep+` line.
+- **v2.8–v2.10 LIVE WATCHES:** (1) "Charging to resume" header — the data
   says the card was in that state 18:50–21:16 on run 7 (docked + charging +
   progress 23) but nobody looked; an eyes-on confirmation is still wanted;
   (2) the stall dock button = `vacuum.stop` (untested — press only to
   actually cancel a run); (4) first real dock fault → tank issue rows +
   `⚠ dock` token + dock error row; (5) v2.9.1 stale-elapsed suppression on
   the next run start (expect "0% done · <room>" with no elapsed for the first
-  ~40 s); (6) "Detaching mops" at the next start (v2.9.2). VERIFIED by run 6:
+  ~40 s); (6) "Detaching mops" at the next start (v2.9.2); (7) v2.10: on the
+  next HA restart the header should read plain "Unavailable" (no amber
+  "blocked") for the seconds before Roborock loads, with the Config rows
+  dimmed for ~30 s. VERIFIED by run 6:
   pit-stop/washing/emptying labels, elapsed time, title-line state word,
   `main_brush_jammed` issue path, drying hours unit. VERIFIED by run 7: the
   profile picker's three writes + A: record + start, "Starting…" lock,
@@ -729,6 +805,9 @@ lock live-verified ✓ · stale-elapsed fix (v2.9.1) ✓ · restore-mid-recharge
 fix live-proven on a real 2h26m stall ✓ · progress ceiling re-measured after
 the map edit: unchanged at 61 % (closed as a map property) ✓ · "Detaching
 mops" label (v2.9.2) ✓.
+**CLOSED 2026-09-06:** v2.9.2 owner-installed ✓ · full source audit (10 findings,
+all harness-confirmed) → v2.10 built, both-direction harness + render identity
+green, delivered, archive + repo (js + README + sanitized notes) synced ✓.
 
 **Do NOT re-offer:** folding the old Q Revo's run history into the card, the rev7
 history sanitizer, or a `smart_mode` profile.
@@ -771,6 +850,11 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
   because `cleaning_time` only resets on the robot's first in-run report.
   Now hidden while progress = 0 and the sensor predates the vacuum's last
   state change.
+- **FALSE "⚠ blocked" / "Robot: unavailable" ON EVERY RESTART AND OUTAGE — FIXED
+  2026-09-06 (v2.10, audit item 1).** The error sensor is read three-valued now;
+  see the audit section for the full list (window-listener leak, render gate,
+  "1h 60m", history failure handling, inert unavailable rows, re-setConfig,
+  pointer hygiene, day clamp, popup filter).
 
 - **RESTORE-MID-RECHARGE — FIXED 2026-08-27** (found 2026-08-14; recurred
   2026-08-27 at 17:13:31, which prompted the owner to green-light shipping the
@@ -796,8 +880,9 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
 
 ## Known open bugs (diagnosed, not fixed — owner deferring)
 
-- None as of 2026-09-03. (The three that lived here — `deep`/301, the double
-  run-record, `⚠ Dock: unknown.` — all moved to Fixed bugs.)
+- None as of 2026-09-06. (The three that lived here — `deep`/301, the double
+  run-record, `⚠ Dock: unknown.` — all moved to Fixed bugs; the 2026-09-06 audit
+  found ten more, all fixed in v2.10.)
 
 ## Teardown order (if ever dismantling)
 

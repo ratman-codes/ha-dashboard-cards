@@ -1,4 +1,4 @@
-/* flat-party-card v1.3
+/* flat-party-card v1.4.1
    Bespoke party-mode control card for the main dashboard's Party Mode expander.
    v1.1: Govee effect chips wrap onto multiple lines instead of clipping in a
    horizontal scroller (mouse-wheel scrolling was unusable on desktop).
@@ -10,6 +10,19 @@
    selected count, live search filter, scrollable catalog cloud, Cancel /
    "Save N chips" footer, backdrop-tap cancels. Rendered inside the card's
    shadow DOM as a fixed overlay - zero dependencies, no browser_mod.
+   v1.4 (2026-09-06 source audit): the editor can no longer wipe a chip list -
+   Save is disabled while the fixture's effect catalog is unreadable, chips
+   that exist but are missing from today's catalog are shown and preserved,
+   and a rejected save keeps the dialog open with the error; Reset only darkens
+   the motion chip when no room is frozen; an unknown/unavailable color or
+   brightness helper renders as no selection / "--" instead of Purple / 80%;
+   slider tracks set touch-action: none; taps need a primary-button
+   pointerdown on the same element; re-render only when one of the card's
+   own entities changes (plus a tick when an optimistic hold expires); a
+   second setConfig rebuilds the card.
+   v1.4.1: no swatch shows as selected while motion is Off (or the motion
+   helper is unknown) - after the 3 AM kill or a full Reset nothing is painted,
+   so nothing looks selected; the wheel button already behaved this way.
    Controls the party_mode system: color swatches + inline hue/sat wheel, motion
    chips (Static/Pulse/Cycle/Chase), per-fixture Govee native-effect overrides,
    party brightness, room freeze pills, and Reset.
@@ -32,8 +45,9 @@
      # set_color_script: script.lighting_party_mode_set_color
      # reset_script: script.lighting_party_mode_reset_rooms_to_schedule
      # swatches: [{n: Purple, h: 291, s: 78}, {n: Sunset, h: 20, s: 95}]
-     # govee:
-     #   - {name: K Bars, entity: input_select.lighting_party_mode_govee_bars}
+     # govee:   (light: is the fixture whose effect_list feeds the editor)
+     #   - {name: K Bars, entity: input_select.lighting_party_mode_govee_bars,
+     #      light: light.kitchen_govee_light_bars}
      # rooms:
      #   - {name: Living Rm, entity: input_boolean.lighting_party_mode_lr}
 */
@@ -91,6 +105,7 @@
     self._built = false;
     self._wheelOpen = false;
     self._drag = null;
+    self._optTimer = null;
     return self;
   };
   CardClass.prototype = Object.create(HTMLElement.prototype);
@@ -100,16 +115,46 @@
   CardClass.prototype.setConfig = function (config) {
     var c = {};
     for (var k in DEFAULTS) c[k] = (config && config[k] !== undefined) ? config[k] : DEFAULTS[k];
+    var sig = JSON.stringify(c);
+    if (this._built && sig !== this._cfgSig) {
+      /* editor re-config on a live element: tear down and rebuild on the next hass */
+      if (this._dlgRec) this._dlgClose();
+      this._wheelOpen = false;
+      this._built = false;
+    }
+    this._cfgSig = sig;
     this._cfg = c;
+    this._watch = null;
+  };
+
+  /* entity ids the card actually reads: every id-shaped string in the config */
+  CardClass.prototype._watchIds = function () {
+    if (this._watch) return this._watch;
+    var ids = {};
+    var RX = /^[a-z_]+\.[a-z0-9_]+$/;
+    (function walk(v) {
+      if (typeof v === 'string') { if (RX.test(v)) ids[v] = true; }
+      else if (v && typeof v === 'object') { for (var k in v) walk(v[k]); }
+    })(this._cfg);
+    this._watch = Object.keys(ids);
+    return this._watch;
   };
 
   CardClass.prototype.getCardSize = function () { return 7; };
 
   Object.defineProperty(CardClass.prototype, 'hass', {
     set: function (hass) {
+      var prev = this._hass;
       this._hass = hass;
       if (!this._cfg) return;
-      if (!this._built) this._build();
+      if (!this._built) { this._build(); this._update(); return; }
+      if (prev && prev.states && hass && hass.states) {
+        var ids = this._watchIds(); var changed = false;
+        for (var i = 0; i < ids.length; i++) {
+          if (prev.states[ids[i]] !== hass.states[ids[i]]) { changed = true; break; }
+        }
+        if (!changed) return;
+      }
       this._update();
     },
     get: function () { return this._hass; }
@@ -129,24 +174,35 @@
   };
 
   CardClass.prototype._optSet = function (key, v) {
+    var self = this;
     this._opt[key] = { v: v, until: Date.now() + OPT_MS };
+    if (this._optTimer) clearTimeout(this._optTimer);
+    this._optTimer = setTimeout(function () { self._optTimer = null; self._update(); }, OPT_MS + 50);
   };
 
+  CardClass.prototype.disconnectedCallback = function () {
+    if (this._optTimer) { clearTimeout(this._optTimer); this._optTimer = null; }
+  };
+
+  /* [h, s, known] - known=false when the helper is unknown/unavailable/empty/missing
+     (defaults still position the wheel handles; nothing renders as selected) */
   CardClass.prototype._hs = function () {
-    var raw = this._optGet('color', this._st(this._cfg.color_entity) || '291,78');
-    var p = String(raw).split(',');
+    var raw = this._optGet('color', this._st(this._cfg.color_entity));
+    var p = String(raw == null ? '' : raw).split(',');
     var h = parseFloat(p[0]); var s = parseFloat(p[1]);
+    var known = !isNaN(h) && !isNaN(s);
     if (isNaN(h)) h = 291; if (isNaN(s)) s = 78;
-    return [((h % 360) + 360) % 360, Math.max(0, Math.min(100, s))];
+    return [((h % 360) + 360) % 360, Math.max(0, Math.min(100, s)), known];
   };
 
   CardClass.prototype._motion = function () {
     return this._optGet('motion', this._st(this._cfg.motion_entity) || 'Off');
   };
 
+  /* null when the helper is unknown/unavailable/missing */
   CardClass.prototype._bri = function () {
     var v = parseFloat(this._optGet('bri', this._st(this._cfg.brightness_entity)));
-    return isNaN(v) ? 80 : v;
+    return isNaN(v) ? null : v;
   };
 
   /* ---------- service calls ---------- */
@@ -171,9 +227,11 @@
 
   CardClass.prototype._press = function (elem, tapFn, moreInfoEid) {
     var self = this;
-    var lpTimer = null; var lpFired = false;
-    function clear() { elem.classList.remove('pressed'); if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
-    elem.addEventListener('pointerdown', function () {
+    var lpTimer = null; var lpFired = false; var down = false;
+    function clear() { down = false; elem.classList.remove('pressed'); if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }
+    elem.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== undefined && ev.button !== 0) return;
+      down = true;
       elem.classList.add('pressed');
       lpFired = false;
       if (moreInfoEid) {
@@ -185,6 +243,7 @@
       }
     });
     elem.addEventListener('pointerup', function () {
+      if (!down) return;
       var fired = lpFired; clear();
       if (!fired) tapFn();
     });
@@ -199,7 +258,8 @@
     var self = this;
     this._built = true;
 
-    var root = this.attachShadow({ mode: 'open' });
+    var root = this.shadowRoot || this.attachShadow({ mode: 'open' });
+    root.textContent = '';
     var style = el('style', null, root);
     style.textContent =
       ':host { display: block; }' +
@@ -249,12 +309,17 @@
       '  font-size: 13px; background: rgba(255,255,255,.06); color: #bdbdbd; cursor: pointer; user-select: none;' +
       '  transition: transform .12s ease; }' +
       '.btn.primary { background: ' + CHIP_ON_BG + '; border: 1px solid ' + CHIP_ON_BD + '; color: ' + CHIP_ON_TX + '; font-weight: 600; }' +
+      '.btn.disabled { opacity: .4; pointer-events: none; }' +
+      '.cloud .chip.orphan { border-style: dashed; border-color: rgba(255,255,255,.18); }' +
+      '.dlg-err { display: none; margin: 0 16px; padding: 6px 0 0; font-size: 12px; color: #ff9c4a; }' +
+      '.dlg-err.show { display: block; }' +
       '.wheel { display: none; flex-direction: column; gap: 10px; padding: 10px 2px 2px; }' +
       '.wheel.open { display: flex; }' +
-      '.sl { position: relative; height: 16px; border-radius: 8px; cursor: pointer; }' +
+      '.sl { position: relative; height: 16px; border-radius: 8px; cursor: pointer; touch-action: none; }' +
       '.sl .hd { position: absolute; top: 2.5px; width: 11px; height: 11px; border-radius: 50%; background: #fff;' +
       '  transform: translateX(-50%); pointer-events: none; }' +
-      '.bri-track { position: relative; height: 16px; border-radius: 8px; background: ' + TRACK_BG + '; cursor: pointer; flex: 1; }' +
+      '.bri-track { position: relative; height: 16px; border-radius: 8px; background: ' + TRACK_BG + '; cursor: pointer; flex: 1;' +
+      '  touch-action: none; }' +
       '.bri-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px; background: ' + ACCENT + '; opacity: .5; }' +
       '.bri-hd { position: absolute; top: 2.5px; width: 11px; height: 11px; border-radius: 50%; background: #fff;' +
       '  transform: translateX(-50%); }' +
@@ -365,7 +430,11 @@
     el('span', null, rs).textContent = 'Reset Rooms to Schedule';
     this._press(rs, function () {
       self._hass.callService('script', 'turn_on', { entity_id: cfg.reset_script });
-      self._optSet('motion', 'Off');
+      /* the script idles the selector only when NO room stays frozen */
+      var anyOn = cfg.rooms.some(function (r) {
+        return self._optGet('rm:' + r.entity, self._st(r.entity)) === 'on';
+      });
+      if (!anyOn) self._optSet('motion', 'Off');
       self._update();
     }, cfg.reset_script);
 
@@ -382,6 +451,7 @@
     this._dlgInput.setAttribute('placeholder', 'Filter effects...');
     this._dlgInput.addEventListener('input', function () { self._dlgRefresh(); });
     this._dlgCloud = el('div', 'cloud', dlg);
+    this._dlgErr = el('div', 'dlg-err', dlg);
     var foot = el('div', 'dlg-foot', dlg);
     var cancel = el('div', 'btn', foot);
     cancel.textContent = 'Cancel';
@@ -464,13 +534,21 @@
     this._dlgPending = {};
     opts.forEach(function (o) { if (o !== 'None') self._dlgPending[o] = true; });
     this._dlgCat = this._catalog(rec);
+    /* chips that exist on the helper but are absent from today's catalog are
+       shown (dashed) and carried through a save untouched unless unticked */
+    var orphans = [];
+    opts.forEach(function (o) { if (o !== 'None' && self._dlgCat.indexOf(o) === -1) orphans.push(o); });
+    this._dlgAll = this._dlgCat.concat(orphans);
     this._dlgTitle.textContent = rec.cfg.name + ' - effect chips';
     this._dlgInput.value = '';
     this._dlgCloud.textContent = '';
+    this._dlgErr.textContent = '';
+    this._dlgErr.classList.remove('show');
     this._dlgChips = {};
-    this._dlgCat.forEach(function (o) {
+    this._dlgAll.forEach(function (o) {
       var c = el('div', 'chip', self._dlgCloud);
       c.textContent = o;
+      if (self._dlgCat.indexOf(o) === -1) { c.classList.add('orphan'); c.title = 'not in the current effect list'; }
       self._press(c, function () {
         self._dlgPending[o] = !self._dlgPending[o];
         self._dlgRefresh();
@@ -478,7 +556,8 @@
       self._dlgChips[o] = c;
     });
     if (!this._dlgCat.length) {
-      el('div', 'empty', this._dlgCloud).textContent = 'No effect list available for this fixture.';
+      el('div', 'empty', this._dlgCloud).textContent =
+        'No effect list available for this fixture (light entity missing or not loaded) - saving is disabled so the existing chips are kept.';
     }
     this._dlgRefresh();
     this._ov.classList.add('open');
@@ -490,10 +569,12 @@
     var self = this;
     var n = 0;
     for (var k in this._dlgPending) { if (this._dlgPending[k]) n++; }
-    this._dlgCount.textContent = n + ' of ' + this._dlgCat.length + ' selected';
-    this._dlgSaveBtn.textContent = 'Save ' + n + ' chip' + (n === 1 ? '' : 's');
+    this._dlgCount.textContent = n + ' of ' + this._dlgAll.length + ' selected';
+    var noCat = !this._dlgCat.length;
+    this._dlgSaveBtn.textContent = noCat ? 'Cannot save' : 'Save ' + n + ' chip' + (n === 1 ? '' : 's');
+    if (this._dlgSaveBtn.classList.contains('disabled') !== noCat) this._dlgSaveBtn.classList.toggle('disabled', noCat);
     var q = this._dlgInput.value.trim().toLowerCase();
-    this._dlgCat.forEach(function (o) {
+    this._dlgAll.forEach(function (o) {
       var c = self._dlgChips[o];
       var on = !!self._dlgPending[o];
       if (c.classList.contains('on') !== on) c.classList.toggle('on', on);
@@ -511,39 +592,51 @@
   };
 
   CardClass.prototype._dlgSave = function () {
-    if (!this._dlgRec) return;
+    if (!this._dlgRec || !this._dlgCat.length) return;
+    var self = this;
     var rec = this._dlgRec;
     var pending = this._dlgPending;
     var options = ['None'];
-    this._dlgCat.forEach(function (e) { if (pending[e]) options.push(e); });
+    this._dlgAll.forEach(function (e) { if (pending[e]) options.push(e); });
+    this._dlgErr.classList.remove('show');
     this._hass.callWS({
       type: 'input_select/update',
       input_select_id: rec.cfg.entity.split('.')[1],
       options: options
-    }).catch(function (err) { console.error('[flat-party-card] effect-list save failed:', err); });
-    rec.chips = null;
-    this._dlgClose();
-    this._update();
+    }).then(function () {
+      if (self._dlgRec !== rec) return;
+      rec.chips = null;
+      self._dlgClose();
+      self._update();
+    }).catch(function (err) {
+      console.error('[flat-party-card] effect-list save failed:', err);
+      if (self._dlgRec !== rec) return;
+      var msg = (err && (err.message || err.code)) ? (err.message || err.code) : 'unknown error';
+      var auth = err && err.code === 'unauthorized';
+      self._dlgErr.textContent = 'Save failed: ' + msg + (auth ? ' (this editor needs an admin login)' : '');
+      self._dlgErr.classList.add('show');
+    });
   };
 
   /* ---------- idempotent refresh ---------- */
 
   CardClass.prototype._update = function () {
     if (!this._built || !this._hass) return;
-    var cfg = this._cfg;
     var self = this;
     var hs = this._hs();
     var motion = this._motion();
 
-    /* swatch selection: nearest match within tolerance */
+    /* swatch selection: nearest match within tolerance; nothing when the color is
+       unknown or the party is not running (motion Off / helper unknown) */
+    var painting = hs[2] && motion !== 'Off' && motion !== 'unavailable' && motion !== 'unknown';
     var anySel = false;
     this._swEls.forEach(function (sw) {
       var dh = Math.abs(((sw.h - hs[0]) % 360 + 540) % 360 - 180);
-      var sel = dh <= 4 && Math.abs(sw.s - hs[1]) <= 6;
+      var sel = painting && dh <= 4 && Math.abs(sw.s - hs[1]) <= 6;
       if (sel) anySel = true;
       if (sw.el.classList.contains('sel') !== sel) sw.el.classList.toggle('sel', sel);
     });
-    var wbSel = !anySel && motion !== 'Off';
+    var wbSel = painting && !anySel;
     if (this._wheelBtn.classList.contains('sel') !== wbSel) this._wheelBtn.classList.toggle('sel', wbSel);
 
     /* wheel */
@@ -592,10 +685,10 @@
 
     /* brightness */
     var bri = this._bri();
-    var f = (bri - 10) / 90;
+    var f = bri == null ? 0 : Math.max(0, Math.min(1, (bri - 10) / 90));
     this._briFill.style.width = (f * 100) + '%';
     this._briHd.style.left = 'max(6px, min(calc(100% - 6px), ' + (f * 100) + '%))';
-    this._briVal.textContent = bri.toFixed(0) + '%';
+    this._briVal.textContent = bri == null ? '--' : bri.toFixed(0) + '%';
 
     /* room pills */
     this._rmEls.forEach(function (r) {

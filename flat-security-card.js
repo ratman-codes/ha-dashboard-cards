@@ -1,4 +1,17 @@
-/* flat-security-card v1.5
+/* flat-security-card v1.6
+   v1.6: AUDIT PASS (2026-09-06). Armed/arming headers now say "N no signal" when a
+   contact is unavailable (they used to claim "All closed"). The entry-delay /
+   triggered cause comes from Alarmo's `open_sensors` attribute (latched card-side
+   as a fallback) so the tripped door keeps its name and the single highlighted row
+   after it is shut again. Alarmo's `bypassed_sensors` attribute is read: a bypassed
+   window stays BYPASSED after someone closes it. Optimistic arming counts from the
+   tap (no "0:00" flash) and a refused arm/disarm call drops the optimistic state at
+   once. Re-render only when one of the card's own entities changed (tick keeps the
+   ages and the camera still fresh; the still refreshes on its own `camera_refresh`
+   cadence while expanded). `unknown` alarm state renders as unavailable; "camera
+   idle" is only claimed while the occupancy sensor is live; interval never re-armed
+   on a detached card; noopener on the Frigate link; version constant + dead code
+   cleaned.
    v1.5: PACKAGE WAITING glyph. Optional `package:` = an input_boolean (or any on/off
    entity) that is ON while a delivery sits outside. While on, the header glyph slot
    shows a box icon + its age ("1h 12m") in the bypass orange, visible even collapsed;
@@ -60,12 +73,10 @@
 (function () {
   "use strict";
 
-  var CARD_VERSION = "1.4.1";
+  var CARD_VERSION = "1.6";
 
   /* hardcoded palette - theme primary is green and must not leak in */
   var C = {
-    card: "#1c1d1f",
-    card2: "#232426",
     ink: "#e8e8e8",
     inkDim: "#9e9e9e",
     inkFaint: "#6b6c6e",
@@ -123,7 +134,7 @@
     var m = Math.floor(s / 60);
     if (m < 60) return m + "m";
     var h = Math.floor(m / 60);
-    if (h < 24) return h + "h " + (m % 60 > 0 ? (m % 60) + "m" : "").trim();
+    if (h < 24) return (h + "h " + (m % 60 > 0 ? (m % 60) + "m" : "")).trim();
     return Math.floor(h / 24) + "d";
   }
   function fmtMMSS(sec) {
@@ -234,7 +245,13 @@
     el._optUntil = 0;
     el._optState = null;
     el._tick = null;
+    el._tickMs = 0;
+    el._connected = false;
     el._camStamp = 0;
+    el._optSetAt = 0;
+    el._optActive = false;
+    el._causeLatch = null;
+    el._watchIds = [];
     return el;
   };
   FlatSecurityCard.prototype = Object.create(HTMLElement.prototype);
@@ -252,7 +269,17 @@
       camera_refresh: 10
     }, cfg);
     this._built = false;
+    this._watchIds = harvestIds(this._cfg);
   };
+
+  /* every entity id anywhere in the config (any depth) - the render gate watches these */
+  function harvestIds(v, out) {
+    out = out || [];
+    if (typeof v === "string") { if (/^[a-z_]+\.[a-z0-9_]+$/.test(v) && out.indexOf(v) < 0) out.push(v); }
+    else if (Array.isArray(v)) v.forEach(function (x) { harvestIds(x, out); });
+    else if (v && typeof v === "object") Object.keys(v).forEach(function (k) { harvestIds(v[k], out); });
+    return out;
+  }
 
   FlatSecurityCard.prototype.getCardSize = function () {
     return this._expanded ? 8 : 1;
@@ -260,20 +287,31 @@
 
   Object.defineProperty(FlatSecurityCard.prototype, "hass", {
     set: function (h) {
+      var old = this._hass;
       this._hass = h;
-      if (!this._built) this._build();
+      if (!this._built) { this._build(); this._update(); return; }
+      /* render gate: skip pushes where none of the card's own entities changed identity */
+      if (old && old.states && h && h.states) {
+        var ids = this._watchIds, changed = false;
+        for (var i = 0; i < ids.length; i++) { if (old.states[ids[i]] !== h.states[ids[i]]) { changed = true; break; } }
+        if (!changed) return;
+      }
       this._update();
     },
     get: function () { return this._hass; }
   });
 
   FlatSecurityCard.prototype.connectedCallback = function () {
-    this._startTick(30000);
+    this._connected = true;
+    this._startTick(this._tickMs || 30000);
+    if (this._hass && this._built) this._update();
   };
   FlatSecurityCard.prototype.disconnectedCallback = function () {
+    this._connected = false;
     this._stopTick();
   };
   FlatSecurityCard.prototype._startTick = function (ms) {
+    if (!this._connected) { this._tickMs = ms; return; }
     if (this._tickMs === ms && this._tick) return;
     this._stopTick();
     this._tickMs = ms;
@@ -281,7 +319,7 @@
     this._tick = setInterval(function () { if (self._hass) self._update(); }, ms);
   };
   FlatSecurityCard.prototype._stopTick = function () {
-    if (this._tick) { clearInterval(this._tick); this._tick = null; this._tickMs = 0; }
+    if (this._tick) { clearInterval(this._tick); this._tick = null; }
   };
 
   /* ------------------------- DOM build (once) ---------------------- */
@@ -382,7 +420,7 @@
     this._rows = {};   /* key -> row element */
 
     this._wireEvents();
-    this._applyExpanded(false);
+    this._applyExpanded();
     this._built = true;
   };
 
@@ -404,7 +442,7 @@
 
     this._elHd.addEventListener("click", function () {
       self._expanded = !self._expanded;
-      self._applyExpanded(true);
+      self._applyExpanded();
       self._update();
     });
     this._elShield.addEventListener("click", function (e) {
@@ -425,7 +463,7 @@
         this._elCamLive.classList.add("link");
         this._elCamLive.addEventListener("click", function (e) {
           e.stopPropagation();
-          window.open(cfg.frigate_url, "_blank");
+          window.open(cfg.frigate_url, "_blank", "noopener");
         });
       }
       if (cfg.last_person) {
@@ -442,23 +480,17 @@
     this._elStripNow.addEventListener("click", function () {
       var a = self._alarmObj();
       if (!a || a.state !== "arming") return;
-      self._optRealAtSet = a.state;
-      self._hass.callService("alarmo", "skip_delay", { entity_id: self._cfg.alarm });
-      self._optState = "armed_away";
-      self._optUntil = Date.now() + 8000;
-      self._update();
+      self._setOptimistic("armed_away", a.state, self._hass.callService("alarmo", "skip_delay", { entity_id: self._cfg.alarm }));
     });
   };
 
-  FlatSecurityCard.prototype._applyExpanded = function (animate) {
+  FlatSecurityCard.prototype._applyExpanded = function () {
     /* idempotent class toggling - never touch display (checklist #7) */
     if (this._expanded) {
       this._elWrap.classList.add("open");
-      this._elHd.classList.add("expanded");
       this._elChev.classList.add("up");
     } else {
       this._elWrap.classList.remove("open");
-      this._elHd.classList.remove("expanded");
       this._elChev.classList.remove("up");
     }
   };
@@ -467,15 +499,28 @@
     var st = this._alarmState();
     var hass = this._hass, cfg = this._cfg;
     if (!hass || st === "unavailable") return;
+    var a = this._alarmObj(), real = a ? a.state : undefined;
     if (st === "disarmed") {
-      hass.callService("alarmo", "arm", { entity_id: cfg.alarm, mode: "away" });
-      this._optState = "arming";
+      this._setOptimistic("arming", real, hass.callService("alarmo", "arm", { entity_id: cfg.alarm, mode: "away" }));
     } else {
-      hass.callService("alarmo", "disarm", { entity_id: cfg.alarm });
-      this._optState = "disarmed";
+      this._setOptimistic("disarmed", real, hass.callService("alarmo", "disarm", { entity_id: cfg.alarm }));
     }
-    this._optUntil = Date.now() + 8000;
+  };
+
+  /* optimistic hold: show `state` for ~8s or until hass moves; a rejected service
+     call (Alarmo refused the arm, connection error) drops the hold immediately */
+  FlatSecurityCard.prototype._setOptimistic = function (state, realAtSet, promise) {
+    var self = this;
+    this._optState = state;
+    this._optRealAtSet = realAtSet;
+    this._optSetAt = Date.now();
+    this._optUntil = this._optSetAt + 8000;
     this._update();
+    if (promise && typeof promise.then === "function") {
+      promise.then(null, function () {
+        if (self._optState === state) { self._optState = null; self._optActive = false; self._update(); }
+      });
+    }
   };
 
   /* ------------------------- state helpers -------------------------- */
@@ -485,9 +530,11 @@
   FlatSecurityCard.prototype._alarmState = function () {
     var a = this._alarmObj();
     var real = a ? a.state : "unavailable";
+    if (real === "unknown") real = "unavailable"; /* never render unknown as an armed mode */
+    this._optActive = false;
     if (this._optState && Date.now() < this._optUntil) {
       /* hold optimistic state until hass catches up or window expires */
-      if (real === this._optRealAtSet || real === undefined) return this._optState;
+      if (real === this._optRealAtSet || real === undefined) { this._optActive = true; return this._optState; }
       this._optState = null; /* hass moved - trust it */
     }
     return real;
@@ -497,6 +544,8 @@
     /* per-sensor computed state list, in config order */
     var hass = this._hass, cfg = this._cfg;
     var st = this._alarmState();
+    var a = this._alarmObj();
+    var byp = a && a.attributes && Array.isArray(a.attributes.bypassed_sensors) ? a.attributes.bypassed_sensors : [];
     var out = [];
     cfg.sensors.forEach(function (s) {
       var o = hass.states[s.entity];
@@ -514,9 +563,9 @@
         var b = parseFloat(hass.states[s.battery].state);
         if (!isNaN(b) && b < cfg.battery_low) info.battery = Math.round(b);
       }
-      if (info.open && st === "armed_away") {
-        /* open while armed_away = bypassed (would have triggered otherwise);
-           alarmo's bypassed_sensors attr corroborates when present */
+      if (st === "armed_away" && (info.open || byp.indexOf(s.entity) >= 0)) {
+        /* open while armed_away = bypassed (would have triggered otherwise); Alarmo's
+           bypassed_sensors attr keeps a window bypassed after someone closes it */
         info.bypassed = true;
       }
       out.push(info);
@@ -524,12 +573,25 @@
     return out;
   };
 
-  FlatSecurityCard.prototype._causeSensor = function (infos) {
-    /* most recently opened sensor - the door that started pending/triggered */
+  FlatSecurityCard.prototype._causeSensor = function (infos, st) {
+    /* the sensor that started pending/triggered. Alarmo records it in open_sensors
+       ({entity_id: state}) for the whole pending/triggered span; fall back to the most
+       recently opened sensor, then to the card-side latch (survives the door being shut) */
+    var a = this._alarmObj();
+    var focus = st === "pending" || st === "triggered";
+    var os = a && a.attributes && a.attributes.open_sensors;
     var best = null;
-    infos.forEach(function (i) {
-      if (i.open && (!best || i.last > best.last)) best = i;
-    });
+    if (focus && os && typeof os === "object") {
+      infos.forEach(function (i) { if (!best && Object.prototype.hasOwnProperty.call(os, i.cfg.entity)) best = i; });
+    }
+    if (!best) infos.forEach(function (i) { if (i.open && (!best || i.last > best.last)) best = i; });
+    var latch = this._causeLatch;
+    if (!focus) { this._causeLatch = null; return best; }
+    if (best) {
+      if (!latch || latch.entity !== best.cfg.entity) this._causeLatch = { entity: best.cfg.entity, at: best.last };
+    } else if (latch) {
+      infos.forEach(function (i) { if (i.cfg.entity === latch.entity) best = i; });
+    }
     return best;
   };
 
@@ -537,6 +599,10 @@
     var cfg = this._cfg;
     if (!cfg.occupancy || !this._hass.states[cfg.occupancy]) return false;
     return this._hass.states[cfg.occupancy].state === "on";
+  };
+  FlatSecurityCard.prototype._occupancyLive = function () {
+    var cfg = this._cfg, o = cfg.occupancy && this._hass.states[cfg.occupancy];
+    return !!o && o.state !== "unavailable" && o.state !== "unknown";
   };
 
   /* ------------------------- render update -------------------------- */
@@ -550,8 +616,9 @@
     var unavailInfos = infos.filter(function (i) { return !i.avail; });
     var now = Date.now();
 
-    /* tick rate: 1s during countdowns, 30s otherwise */
-    this._startTick(st === "arming" || st === "pending" ? 1000 : 30000);
+    /* tick rate: 1s during countdowns; camera_refresh while the still is showing; 30s otherwise */
+    var camLive = !!(this._elCam && this._expanded && this._hass.states[cfg.camera] && this._hass.states[cfg.camera].state !== "unavailable");
+    this._startTick(st === "arming" || st === "pending" ? 1000 : (camLive ? Math.max(1, cfg.camera_refresh) * 1000 : 30000));
 
     /* ---- card surface ---- */
     if (st === "triggered") this._elCard.classList.add("triggered");
@@ -565,15 +632,19 @@
     else if (st === "triggered") { shieldColor = C.red; showAlert = true; }
     else if (st === "unavailable" || !alarm) { shieldColor = C.inkFaint; }
     var svg = this._elShield.querySelector("svg");
-    svg.style.stroke = shieldColor;
-    svg.querySelector(".sh-check").style.opacity = showCheck ? "1" : "0";
-    svg.querySelector(".sh-alert").style.opacity = showAlert ? "1" : "0";
+    if (svg.style.stroke !== shieldColor) svg.style.stroke = shieldColor;
+    var chk = svg.querySelector(".sh-check"), alr = svg.querySelector(".sh-alert");
+    if (chk.style.opacity !== (showCheck ? "1" : "0")) chk.style.opacity = showCheck ? "1" : "0";
+    if (alr.style.opacity !== (showAlert ? "1" : "0")) alr.style.opacity = showAlert ? "1" : "0";
 
     /* ---- countdown ---- */
     var barPct = null, barColor = C.amber, remain = 0;
     if (alarm && (st === "arming" || st === "pending")) {
       var total = st === "arming" ? cfg.exit_delay : cfg.entry_delay;
-      var elapsed = (now - new Date(alarm.last_changed).getTime()) / 1000;
+      /* while the card is showing an optimistic "arming" that hass has not confirmed,
+         count from the tap - alarm.last_changed still points at the old state */
+      var startMs = this._optActive && st === "arming" ? this._optSetAt : new Date(alarm.last_changed).getTime();
+      var elapsed = (now - startMs) / 1000;
       remain = Math.max(0, total - elapsed);
       barPct = Math.max(0, Math.min(100, (remain / total) * 100));
       barColor = st === "arming" ? C.amber : C.warn;
@@ -588,21 +659,25 @@
 
     /* ---- header text ---- */
     var l1 = "", l1c = C.ink, l2 = "", l2c = C.inkDim;
-    var cause = this._causeSensor(infos);
+    var cause = this._causeSensor(infos, st);
     var openCount = openInfos.length;
     var occ = this._occupancyOn();
+    var occLive = this._occupancyLive();
     var bypassed = infos.filter(function (i) { return i.bypassed; });
+    var noSig = unavailInfos.length ? unavailInfos.length + " no signal" : "";
 
     if (!alarm || st === "unavailable") {
       l1 = "Unavailable"; l1c = C.inkFaint;
       l2 = "Alarmo is not responding";
     } else if (st === "disarmed") {
       l1 = "Disarmed"; l1c = C.ink;
-      l2 = (openCount ? openCount + " open" : "All closed") + MDOT + (occ ? "person in frame" : "camera idle");
-      if (unavailInfos.length) l2 = unavailInfos.length + " no signal" + MDOT + l2;
+      l2 = (openCount ? openCount + " open" : "All closed");
+      if (occLive) l2 += MDOT + (occ ? "person in frame" : "camera idle");
+      if (noSig) l2 = noSig + MDOT + l2;
     } else if (st === "arming") {
       l1 = "Arming"; l1c = C.amber;
       l2 = "Leave now" + MDOT + fmtMMSS(remain);
+      if (noSig) { l2 = l2 + MDOT + noSig; l2c = C.warn; } /* before the bypass clause: it survives the ellipsis at 430px */
       if (openCount) l2 = l2 + MDOT + (openCount === 1 ? openInfos[0].name + " will be bypassed" : openCount + " will be bypassed");
     } else if (st === "armed_away") {
       l1 = "Armed Away"; l1c = C.blueInk;
@@ -612,12 +687,14 @@
       } else {
         l2 = "All closed" + MDOT + "watching since " + fmtClock(new Date(alarm.last_changed));
       }
+      /* an unavailable contact while armed is unguarded - never fold it into "All closed" */
+      if (noSig) { l2 = noSig + MDOT + l2; l2c = C.warn; }
     } else if (st === "pending") {
       l1 = "Entry Delay"; l1c = C.warn;
       l2 = (cause ? cause.name : "Entry") + MDOT + "disarm now" + MDOT + fmtMMSS(remain);
     } else if (st === "triggered") {
       l1 = "Triggered"; l1c = C.red;
-      var when = cause ? fmtAgoShort(now - cause.last) : "";
+      var when = cause ? fmtAgoShort(now - (this._causeLatch && this._causeLatch.entity === cause.cfg.entity ? this._causeLatch.at : cause.last)) : "";
       l2 = (cause ? cause.name : "Alarm") + (when ? MDOT + when + (when === "just now" ? "" : " ago") : "");
       l2c = C.redInk;
     } else {
@@ -625,11 +702,12 @@
       l1 = st.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
       l1c = C.blueInk;
       l2 = openCount ? openCount + " open" : "All closed";
+      if (noSig) { l2 = noSig + MDOT + l2; l2c = C.warn; }
     }
     if (this._elL1.textContent !== l1) this._elL1.textContent = l1;
-    this._elL1.style.color = l1c;
+    if (this._elL1.style.color !== l1c) this._elL1.style.color = l1c;
     if (this._elL2.textContent !== l2) this._elL2.textContent = l2;
-    this._elL2.style.color = l2c;
+    if (this._elL2.style.color !== l2c) this._elL2.style.color = l2c;
 
     /* ---- header glyphs: up to 3 open-sensor icons (dashed if bypassed) ---- */
     var glyphHtml = "";
@@ -720,8 +798,7 @@
 
   /* ---- perimeter list sub-render ---- */
   FlatSecurityCard.prototype._updateList = function (infos, st, cause, now) {
-    var self = this, cfg = this._cfg;
-    var armed = st === "armed_away";
+    var self = this;
     var focus = st === "pending" || st === "triggered";
 
     /* build render entries: focus mode shows only the cause; grouping merges
@@ -777,8 +854,12 @@
         self._rows[e.key] = row;
       }
       seen[e.key] = 1;
-      self._elPlist.appendChild(row); /* appendChild reorders in place */
       self._renderRow(row, e, st, cause, now);
+    });
+    /* reconcile order: only touch rows that are out of place (a move is a DOM mutation) */
+    entries.forEach(function (e, idx) {
+      var row = self._rows[e.key];
+      if (self._elPlist.children[idx] !== row) self._elPlist.insertBefore(row, self._elPlist.children[idx] || null);
     });
     Object.keys(this._rows).forEach(function (k) {
       if (!seen[k] && self._rows[k].parentNode) self._elPlist.removeChild(self._rows[k]);
@@ -794,8 +875,8 @@
     var stTx, name = merged ? entry.groupName : i.name, lcTx;
 
     if (!i.avail) { cls += " unavail"; stTx = "no signal"; }
-    else if (st === "triggered" && cause && i.cfg.entity === cause.cfg.entity) { cls += " cause"; stTx = "OPEN"; }
-    else if (st === "pending" && cause && i.cfg.entity === cause.cfg.entity) { cls += " open"; stTx = "OPEN"; }
+    else if (st === "triggered" && cause && i.cfg.entity === cause.cfg.entity) { cls += " cause"; stTx = i.open ? "OPEN" : "TRIPPED"; }
+    else if (st === "pending" && cause && i.cfg.entity === cause.cfg.entity) { cls += " open"; stTx = i.open ? "OPEN" : "TRIPPED"; }
     else if (i.bypassed) { cls += " bypassed"; stTx = "BYPASSED"; }
     else if (i.open) { cls += " open"; stTx = "OPEN"; }
     else { stTx = armed ? "guarding" : "closed"; }
@@ -806,7 +887,7 @@
     var newest = 0;
     entry.infos.forEach(function (o) { if (o.last > newest) newest = o.last; });
     var ago = fmtAgoShort(now - newest);
-    if (i.bypassed) lcTx = "open " + (ago === "just now" ? "now" : ago);
+    if (i.bypassed && i.open) lcTx = "open " + (ago === "just now" ? "now" : ago);
     else lcTx = ago;
 
     var icw = row.querySelector(".picwrap");
@@ -822,14 +903,6 @@
     if (lc.textContent !== lcTx) lc.textContent = lcTx;
     var stEl = row.querySelector(".st");
     if (stEl.textContent !== stTx) stEl.textContent = stTx;
-  };
-
-  /* store real state at optimistic-set time so we know when hass moves */
-  var origStrip = FlatSecurityCard.prototype._stripAction;
-  FlatSecurityCard.prototype._stripAction = function () {
-    var a = this._alarmObj();
-    this._optRealAtSet = a ? a.state : undefined;
-    origStrip.call(this);
   };
 
   customElements.define("flat-security-card", FlatSecurityCard);

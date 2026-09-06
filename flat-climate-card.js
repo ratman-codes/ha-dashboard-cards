@@ -1,14 +1,16 @@
-/* flat-climate-card v2.1.1 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.2 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an OPEN WINDOWS action chip
    (green only when action-relevant, hysteresis so it doesn't flicker), drawn
-   over a 24h overlay of every room's temperature curve (5 series, legend
-   bottom-left, outdoor pair direct-labeled). The title pill top-right toggles
-   an expansion holding: a humidity row (outdoor vs indoor, 2 series) and a
-   per-room "now" strip (temp + RH per room, tap for history). Hover-scrubbing
-   either graph shows all series' values at that time in one tooltip; clicking
-   a row/cell opens the native more-info history dialog.
+   over a 24h overlay of every room's temperature curve (6 solid series incl.
+   the thermostat's Hall line, 2 dashed averages, legend bottom-left, no
+   on-chart text). The title pill top-right toggles an expansion holding: an
+   averages row, a moisture row (in/out humidity or dew-point averages), a
+   per-room "now" strip (temp + RH per room, tap for history) and the
+   "History & stats" strip that opens the pop-out. Hover-scrubbing any graph
+   shows all series' values at that time in one tooltip; the moisture row and
+   strip cells open the native more-info dialog (the hero graph only scrubs).
    Built 2026-08-05 by Claude for Ratman (design mockups + decisions in the
    "NAS / Smart Home" Claude project; visual language matches the sibling
    flat-sensor-stack / flat-thermostat / flat-weather cards).
@@ -29,16 +31,18 @@
       hours: 24,
       indoor:  [{entity, humidity, name, color}, ...],
       outdoor: [{entity, humidity, name, color}, ...],
-      chip: {on_delta: 3, off_delta: 1.5, label: OPEN WINDOWS}
+      chip: {on_delta: 3, off_delta: 1.5, label: OPEN WINDOWS,
+             close_on: 0, close_off: 1, close_label: CLOSE WINDOWS}
      - example rooms use placeholder ids like sensor.room1_temperature.)
    - Headline math: delta = avg(available indoor temps) - avg(available
      outdoor temps); positive = cooler outside. Chip turns ON when
      delta >= on_delta; OFF when delta < off_delta (hysteresis band between).
      The chip is either green or absent - never a red nag (threshold-color
      house rule). NO humidity/dew-point gate (removed v1.4, see below).
-   - Series colors are a CVD-validated 5-set for dark surfaces (not theme
-     vars - the theme's green primary leaks): indoor #d95926/#c98500/#d55181,
-     outdoor #3987e5/#199e70.
+   - Series colors are hardcoded for dark surfaces (not theme vars - the
+     theme's green primary leaks): indoor #d95926/#c98500/#d55181, Hall
+     #a774d6, outdoor #3987e5/#199e70 (CVD-checked as a set; identity is
+     carried by legend + tooltip + spotlight, see v1.5).
    - History arrives over the websocket (history/history_during_period,
      hourly-averaged buckets like the native sensor card), refreshed every
      5 minutes; each curve's last point is pinned to the live state.
@@ -61,6 +65,38 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.2 (2026-09-06, post-audit revisit): two chip rules.
+     (a) The OPEN WINDOWS chip is HIDDEN while the thermostat (hvac_entity)
+     reports hvac_action heating - in heating season "cooler outside" is
+     true nearly all the time and the chip would sit green meaning nothing.
+     hvac_entity: false disables the rule.
+     (b) CLOSE WINDOWS: when any window contact (contacts) is 'on' AND it is
+     no longer cooler outside, the chip slot shows an AMBER "CLOSE WINDOWS"
+     chip instead. Own hysteresis: shows when delta < close_on (default 0),
+     clears when delta > close_off (default 1) or every contact closes.
+     Amber is the house "needs attention" color (never red). Contacts that
+     are unavailable/unknown count as not open (absence, never a guess).
+   - v2.1.2: AUDIT PASS (2026-09-06, per claude/card-audit-playbook.md).
+     (1) POP-OUT X-AXIS: the temperature/moisture lines and envelope bands
+     were drawn on 0..w while the scrub hairline/dots, window/AC shading, the
+     venting strip, the forecast "now" line and the x labels used the padded
+     8..w-8 axis - dots and shading sat up to 8px off the curves at either
+     edge. All paths now share the padded axis. (2) The "windows open for
+     N% of them" clause is printed only when the contact history actually
+     loaded; a failed/empty fetch says "window data unavailable" instead of
+     a false 0%. (3) Opening the pop-out before the card's first history
+     fetch lands shows "loading history..." and the 24h tab re-renders when
+     history arrives (and on every 5-min refresh while open). (4) set hass
+     re-renders only when one of the card's own entities changed identity
+     (12 sensors + contacts + hvac); unrelated state pushes are skipped.
+     (5) A failed range clears the previous range's tiles + heatmap.
+     (6) Config hardening: hours is coerced to a positive integer (a quoted
+     "12" or 12.5 used to break bucketing) and every "24h" label follows it;
+     contacts: <string> is accepted as a one-item list. (7) A second
+     setConfig closes/removes any open pop-out and refetches history.
+     (8) _openPop is idempotent; the forecast subscription is dropped on
+     timeout. (9) Stale header text + dead code cleaned; the 24h tab's
+     heatmap caption now says it shows the past 7 days.
    - v2.1.1: the 3m tab's seasonal heatmap rows are WEEKS instead of months
      (owner request): ~13 Monday-aligned rows labeled by start date
      ("Aug 25"), so the shortest seasonal range shows week-to-week drift
@@ -233,7 +269,9 @@ const DEF_OUTDOOR = [
     humidity: 'sensor.indoor_outdoor_meter_7523_humidity',
     name: 'Front', color: '#199e70' },
 ];
-const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS' };
+const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS',
+                   close_on: 0, close_off: 1, close_label: 'CLOSE WINDOWS' };  // v2.2
+const AMBER = '#ffc107';
 const DEF_HALL = { entity: 'sensor.hall_nest_thermostat_temperature',
                    humidity: 'sensor.hall_nest_thermostat_humidity',
                    name: 'Hall', color: '#a774d6', in_average: false };
@@ -269,7 +307,17 @@ class FlatClimateCard extends HTMLElement {
   static getStubConfig() { return {}; }
 
   setConfig(config) {
-    this._config = Object.assign({ hours: DEF_HOURS }, config);
+    // v2.1.2: a second setConfig (editor / config change) must not strand an
+    // open pop-out or leave the old overlay node behind
+    if (this._pop && this._pop.el) {
+      if (this._pop.open) this._closePop();
+      if (this._pop.el.parentNode) this._pop.el.parentNode.removeChild(this._pop.el);
+    }
+    this._config = Object.assign({}, config);
+    // v2.1.2: hours coerced to a positive integer (quoted "12" or 12.5 broke bucketing)
+    const hrs = Math.round(Number(config.hours));
+    this._hours = (isFinite(hrs) && hrs >= 1) ? hrs : DEF_HOURS;
+    this._config.hours = this._hours;
     const mk = (list, defs) => (list && list.length ? list : defs).map(r => Object.assign({}, r));
     this._indoor = mk(config.indoor, DEF_INDOOR);
     this._outdoor = mk(config.outdoor, DEF_OUTDOOR);
@@ -287,6 +335,7 @@ class FlatClimateCard extends HTMLElement {
     // v2.0 pop-out config
     this._popEnabled = config.popout !== false;
     this._contacts = Array.isArray(config.contacts) ? config.contacts.slice()
+      : (typeof config.contacts === 'string' && config.contacts) ? [config.contacts]
       : (config.contacts === false ? [] : DEF_CONTACTS.slice());
     this._hvacEnt = (config.hvac_entity === false) ? null : (config.hvac_entity || DEF_HVAC);
     this._fcEnt = (config.forecast_entity === false) ? null : (config.forecast_entity || DEF_FORECAST);
@@ -298,10 +347,18 @@ class FlatClimateCard extends HTMLElement {
     this._open = false;
     this._focus = null;       // v1.6 legend spotlight state
     this._chipOn = false;
-    this._chipShown = null;   // last applied visibility (idempotent display writes)
+    this._closeOn = false;    // v2.2 CLOSE WINDOWS hysteresis state
+    this._chipShown = null;   // last applied chip state (idempotent display writes)
     this._hist = {};          // entity -> [{t, v, x, y}]
+    this._avgHist = null; this._avgRowPts = null; this._moistRowPts = null;
+    // v2.1.2: entity ids whose state changes should re-render (set hass gate)
+    this._watchIds = Array.from(new Set(
+      this._series.map(s => s.entity).concat(this._series.map(s => s.humidity).filter(Boolean),
+        this._contacts, this._hvacEnt ? [this._hvacEnt] : [])));
+    this._lastStates = null;
     if (!this.shadowRoot) this._createDom();
     else this._buildDom();
+    if (this._hass) this._fetchHistory();   // v2.1.2: re-setConfig refetches instead of waiting 5 min
   }
 
   getCardSize() { return 4; }
@@ -312,7 +369,15 @@ class FlatClimateCard extends HTMLElement {
       this._fetchHistory();
       this._fetchTimer = setInterval(() => this._fetchHistory(), REFRESH_MS);
     }
-    this._renderStates();
+    // v2.1.2: render only when one of the card's own entities changed identity
+    const st = hass && hass.states;
+    const prev = this._lastStates;
+    let changed = !prev || !st;
+    if (!changed) {
+      for (const id of this._watchIds) { if (st[id] !== prev[id]) { changed = true; break; } }
+    }
+    this._lastStates = st || null;
+    if (changed) this._renderStates();
   }
 
   disconnectedCallback() {
@@ -356,6 +421,8 @@ class FlatClimateCard extends HTMLElement {
           color: ${GOOD}; font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
           background: color-mix(in srgb, var(--card-background-color) 75%, transparent); }
         .chip .cdot { width: 7px; height: 7px; border-radius: 50%; background: ${GOOD}; }
+        .chip.close { border-color: ${AMBER}; color: ${AMBER}; }
+        .chip.close .cdot { background: ${AMBER}; }
         .legend { position: absolute; left: 8px; right: 8px; bottom: 4px; z-index: 2;
           display: flex; align-items: center; gap: 2px; flex-wrap: nowrap;
           overflow: hidden; }
@@ -515,7 +582,7 @@ class FlatClimateCard extends HTMLElement {
 
   _buildDom() {
     if (!this._el) return;
-    const legend = this._series.map((s, i) =>
+    const legend = this._series.map(s =>
       `<span class="it" data-n="${s.name}"><span class="dot" style="background:${s.color}"></span>${s.name}</span>`).join('');
     const tipRows = (list) => list.map((s, i) =>
       (s.sep ? '<div class="sep"></div>' : '') +
@@ -546,7 +613,7 @@ class FlatClimateCard extends HTMLElement {
         <div class="reading">
           <div class="val"><span id="avi">--</span><span class="uom" id="avw"></span></div>
         </div>
-        <div class="label">Averages &mdash; 24h</div>
+        <div class="label">Averages &mdash; ${this._hours}h</div>
         <div class="xline"></div>
       </div>
       <div class="row hrow" id="hum">
@@ -598,7 +665,7 @@ class FlatClimateCard extends HTMLElement {
     const hrow = root.getElementById('hrow');
     const pill = root.getElementById('pill');
     const hum = root.getElementById('hum');
-    pill.textContent = 'House Climate \u2014 24h';
+    pill.textContent = 'House Climate \u2014 ' + this._hours + 'h';
     // press feedback (house style)
     const press = (el, guard) => {
       el.addEventListener('pointerdown', (e) => {
@@ -675,7 +742,7 @@ class FlatClimateCard extends HTMLElement {
 
   _applyMoistLabel() {
     const lab = this.shadowRoot.getElementById('humlab');
-    if (lab) lab.innerHTML = (this._moistMode === 'dew' ? 'Dew point' : 'Humidity') + ' &mdash; 24h';
+    if (lab) lab.innerHTML = (this._moistMode === 'dew' ? 'Dew point' : 'Humidity') + ' &mdash; ' + this._hours + 'h';
     const plab = this._pop && this._pop.el && this._pop.el.querySelector('#pmtitle');
     if (plab) plab.textContent = this._moistMode === 'dew' ? 'Dew point' : 'Humidity';
   }
@@ -814,11 +881,23 @@ class FlatClimateCard extends HTMLElement {
     if (delta == null) this._chipOn = false;
     else if (!this._chipOn && delta >= c.on_delta) this._chipOn = true;
     else if (this._chipOn && delta < c.off_delta) this._chipOn = false;
-    if (this._chipShown !== this._chipOn) {           // idempotent display writes
+    // v2.2 (a): no venting chip while the house is being heated
+    const hv = this._hvacEnt && this._hass.states[this._hvacEnt];
+    const heating = !!(hv && hv.attributes && hv.attributes.hvac_action === 'heating');
+    // v2.2 (b): CLOSE WINDOWS - a contact is open and it is no longer cooler outside
+    const anyOpen = this._contacts.some(id => {
+      const s = this._hass.states[id]; return !!(s && s.state === 'on');
+    });
+    if (delta == null || !anyOpen) this._closeOn = false;
+    else if (!this._closeOn && delta < c.close_on) this._closeOn = true;
+    else if (this._closeOn && delta > c.close_off) this._closeOn = false;
+    const chipState = this._closeOn ? 'close' : (this._chipOn && !heating ? 'open' : null);
+    if (this._chipShown !== chipState) {              // idempotent display writes
       const chip = root.getElementById('chip');
-      root.getElementById('chiplab').textContent = c.label;
-      chip.style.display = this._chipOn ? 'inline-flex' : 'none';
-      this._chipShown = this._chipOn;
+      chip.classList.toggle('close', chipState === 'close');
+      root.getElementById('chiplab').textContent = chipState === 'close' ? c.close_label : c.label;
+      chip.style.display = chipState ? 'inline-flex' : 'none';
+      this._chipShown = chipState;
     }
     // averages-row reading (v1.6): same inT/outT/delta as the headline
     const avgrow = root.getElementById('avgrow');
@@ -879,7 +958,7 @@ class FlatClimateCard extends HTMLElement {
   /* ---------------- history ---------------- */
   async _fetchHistory() {
     if (!this._hass) return;
-    const hours = this._config.hours || DEF_HOURS;
+    const hours = this._hours || DEF_HOURS;
     const end = new Date();
     const start = new Date(end.getTime() - hours * 3600e3);
     // v1.7: all six humidity sensors ride along (12 entities total)
@@ -914,6 +993,8 @@ class FlatClimateCard extends HTMLElement {
     this._drawHero();
     this._drawAvg();
     this._drawHum();
+    // v2.1.2: an open 24h tab follows the card's history (first load + 5-min refresh)
+    if (this._pop && this._pop.open && this._pop.cur === '24h') this._popRender();
   }
 
   _bucket(items, t0, t1, hours, id) {
@@ -1127,7 +1208,7 @@ class FlatClimateCard extends HTMLElement {
   /* ================= v2.0: history pop-out ================= */
 
   _openPop() {
-    if (!this._popEnabled) return;
+    if (!this._popEnabled || this._pop.open) return;
     if (!this._pop.el) this._popDom();
     this._pop.open = true;
     this._pop.el.style.display = '';
@@ -1477,7 +1558,7 @@ class FlatClimateCard extends HTMLElement {
     if (c && Date.now() - c.at < REFRESH_MS) return c;
     const end = new Date(), start = new Date(end.getTime() - 7 * 864e5);
     const out = { at: Date.now(), t0: start.getTime(), t1: end.getTime(),
-                  open: [], cool: [], heat: [] };
+                  open: [], cool: [], heat: [], openOk: false };
     try {
       if (this._contacts.length) {
         const res = await this._hass.callWS({
@@ -1496,6 +1577,8 @@ class FlatClimateCard extends HTMLElement {
           });
           if (onT != null) out.open.push([onT, end.getTime()]);
         });
+        // v2.1.2: only a fetch that returned rows for a contact counts as data
+        out.openOk = this._contacts.some(id => ((res && res[id]) || []).length > 0);
       }
     } catch (e) { /* contacts optional */ }
     try {
@@ -1533,12 +1616,14 @@ class FlatClimateCard extends HTMLElement {
     let list = null;
     try {
       list = await new Promise((resolve, reject) => {
-        const to = setTimeout(() => reject(new Error('fc timeout')), 6000);
+        let p = null;
+        const drop = () => Promise.resolve(p).then(un => { try { un(); } catch (e) {} });
+        const to = setTimeout(() => { drop(); reject(new Error('fc timeout')); }, 6000);
         try {
-          const p = this._hass.connection.subscribeMessage((msg) => {
+          p = this._hass.connection.subscribeMessage((msg) => {
             clearTimeout(to);
             resolve((msg && msg.forecast) || []);
-            Promise.resolve(p).then(un => { try { un(); } catch (e) {} });
+            drop();
           }, { type: 'weather/subscribe_forecast', forecast_type: 'hourly',
                entity_id: this._fcEnt });
           Promise.resolve(p).catch(err => { clearTimeout(to); reject(err); });
@@ -1629,6 +1714,8 @@ class FlatClimateCard extends HTMLElement {
     }
     const Y = v => PT + (1 - (v - lo) / (hi - lo)) * (H - PT - PB);
     const X = x => PL + x * (w - 2 * PL);
+    // v2.1.2: _path() multiplies p.x by w, so feed it the padded axis as a fraction
+    const M = pts => pts.map(p => ({ x: X(p.x) / w, y: p.y }));
     let svg = '<svg viewBox="0 0 ' + w + ' ' + H + '" preserveAspectRatio="none" style="height:' + H + 'px">';
     (opts.zones || []).forEach(z => {
       svg += '<rect x="' + X(z.x0).toFixed(1) + '" y="0" width="' +
@@ -1647,8 +1734,8 @@ class FlatClimateCard extends HTMLElement {
       if (!L.band || L.pts.length < 2 || L.pts[0].mn == null) return;
       const hiP = L.pts.map(p => ({ x: p.x, y: Y(p.mx != null ? p.mx : p.v) }));
       const loP = L.pts.slice().reverse().map(p => ({ x: p.x, y: Y(p.mn != null ? p.mn : p.v) }));
-      let d = this._path(hiP.map(p => ({ x: p.x, y: p.y })), w);
-      loP.forEach(p => { d += ' L ' + (p.x * w).toFixed(1) + ' ' + p.y.toFixed(1); });
+      let d = this._path(M(hiP), w);
+      loP.forEach(p => { d += ' L ' + X(p.x).toFixed(1) + ' ' + p.y.toFixed(1); });
       d += ' Z';
       svg += '<path d="' + d + '" fill="' + L.c + '" opacity="' +
         (0.11 * (L.op != null ? L.op : 1)).toFixed(3) + '" stroke="none"></path>';
@@ -1658,7 +1745,7 @@ class FlatClimateCard extends HTMLElement {
       const pts = L.pts.map(p => ({ x: p.x, y: Y(p.v) }));
       const dash = L.st === 'dash' ? ' stroke-dasharray="6 5"' :
                    L.st === 'dot' ? ' stroke-dasharray="0.5 6"' : '';
-      svg += '<path d="' + this._path(pts, w) + '" fill="none" stroke="' + L.c +
+      svg += '<path d="' + this._path(M(pts), w) + '" fill="none" stroke="' + L.c +
         '" stroke-width="' + (L.st === 'solid' ? 2.2 : 2) + '"' + dash +
         ' stroke-linecap="round" stroke-linejoin="round" opacity="' +
         (L.op != null ? L.op : 1) + '"></path>';
@@ -1740,7 +1827,7 @@ class FlatClimateCard extends HTMLElement {
     });
     return hours;
   }
-  _popHeatDom(hours, hd) {
+  _popHeatDom(hours, hd, key) {
     // v2.1: weekday rows normally; chronological MONTH rows on seasonal tabs
     const seasonal = !!(hd && hd.seasonal);
     let rows, rowOf;
@@ -1819,7 +1906,8 @@ class FlatClimateCard extends HTMLElement {
       'Mean &Delta; (in &minus; out, sun-trimmed) by hour &times; ' +
       (weekly ? 'week (rows labeled by week start; empty cells = no data yet)'
         : seasonal ? 'month (empty cells = no data yet)' : 'weekday') +
-      (hd && hd.capped ? ', last 30 days' : '') + '. Green = chip-on territory (&Delta; &ge; ' +
+      (hd && hd.capped ? ', last 30 days' : (key === '24h' ? ', past 7 days' : '')) +
+      '. Green = chip-on territory (&Delta; &ge; ' +
       this._chipCfg.on_delta + '&deg;).';
   }
 
@@ -1836,7 +1924,9 @@ class FlatClimateCard extends HTMLElement {
   async _popRender() {
     const pop = this._pop, el = pop.el;
     if (!el || !this._hass) return;
-    const key = pop.cur, r = POP_R[key];
+    const key = pop.cur, r0 = POP_R[key];
+    const r = key === '24h' ? Object.assign({}, r0,
+      { sub: 'past ' + this._hours + ' hours \u00b7 raw history + 12h forecast' }) : r0;
     const seq = ++pop.seq;
     el.querySelectorAll('.ptab').forEach(b => b.classList.toggle('on', b.dataset.k === key));
     el.querySelectorAll('.pchip').forEach(ch => {
@@ -1869,7 +1959,17 @@ class FlatClimateCard extends HTMLElement {
       let t0, t1, tEnd, gp;
       if (is24) {
         t0 = this._t0; t1 = this._t1;
-        if (!t0 || !t1) { el.querySelector('#psub').textContent = r.sub; return; }
+        if (!t0 || !t1) {   // v2.1.2: say so; _fetchHistory re-renders when history lands
+          el.querySelector('#psub').textContent = r.sub + ' \u00b7 loading history\u2026';
+          ['ptchart', 'pmchart'].forEach(id => {
+            const b = el.querySelector('#' + id); b._sc = null;
+            b.innerHTML = '<div class="perr">Loading history\u2026</div>';
+          });
+          el.querySelector('#phmwrap').innerHTML = '';
+          el.querySelector('#phmcap').textContent = '';
+          el.querySelector('#ptiles').innerHTML = '';
+          return;
+        }
         tEnd = fc && fc.length ? t1 + 12 * 3600e3 : t1;
         const rx = pts => (pts || []).map(p => ({ t: p.t, v: p.v, x: (p.t - t0) / (tEnd - t0) }));
         gp = {};
@@ -1984,21 +2084,23 @@ class FlatClimateCard extends HTMLElement {
 
       // heatmap + tiles
       const hours = this._popHeat(hd);
-      this._popHeatDom(hours, hd);
+      this._popHeatDom(hours, hd, key);
       const on = this._chipCfg.on_delta;
       const offered = hours.filter(h => h.d >= on);
       const ventFrac = hours.length ? offered.length / hours.length : 0;
       // captured: chip-on hours in the last 7d that had a window open
-      const b7 = bins;
-      let cap = null;
-      const h7 = hours.filter(h => h.t >= b7.t0);
+      let cap = null, capMissing = false;
+      const h7 = hours.filter(h => h.t >= bins.t0);
       const off7 = h7.filter(h => h.d >= on);
-      if (off7.length && (this._contacts.length)) {
-        let hit = 0;
-        off7.forEach(h => {
-          if (this._ivOverlap(b7.open, h.t, h.t + 3600e3) > 15 * 60e3) hit += 1;
-        });
-        cap = hit / off7.length;
+      if (off7.length && this._contacts.length) {
+        if (!bins.openOk) capMissing = true;   // v2.1.2: no contact history = no claim
+        else {
+          let hit = 0;
+          off7.forEach(h => {
+            if (this._ivOverlap(bins.open, h.t, h.t + 3600e3) > 15 * 60e3) hit += 1;
+          });
+          cap = hit / off7.length;
+        }
       }
       // extremes from the temp side series
       const mx = a => a.length ? Math.max.apply(null, a) : null;
@@ -2016,11 +2118,10 @@ class FlatClimateCard extends HTMLElement {
       const inMean = sideMean(inS), outMean = sideMean(outS);
       let warm = null;
       this._series.forEach(s => {
-        const m = sideMean(gp[s.entity] || []);
-        const ref = this._outdoor.indexOf(s) >= 0 ? outMean : inMean;
-        if (m == null || ref == null) return;
-        const off = m - ref;
         if (this._outdoor.indexOf(s) >= 0) return; // warmest ROOM = indoor story
+        const m = sideMean(gp[s.entity] || []);
+        if (m == null || inMean == null) return;
+        const off = m - inMean;
         if (!warm || off > warm.off) warm = { s: s, off: off };
       });
       // tiles
@@ -2045,8 +2146,9 @@ class FlatClimateCard extends HTMLElement {
           '<div class="ptl">venting offered (\u0394 \u2265 ' + on + '\u00b0' +
           (hd.capped ? ', last 30d' : '') + ')</div><div class="pts2">' +
           this._fmt(ventFrac * 100, 0) + '% of hours' +
-          (cap == null ? '' : ' \u00b7 windows open for <b>' + this._fmt(cap * 100, 0) +
-            '%</b> of them (past 7d)') + '</div></div>';
+          (cap != null ? ' \u00b7 windows open for <b>' + this._fmt(cap * 100, 0) +
+            '%</b> of them (past 7d)'
+           : capMissing ? ' \u00b7 window data unavailable (past 7d)' : '') + '</div></div>';
       }
       let t3h = '';
       const sel1 = pop.sel.length === 1 ? this._series.find(x => x.name === pop.sel[0]) : null;
@@ -2103,6 +2205,10 @@ class FlatClimateCard extends HTMLElement {
       tc.innerHTML = '<div class="perr">Could not load this range (' +
         String(err && err.message ? err.message : err).slice(0, 120) + ')</div>';
       mc.innerHTML = '';
+      // v2.1.2: never leave the previous range's tiles/heatmap under this tab
+      el.querySelector('#phmwrap').innerHTML = '';
+      el.querySelector('#phmcap').textContent = '';
+      el.querySelector('#ptiles').innerHTML = '';
     }
   }
 }
@@ -2112,5 +2218,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-climate-card',
   name: 'Flat Climate Card',
-  description: 'Indoor-vs-outdoor delta headline + all-rooms 24h temperature overlay, humidity and per-room strip behind a toggle',
+  description: 'Indoor-vs-outdoor delta headline + all-rooms temperature overlay; averages, moisture, per-room strip and a history pop-out behind a toggle',
 });

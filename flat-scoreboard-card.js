@@ -1,4 +1,4 @@
-/* flat-scoreboard-card v1.0 - custom Lovelace card for the Forecast Lab dashboard.
+/* flat-scoreboard-card v1.1 - custom Lovelace card for the Forecast Lab dashboard.
    Leaderboard for the forecast-accuracy experiment: rank medals, avg-error bars
    (leader in house amber; off-scale entries overflow with a fade), today's call
    per source with busted-call marking, yesterday's miss with blowup marking,
@@ -13,7 +13,8 @@
      in HA's own config (.storage/lovelace_resources), included in HA backups.
    - To READ: decode everything after "base64,". To MODIFY: edit the decoded
      JS (ASCII only in strings), node --check, re-encode, replace the resource
-     URL at Settings > Dashboards > Resources, hard-refresh.
+     URL via the Card Manager card (row Update) or at Settings > Dashboards >
+     Resources, hard-refresh.
    - All entity ids come from the card YAML (kept out of this source). Shape:
        type: custom:flat-scoreboard-card
        title: Forecast Lab                  # optional
@@ -35,10 +36,28 @@
    - The trend strip reads permanent long-term statistics via the
      recorder/statistics_during_period websocket call (daily mean). Statistics
      only exist from the moment the avg sensors gained state_class
-     (2026-07-19) - the strip fills in as days accumulate. */
+     (2026-07-19) - the strip fills in as days accumulate.
+   - Busted / orange-yday decisions are made on the ROUNDED values the card
+     prints (whole degrees), so what you see is what was compared.
+
+   CHANGELOG
+   v1.1 (2026-09-06, source audit):
+     - Trend strip: a failed statistics fetch keeps the last good chart and
+       says "trend unavailable" instead of pretending no data exists yet;
+       retries after 60 s, and the hourly throttle is only stamped on success
+       (a first push with unknown avg sensors no longer burns the hour).
+     - busted / orange-yday now compare the rounded values that are printed.
+     - Trend x-axis is a shared time axis (rows placed by their day, not by
+       array index), so a series with a missing day is no longer shifted.
+     - Rows with no avg print a dash instead of a numeric rank; a source
+       without an avg id no longer opens more-info for "undefined".
+     - Rows are rebuilt only when a printed value or mark changes (a tick of
+       the running actual no longer rebuilds the grid); days label guarded.
+     - Re-setConfig refreshes the title and discards an in-flight fetch.
+     - Press feedback on the primary button only; unused constant removed.
+   v1.0 (2026-07-19): initial. */
 
 const ACCENT = '#ffc107';
-const GREY_TEXT = '#9e9e9e';
 const ALERT = '#ff9c4a';
 const RANK_COLORS = { 1: '#ffc107', 2: '#b0bec5', 3: '#c9946a' };
 const TREND_STROKES = ['#ffc107', '#9e9e9e', '#6d6d6d'];
@@ -55,7 +74,11 @@ class FlatScoreboardCard extends HTMLElement {
       config);
     this._rowsKey = '';
     this._statsFetched = 0;
+    this._statsInFlight = false;
+    this._trendHtml = '';
+    this._cfgSeq = (this._cfgSeq || 0) + 1;
     if (!this.shadowRoot) this._createDom();
+    else this._el.title.textContent = this._config.title;
   }
 
   getCardSize() { return 5; }
@@ -145,6 +168,7 @@ class FlatScoreboardCard extends HTMLElement {
       if (row && row.dataset.avg) this._moreInfo(row.dataset.avg);
     });
     this._el.grid.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
       const row = e.target.closest ? e.target.closest('.row') : null;
       if (row) row.classList.add('press');
     });
@@ -165,11 +189,18 @@ class FlatScoreboardCard extends HTMLElement {
     if (!this._el || !this._hass) return;
     const c = this._config;
     const actual = this._num(c.actual_entity);
-    const rows = c.sources.map(s => ({
-      name: s.name, tag: s.tag || '', avgEnt: s.avg,
-      avg: this._num(s.avg), days: this._num(s.days),
-      today: this._num(s.today), yday: this._num(s.yday),
-    })).sort((a, b) => (isNaN(a.avg) ? 999 : a.avg) - (isNaN(b.avg) ? 999 : b.avg));
+    const rows = c.sources.map(s => {
+      const r = {
+        name: s.name, tag: s.tag || '', avgEnt: s.avg || '',
+        avg: this._num(s.avg), days: this._num(s.days),
+        today: this._num(s.today), yday: this._num(s.yday),
+      };
+      /* decide on the whole degrees that get printed, not hidden tenths */
+      r.busted = !isNaN(r.today) && !isNaN(actual) &&
+        (Math.round(actual) - Math.round(r.today)) >= c.busted_margin;
+      r.ydayBig = !isNaN(r.yday) && Math.round(r.yday) >= c.yday_alert;
+      return r;
+    }).sort((a, b) => (isNaN(a.avg) ? 999 : a.avg) - (isNaN(b.avg) ? 999 : b.avg));
 
     /* competition ranking with ties on the rounded avg */
     let lastVal = null, lastRank = 0;
@@ -179,7 +210,8 @@ class FlatScoreboardCard extends HTMLElement {
     });
 
     const daysMax = Math.max.apply(null, rows.map(r => isNaN(r.days) ? 0 : r.days));
-    this._el.days.textContent = daysMax > 0 ? daysMax + ' days scored' : '';
+    const daysTxt = daysMax > 0 ? daysMax + ' days scored' : '';
+    if (this._daysTxt !== daysTxt) { this._daysTxt = daysTxt; this._el.days.textContent = daysTxt; }
     if (!isNaN(actual)) {
       const html = 'Today: actual <b>' + Math.round(actual) + '&deg;</b> so far';
       if (this._leadHtml !== html) { this._leadHtml = html; this._el.lead.innerHTML = html; }
@@ -188,21 +220,22 @@ class FlatScoreboardCard extends HTMLElement {
       this._el.lead.style.display = 'none';
     }
 
-    const key = JSON.stringify(rows.map(r => [r.name, r.avg, r.today, r.yday, r.rank])) + '|' + actual;
+    const key = JSON.stringify(rows.map(r => [r.name, r.avg, r.today, r.yday, r.rank, r.busted, r.ydayBig]));
     if (key === this._rowsKey) return;
     this._rowsKey = key;
 
     this._el.grid.innerHTML = rows.map(r => {
-      const rankCls = r.rank <= 3 ? '' : ' plain';
-      const rankBg = RANK_COLORS[r.rank] ? ' style="background:' + RANK_COLORS[r.rank] + '"' : '';
+      const noData = isNaN(r.avg);
+      const rankCls = (r.rank <= 3 && !noData) ? '' : ' plain';
+      const rankBg = (RANK_COLORS[r.rank] && !noData) ? ' style="background:' + RANK_COLORS[r.rank] + '"' : '';
+      const rankTxt = noData ? '&ndash;' : r.rank;
       const over = !isNaN(r.avg) && r.avg > c.bar_max;
       const isLeader = r.rank === 1 && !over;
       const w = isNaN(r.avg) ? 0 : Math.min(r.avg / c.bar_max, 1) * 100;
       const barCls = over ? ' over' : (isLeader ? ' leader' : '');
-      const busted = !isNaN(r.today) && !isNaN(actual) && (actual - r.today) >= c.busted_margin;
-      const ydayBig = !isNaN(r.yday) && r.yday >= c.yday_alert;
-      return '<div class="row" data-avg="' + r.avgEnt + '">' +
-        '<div class="rank' + rankCls + '"' + rankBg + '>' + r.rank + '</div>' +
+      const busted = r.busted, ydayBig = r.ydayBig;
+      return '<div class="row"' + (r.avgEnt ? ' data-avg="' + r.avgEnt + '"' : '') + '>' +
+        '<div class="rank' + rankCls + '"' + rankBg + '>' + rankTxt + '</div>' +
         '<div class="name">' + r.name + (r.tag ? '<span class="tag">' + r.tag + '</span>' : '') + '</div>' +
         '<div class="barwrap"><div class="bar' + barCls + '" style="width:' + w.toFixed(1) + '%"></div></div>' +
         '<div class="avg">' + this._fmt(r.avg, 1) + '<small>&#176;</small></div>' +
@@ -214,10 +247,10 @@ class FlatScoreboardCard extends HTMLElement {
 
   /* ---------- long-term trend strip ---------- */
   _maybeFetchStats() {
-    if (!this._hass || !this.isConnected) return;
+    if (!this._hass || !this.isConnected || this._statsInFlight) return;
     const now = Date.now();
-    if (now - this._statsFetched < 60 * 60 * 1000) return; /* refresh hourly */
-    this._statsFetched = now;
+    const HOUR = 60 * 60 * 1000, RETRY = 60 * 1000;
+    if (now - this._statsFetched < HOUR) return; /* refresh hourly */
     const c = this._config;
     /* draw the current top-N by avg */
     const ranked = c.sources
@@ -225,45 +258,79 @@ class FlatScoreboardCard extends HTMLElement {
       .filter(x => !isNaN(x.avg))
       .sort((a, b) => a.avg - b.avg)
       .slice(0, c.trend_count);
-    if (!ranked.length) return;
+    if (!ranked.length) {
+      /* nothing to ask for yet (avg sensors unknown) - do NOT stamp the hour */
+      if (!this._trendHtml && this._el.trend.innerHTML === '') {
+        this._el.trend.innerHTML = '<div class="empty">Trend: waiting for the avg sensors.</div>';
+      }
+      return;
+    }
     const ids = ranked.map(x => x.s.avg);
     const start = new Date(now - c.trend_days * 24 * 3600 * 1000).toISOString();
+    const seq = this._cfgSeq;
+    this._statsInFlight = true;
     this._hass.callWS({
       type: 'recorder/statistics_during_period',
       start_time: start, statistic_ids: ids, period: 'day', types: ['mean'],
-    }).then(res => this._drawTrend(ranked, res || {}))
-      .catch(() => this._drawTrend(ranked, {}));
+    }).then(res => {
+      this._statsInFlight = false;
+      if (seq !== this._cfgSeq) return; /* config changed while in flight */
+      this._statsFetched = Date.now();
+      this._drawTrend(ranked, res || {});
+    }).catch(() => {
+      this._statsInFlight = false;
+      if (seq !== this._cfgSeq) return;
+      this._statsFetched = Date.now() - HOUR + RETRY; /* try again in a minute */
+      this._trendFailed(ranked);
+    });
+  }
+
+  /* a failed fetch is a failed fetch - keep the last good chart, say so, never
+     print the "no data yet" text over 7 weeks of real statistics */
+  _trendFailed(ranked) {
+    const el = this._el; if (!el) return;
+    const label = '<div class="tl">Avg error &middot; long-term trend (' +
+      ranked.map(x => x.s.name).join(', ') + ')</div>';
+    el.trend.innerHTML = (this._trendHtml || label) +
+      '<div class="empty">Trend unavailable &mdash; statistics fetch failed, retrying.</div>';
   }
 
   _drawTrend(ranked, res) {
     const el = this._el; if (!el) return;
-    const series = ranked.map(x => (res[x.s.avg] || []).map(p => p.mean).filter(v => v != null));
+    /* rows carry their bucket start; place every series on ONE shared day axis */
+    const tkey = p => Math.round(new Date(p.start).getTime() / 3600000);
+    const series = ranked.map(x => (res[x.s.avg] || [])
+      .filter(p => p && p.mean != null && p.start != null)
+      .map(p => ({ t: tkey(p), v: p.mean })));
     const total = series.reduce((n, s) => n + s.length, 0);
     const label = '<div class="tl">Avg error &middot; long-term trend (' +
       ranked.map(x => x.s.name).join(', ') + ')</div>';
     if (total < 4) {
+      this._trendHtml = '';
       el.trend.innerHTML = label +
         '<div class="empty">Permanent statistics accumulate from Jul 19, 2026 &mdash; the trend fills in as days pass.</div>';
       return;
     }
     const W = 448, H = 56, padX = 4, padT = 6, padB = 8;
-    const maxLen = Math.max.apply(null, series.map(s => s.length));
-    const maxV = Math.max.apply(null, series.map(s => Math.max.apply(null, s)));
+    const axis = Array.from(new Set(series.reduce((a, s) => a.concat(s.map(p => p.t)), []))).sort((a, b) => a - b);
+    const pos = {}; axis.forEach((t, i) => pos[t] = i);
+    const maxV = Math.max.apply(null, series.map(s => Math.max.apply(null, s.map(p => p.v))));
     const minV = 0;
-    const x = (i, len) => padX + (len < 2 ? 0 : i * (W - 2 * padX) / (maxLen - 1));
+    const x = t => padX + (axis.length < 2 ? 0 : pos[t] * (W - 2 * padX) / (axis.length - 1));
     const y = v => padT + (maxV - v) * (H - padT - padB) / ((maxV - minV) || 1);
     let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '">' +
       '<line x1="' + padX + '" y1="' + y(0).toFixed(1) + '" x2="' + (W - padX) + '" y2="' + y(0).toFixed(1) +
       '" stroke="rgba(70,70,70,.3)" stroke-width="1"/>';
     series.forEach((s, si) => {
       if (s.length < 2) return;
-      const pts = s.map((v, i) => x(i, s.length).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+      const pts = s.map(p => x(p.t).toFixed(1) + ',' + y(p.v).toFixed(1)).join(' ');
       svg += '<polyline points="' + pts + '" fill="none" stroke="' + (TREND_STROKES[si] || '#5d5d5d') +
         '" stroke-width="' + (si === 0 ? 2 : 1.5) + '" stroke-linecap="round" stroke-linejoin="round"' +
         (si === 0 ? '' : ' opacity=".8"') + '/>';
     });
     svg += '</svg>';
-    el.trend.innerHTML = label + svg;
+    this._trendHtml = label + svg;
+    el.trend.innerHTML = this._trendHtml;
   }
 }
 

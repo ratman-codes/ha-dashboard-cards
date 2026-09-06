@@ -35,8 +35,15 @@ private project archive — this copy is the spec.
   relative last-changed, and state: OPEN (amber, sorts up) · closed /
   "guarding" while armed · **BYPASSED** (dashed orange + open-duration — any
   open sensor while armed_away; Alarmo's silent all-session bypass made
-  visible) · cause row red during pending/triggered (list collapses to the
-  cause only) · "no signal" for unavailable (never rendered as closed).
+  visible; since v1.6 also any sensor listed in Alarmo's `bypassed_sensors`
+  attribute, so a window closed after being auto-bypassed stays BYPASSED) ·
+  cause row during pending (amber) / triggered (red), list collapses to the
+  cause only — since v1.6 the cause is Alarmo's `open_sensors` attribute
+  (latched card-side as a fallback), so the tripped door keeps its name and
+  its single row after being shut; a closed cause row reads TRIPPED · "no
+  signal" for unavailable (never rendered as closed; since v1.6 the
+  armed/arming headers also prefix "N no signal" instead of claiming "All
+  closed").
   Quiet twins sharing a `group:` merge into one row; battery badge inline only
   below `battery_low` (default 25%).
 - **Triggered:** whole card surface pulses (slow 1.6s breathe) with a red
@@ -49,7 +56,8 @@ optional battery, optional group) · `camera` / `occupancy` / `last_person` /
 `frigate_url` (optional; camera block hidden without camera) ·
 `collapsed_default` (false) · `exit_delay` / `entry_delay` (60/15 — countdowns
 are computed card-side from the alarm's last_changed plus these values, since
-Alarmo exposes no remaining time; keep in sync with the Alarmo config) ·
+Alarmo exposes no remaining time; keep in sync with the Alarmo config; v1.6
+counts from the tap while an optimistic arming is unconfirmed) ·
 `battery_low` (25) · `camera_refresh` (10) · `camera_name` (chip label) ·
 `package` (optional on/off entity, v1.5 — e.g. a package-waiting helper set by
 a doorbell automation).
@@ -65,7 +73,11 @@ Theme-chrome surface (background/border/radius from the theme's card variables
 accents. Press feedback over hover on large regions; hover wash only on the
 header toggle zone and small chips. more-info tap-throughs everywhere.
 Availability honesty (unavailable is never rendered as a safe state).
-Idempotent DOM updates; 1s tick only during countdowns, 30s otherwise.
+Idempotent DOM updates; 1s tick only during countdowns, `camera_refresh` s
+while expanded with a live camera (v1.6), 30s otherwise. Since v1.6 `set hass`
+re-renders only when one of the entity ids in the config changed identity
+(the tick keeps ages and the still fresh); perimeter rows are moved in the DOM
+only when out of order; the interval is armed only while connected.
 ASCII-clean source; zero dependencies; data-URL resource hosting.
 
 ## Version history (see project archive for hashes)
@@ -91,3 +103,17 @@ ASCII-clean source; zero dependencies; data-URL resource hosting.
   so the armed-away subtitle never ellipsizes). Built for a delivery-mode
   helper; the household later moved the glyph to the front-door card, so the
   key is dormant in the live YAML but the feature stays.
+- v1.6 — audit pass (ten findings, jsdom harness both directions, render
+  identity vs v1.5 on healthy states): armed/arming headers name unavailable
+  contacts ("N no signal", warn colour) instead of "All closed"; the
+  entry-delay / triggered cause is taken from Alarmo's `open_sensors`
+  attribute with a card-side latch as fallback, so shutting the door inside
+  the entry delay no longer drops the door's name and un-collapses the list
+  (closed cause row reads TRIPPED); Alarmo's `bypassed_sensors` attribute is
+  read; optimistic arming counts from the tap (no "0:00" flash) and a refused
+  arm/disarm call drops the optimistic hold at once; entity-identity render
+  gate on `set hass` + rows moved only when out of order + the still refreshing
+  on its own tick; `unknown` alarm state renders as unavailable; "camera idle"
+  only while the occupancy sensor is live; interval never re-armed on a
+  detached card; `noopener` on the Frigate link; version constant + dead code
+  cleaned. No visible change on a healthy card; no YAML change.

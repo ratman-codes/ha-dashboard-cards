@@ -1,4 +1,4 @@
-/* flat-treadmill-card v2.11 - custom Lovelace card for the main dashboard.
+/* flat-treadmill-card v2.13 - custom Lovelace card for the main dashboard.
    Slim treadmill controller for the Egofit M2 (via FTMS/HACS): live mph + status left,
    speed track (drag = native kph preview), play/stop, NOW/TODAY stats pill, daily
    distance progress bar vs input_number.treadmill_daily_mile_target, and a ~net kcal
@@ -9,6 +9,20 @@
    target; the ledger site link lives in the assumptions dialog).
    Built 2026-07-09 by Claude for Ratman (design + state machine archived in the
    "NAS / Smart Home" Claude project; sibling of flat-thermostat-card).
+   v2.12 (2026-09-06 source audit): speed track = primary button only, a cancelled
+   gesture aborts instead of committing, release re-renders immediately; progress bar
+   goes green when the PRINTED value reaches the printed target (0.1 mi / 1 min
+   precision); net kcal reads "--" when the hands helper is unavailable or unmapped
+   (was a silent Typing 8% default); re-render only when one of the card's own
+   entities changes; window pointer listeners removed on disconnect; redundant
+   double-dimming of the play/stop buttons removed; dialog grade select rounds a
+   non-integer configured grade. No YAML change.
+   v2.13 (2026-09-06 post-audit revisit): (1) time-to-target - while the belt is moving
+   and the daily target is not yet met, the progress readout gains a dim "~56m" /
+   "~1h 50m" estimate (distance mode: remaining miles at the current speed; time mode:
+   remaining time); hidden when idle, done, or the speed is unknown. (2) the stats pill
+   follows the belt: NOW while walking/starting, TODAY when idle or unavailable; a tap
+   still overrides until the next start/stop. No YAML change.
 
    HOW THIS WORKS / HOW TO MAINTAIN IT (read me first, future person):
    - This entire card is plain JavaScript encoded as base64 and stored as a
@@ -109,14 +123,45 @@ class FlatTreadmillCard extends HTMLElement {
     this._opt = null;
     this._optUntil = 0;
     this._scope = 'session';
+    this._autoActive = undefined;
     this._barMode = 'distance';
+    // entity ids the card reads, harvested from the config: a hass push that changes
+    // none of them (by state-object identity) is skipped in `set hass`.
+    this._ids = Object.values(this._config).filter(v => typeof v === 'string' && /^[a-z_]+\.[a-z0-9_]+$/.test(v));
     if (!this.shadowRoot) this._createDom();
+    this._lastStates = null;
+    if (this._hass) this._render();
+  }
+
+  connectedCallback() {
+    if (this._ptr && !this._ptrBound) {
+      window.addEventListener('pointermove', this._ptr.move);
+      window.addEventListener('pointerup', this._ptr.up);
+      window.addEventListener('pointercancel', this._ptr.cancel);
+      this._ptrBound = true;
+    }
+  }
+
+  disconnectedCallback() {
+    if (this._ptr && this._ptrBound) {
+      window.removeEventListener('pointermove', this._ptr.move);
+      window.removeEventListener('pointerup', this._ptr.up);
+      window.removeEventListener('pointercancel', this._ptr.cancel);
+      this._ptrBound = false;
+    }
+    if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
   }
 
   getCardSize() { return 2; }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
+    if (prev && this._lastStates && !this._drag && Date.now() >= this._optUntil && this._ids) {
+      const ps = this._lastStates, ns = hass.states;
+      if (this._ids.every(id => ps[id] === ns[id])) return;
+    }
+    this._lastStates = hass.states;
     this._render();
   }
 
@@ -357,8 +402,8 @@ class FlatTreadmillCard extends HTMLElement {
 
   /* ---------- helpers ---------- */
   _attrs() { const s = this._st(this._config.entity); return s ? s.attributes : {}; }
-  _min() { return this._attrs().min != null ? this._attrs().min : 1.0; }
-  _max() { return this._attrs().max != null ? this._attrs().max : 5.0; }
+  _min() { const a = this._attrs(); return a.min != null ? a.min : 1.0; }
+  _max() { const a = this._attrs(); return a.max != null ? a.max : 5.0; }
   _step() { return this._attrs().step || 0.1; }
   _pct(v) { return (v - this._min()) / (this._max() - this._min()) * 100; }
 
@@ -379,13 +424,18 @@ class FlatTreadmillCard extends HTMLElement {
     const stAvail = this._st(this._config.status_sensor);
     const unavailable = !stAvail || stAvail.state === 'unavailable' || stAvail.state === 'unknown';
     el.main.classList.toggle('unavailable', unavailable);
-    el.bstart.classList.toggle('unavailable', unavailable);
-    el.bstop.classList.toggle('unavailable', unavailable);
 
     const statusRaw = (this._st(this._config.status_sensor) || {}).state || '';
     const walking = statusRaw === 'manual_mode';
     const starting = statusRaw === 'pre_workout';
     const active = walking || starting;
+    // stats pill follows the belt: NOW while active, TODAY otherwise; a manual tap
+    // holds until the next start/stop (or first render / unavailable transition).
+    const autoActive = active && !unavailable;
+    if (autoActive !== this._autoActive) {
+      this._autoActive = autoActive;
+      this._scope = autoActive ? 'session' : 'today';
+    }
     const STATUS_TEXT = { idle: 'Idle', pre_workout: 'Starting', manual_mode: 'Walking', post_workout: 'Stopping', paused: 'Paused' };
     const statusText = STATUS_TEXT[statusRaw] ||
       (statusRaw ? statusRaw.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : '--');
@@ -443,11 +493,12 @@ class FlatTreadmillCard extends HTMLElement {
       const steps = this._num(this._config.steps_sensor);
       el.vsteps.textContent = steps != null ? Math.round(steps).toLocaleString() : '--';
       const netC = this._netConstant();
-      const ftk = this._num(this._config.distance_sensor);
-      el.vkcal.textContent = (netC != null && ftk != null) ? '\u2248' + Math.round((ftk / 5280) * netC) : '--';
+      el.vkcal.textContent = (netC != null && ft != null) ? '\u2248' + Math.round((ft / 5280) * netC) : '--';
     }
 
-    let dVal, sessVal, target, valTxt, tgtTxt;
+    let dVal, sessVal, target, valTxt, tgtTxt, shown;
+    // `shown` rounds a value to the precision the readout prints (whole minutes /
+    // tenths of a mile) so the bar goes green exactly when the text reads target.
     if (this._barMode === 'time') {
       dVal = this._num(this._config.daily_time_sensor);
       sessVal = this._num(this._config.time_sensor) || 0;
@@ -455,6 +506,7 @@ class FlatTreadmillCard extends HTMLElement {
       target = (tH != null && tH > 0) ? tH * 3600 : null;
       valTxt = dVal != null ? this._fmtHM(dVal) : '--';
       tgtTxt = target != null ? ' / ' + this._fmtHM(target) : '';
+      shown = (v) => Math.floor(v / 60);
     } else {
       dVal = dailyMi;
       const sessFt = this._num(this._config.distance_sensor);
@@ -463,6 +515,7 @@ class FlatTreadmillCard extends HTMLElement {
       if (target != null && target <= 0) target = null;
       valTxt = dVal != null ? dVal.toFixed(1) : '--';
       tgtTxt = target != null ? ' / ' + target.toFixed(1) + ' mi' : '';
+      shown = (v) => Math.round(v * 10);
     }
     if (target != null && dVal == null) {
       // daily meter unavailable/unknown: show target context but never a false zero
@@ -470,7 +523,7 @@ class FlatTreadmillCard extends HTMLElement {
       el.pprev.style.width = '0%'; el.psess.style.width = '0%';
       el.pval.textContent = '--'; el.ptarget.textContent = tgtTxt;
     } else if (target != null) {
-      const done = dVal >= target;
+      const done = shown(dVal) >= shown(target);
       const prev = Math.max(0, dVal - sessVal);
       const fPrev = Math.min(1, prev / target);
       const fAll = Math.min(1, dVal / target);
@@ -485,12 +538,30 @@ class FlatTreadmillCard extends HTMLElement {
         el.psess.style.width = ((fAll - fPrev) * 100) + '%';
       }
       el.pval.textContent = valTxt;
-      el.ptarget.textContent = tgtTxt;
+      el.ptarget.textContent = tgtTxt + (done ? '' : this._etaTxt(walking, speed, dVal, target));
     } else {
       el.pbar.classList.remove('done');
       el.pprev.style.width = '0%'; el.psess.style.width = '0%';
       el.pval.textContent = valTxt; el.ptarget.textContent = '';
     }
+  }
+
+  // "~56m" / "~1h 50m" to the active target at the current pace; '' when not walking,
+  // speed unknown/zero, or nothing left. Distance mode: miles left / mph; time mode:
+  // seconds left (independent of speed).
+  _etaTxt(walking, speed, dVal, target) {
+    if (!walking || dVal == null || target == null) return '';
+    let min;
+    if (this._barMode === 'time') {
+      min = (target - dVal) / 60;
+    } else {
+      if (speed == null || !(speed > 0)) return '';
+      min = (target - dVal) / speed * 60;
+    }
+    if (!(min > 0)) return '';
+    min = Math.ceil(min);
+    const h = Math.floor(min / 60), m = min % 60;
+    return ' \u00b7 ~' + (h ? h + 'h ' + String(m).padStart(2, '0') + 'm' : m + 'm');
   }
 
   _fmtHM(sec) {
@@ -503,8 +574,8 @@ class FlatTreadmillCard extends HTMLElement {
     const lb = this._num(this._config.weight_entity);
     if (lb == null) return null;
     const hs = this._st(this._config.hands_entity);
-    const disc = hs && HANDS_DISCOUNT[hs.state] != null ? HANDS_DISCOUNT[hs.state] : 0.08;
-    return netPerMile(lb, this._config.grade, disc, this._config.net_ref_speed_kph);
+    if (!hs || HANDS_DISCOUNT[hs.state] == null) return null;
+    return netPerMile(lb, this._config.grade, HANDS_DISCOUNT[hs.state], this._config.net_ref_speed_kph);
   }
 
   _dlgAdjWeight(d) {
@@ -519,7 +590,7 @@ class FlatTreadmillCard extends HTMLElement {
     this._dlgState = {
       w: w != null ? Math.round(w) : 150,
       hands: hs && HANDS_DISCOUNT[hs.state] != null ? hs.state : 'Typing at desk',
-      grade: this._config.grade,
+      grade: Math.round(parseFloat(this._config.grade)),
     };
     this._el.dgrade.value = String(this._dlgState.grade);
     this._el.overlay.classList.add('open');
@@ -578,6 +649,7 @@ class FlatTreadmillCard extends HTMLElement {
   _bindDrag() {
     const el = this._el;
     const down = (e) => {
+      if (e.button != null && e.button !== 0) return;
       if (!this._st(this._config.entity)) return;
       this._drag = true;
       this._opt = this._valFromX(e.clientX);
@@ -596,17 +668,26 @@ class FlatTreadmillCard extends HTMLElement {
       this._drag = false;
       el.bar.classList.remove('dragging');
       this._commit();
+      this._render();
+    };
+    const cancel = () => {
+      if (!this._drag) return;
+      this._drag = false;
+      this._opt = null;
+      el.bar.classList.remove('dragging');
+      this._render();
     };
     el.bar.addEventListener('pointerdown', down);
     el.handle.addEventListener('pointerdown', down);
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    this._ptr = { move, up, cancel };
+    if (this.isConnected) this.connectedCallback();
   }
 
   _commit() {
     if (!this._hass || this._opt == null) return;
     this._optUntil = Date.now() + 8000;
+    if (this._holdTimer) clearTimeout(this._holdTimer);
+    this._holdTimer = setTimeout(() => { this._holdTimer = null; this._render(); }, 8050);
     this._hass.callService('number', 'set_value', {
       entity_id: this._config.entity,
       value: Math.round(this._opt * 10) / 10,

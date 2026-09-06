@@ -2,8 +2,10 @@
 
 Whole-home music control card for a Music Assistant sync group, in the flat-* card
 family. Built + iterated to v1.21 in one session (2026-07-27); extended to v1.25
-(2026-07-28: shared lock helper, follow-the-leader automation, mute-wins policy)
-and v1.26 (2026-07-30: anchored volume-scaling mode).
+(2026-07-28: shared lock helper, follow-the-leader automation, mute-wins policy),
+v1.26 (2026-07-30: anchored volume-scaling mode), v1.27 (2026-09-06: source
+audit - availability honesty, mute-wins on the muted row, hygiene bundle) and
+v1.28 (2026-09-06: dropped-member flag).
 Deployed as a data-URL Lovelace resource via the Card Manager card; this repo copy is archive only.
 Full private notes (real entity ids, inventory, upstream-bug forensics) live in the
 "NAS / Smart Home" Claude project (`claude/flat-music-card-notes.md`).
@@ -50,6 +52,10 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
   scaling of unmuted members while any member is muted, since MA's server-side
   fan-out cannot be intercepted); balance apply is the deliberate exception -
   it explicitly un-mutes (volume_mute false) then restores baselines.
+  v1.27 extends mute-wins to the muted row itself: a muted room's slider (and
+  the group slider while the group is muted) is inert - tap the mute number
+  to un-mute first. Before v1.27 the drag went through, which audibly
+  un-muted the room while the UI kept showing it muted.
 - Anchored scaling mode (v1.26): equal slider RATIOS are not equal LOUDNESS -
   each device maps slider%->dB with its own taper, so linear ratio-lock only
   matches at the calibration point. Fix: mode_entity (an input_select,
@@ -70,6 +76,58 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
   that order - a variable template referencing a sibling that sorts later
   silently sees Undefined; make each variable template fully self-contained.
 
+## Source audit (v1.27, 2026-09-06)
+Nine findings on the v1.26 source, each reproduced in a jsdom harness that runs in
+both directions (bug-mode on v1.26, fixed-mode on v1.27) plus a render-identity
+check (healthy states render byte-identical markup; anchored lock-drag issues
+identical service calls). Shipped in one version:
+1. Availability honesty: when the active target (group, or the armed room) is
+   unavailable/unknown/missing, the header used to read "Idle" and prev/play/next
+   still fired at the dead entity (lived once: the MA integration stuck in a setup
+   error). Now "Unavailable" (amber) on the sub-line and source line; transport,
+   shuffle, stop and repeat dim and inert. A solo-playing room still wins.
+2. Muted-row slider inert (above). The group slider is also inert while the group
+   entity is unavailable (room sliders already were).
+3. Playlist picker: one failed get_library used to stick for the whole page session
+   (reopen never retried); now reopen retries, and every open refreshes the list in
+   the background behind the cached one (a quiet refresh that fails keeps the old
+   list).
+4. Root-level listeners are bound once - a second setConfig on a live element (the
+   dashboard editor preview) used to double every tap; setConfig also resets
+   picker/editor state.
+5. set hass re-renders only when one of the card's own entities changed identity
+   (ids harvested from the config at any depth); the 1 s tick repaints when an
+   optimistic hold expires so a miss is bounded.
+6. Baseline/anchor save: the saved draft is held until the helpers echo it (or 8 s),
+   instead of snapping back to the old value if an unrelated state push lands first.
+7. Lock chip dims (tap ignored) while lock_entity is unavailable, rather than
+   reading as plain off.
+8. Config shape: quoted numeric `balance: "70"` and `lock_default: "false"` honored;
+   slider drags start on the primary pointer button only; strip labels HTML-escaped;
+   dead code and a stale header intro cleaned.
+Harness gotchas for the next edit: jsdom needs `runScripts: "outside-only"` for an
+eval'd source to see HTMLElement; it has no PointerEvent (dispatch MouseEvents named
+pointerdown/move/up with button 0); stub getBoundingClientRect on sliders;
+MutationObserver records need takeRecords() before disconnect(); the render gate
+compares state-object identity, so fixtures must keep untouched entities' objects.
+
+## Dropped-member flag (v1.28)
+Motivation: a flaky bridge member (a 2.4 GHz ESP32 endpoint) falling out of the
+sync group mid-play used to leave no trace beyond a silently unticked row. Now a
+room that was in the group and leaves it (or goes unavailable) while the group
+keeps playing gets an amber "!" tick, amber name and a "dropped Nm" age on its row
+(the row's name column widens, its slider shortens), and the album art shows an
+amber corner dot so it is visible collapsed. Rules: shown only once the drop has
+lasted `drop_show_s` (30 s - short drops that self-heal stay silent); cleared when
+the room rejoins, when the group stops playing (a pause dissolves the group on
+MA 2.10, so an episode never outlives playback), or after `drop_max_s` (600 s); a
+room unticked from the card itself is never flagged (15 s grace); the first
+observation is never a drop. Limits (by design): card-side memory only - it sees
+drops that happen while a dashboard is open; it cannot tell a device dropout from
+an unjoin done in the MA app; it cannot say why. `drop_show_s: 0` disables it.
+Verified in jsdom (drop/heal/pause/pause-race/self-unjoin/unavailable/expiry/HA
+restart/first-observation scenarios) and rendered in headless Chromium at 430 px.
+
 ## YAML shape (placeholders)
     type: custom:flat-music-card
     group_entity: media_player.my_sync_group
@@ -88,6 +146,7 @@ Full private notes (real entity ids, inventory, upstream-bug forensics) live in 
     mode_entity: input_select.my_scaling_mode  # linear | anchored (v1.26)
     # per room (anchored mode): low_entity / high_entity input_numbers
     title / group_label / start_open / show_progress / lock_default
+    drop_show_s: 30 / drop_max_s: 600   # dropped-member flag (v1.28; 0 = off)
 
 ## Known upstream context
 Built against MA 2.9.9, whose sync groups are Sendspin-bridge based (AirPlay/
@@ -143,3 +202,9 @@ ef038953 balance apply un-mutes explicitly (stale-mute fix) · v1.25 64923
 
 2026-07-30: v1.26 78847 805dcf99 anchored scaling mode (mode toggle, 3x3
 anchor grid with column-armed capture, log-space piecewise lock-scaling).
+
+2026-09-06: v1.27 85752 8c395d58 source-audit pass (see "Source audit" above);
+healthy-state render byte-identical to v1.26.
+
+2026-09-06: v1.28 90004 3f9d956c dropped-member flag (amber row tag + art dot,
+30 s grace, cleared on rejoin / pause / 10 min; drop_show_s / drop_max_s).

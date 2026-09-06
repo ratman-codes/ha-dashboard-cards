@@ -1,4 +1,4 @@
-/* flat-sensor-stack-card v1.2 - custom Lovelace card for the main dashboard.
+/* flat-sensor-stack-card v1.4 - custom Lovelace card for the main dashboard.
    Collapsible stack of compact sensor history graphs (default: desk temperature,
    CO2, humidity - 24h). Row 0 is always visible; its top-right label is the
    expand/collapse toggle (hover-highlighted pill, no chevron). Hovering a graph
@@ -20,14 +20,17 @@
    - To READ it: copy everything after "base64," and run it through any base64
      decoder (or atob() in a browser console). You get this file.
    - To MODIFY it: edit the decoded JS (ASCII-only in strings; entities/escapes
-     for special chars), run node --check, re-encode to base64, then in
-     Settings > Dashboards > Resources replace this resource's URL with
+     for special chars), run node --check, re-encode to base64, then replace the
+     resource URL via the Card Manager card's row Update (or Settings > Dashboards
+     > Resources) with
      data:text/javascript;name=flat-sensor-stack-card;base64,<new blob>. Hard-refresh.
    - Used from the dashboard as:  type: custom:flat-sensor-stack-card
      (that single line is the whole card config - the desk sensor entity ids,
      names, colors and thresholds are defaults baked in below; override with:
      hours: 24, rows: [{entity, name, color, decimals, thresholds: [{value,color},...]}]
-     - row 0 is the always-visible title row.)
+     - row 0 is the always-visible title row. hours is coerced to a positive
+     integer (quoted / fractional values accepted); the default row labels say
+     "<hours>h".)
    - History arrives over the websocket (history/history_during_period,
      hourly-averaged buckets like the native sensor card's detail:1), refreshed
      every 5 minutes; the last point is pinned to the live state.
@@ -35,7 +38,25 @@
      uom 16px, line stroke 2, fill opacity .10, graph top headroom so curves
      stay below the reading.
    - v1.2: more top headroom (26px); hover readout changed from swapping the
-     reading to a floating value+time pill above the scrub dot (owner choice). */
+     reading to a floating value+time pill above the scrub dot (owner choice).
+   - v1.3 (2026-09-06 audit): the line colour (thresholds) and the curve's
+     live-pinned end point now follow every state change instead of waiting for
+     the 5-minute history refresh; an unavailable/unknown threshold row paints
+     neutral grey, never the lowest threshold colour; the scrub dot sits ON the
+     smoothed curve (the midpoint-quadratic path passes |d2|/8 inside each data
+     point - the dot used to float above sharp peaks); hours coerced (a quoted
+     "12" used to collapse history to two points, 12.5 threw every refresh);
+     rows given as a bare string falls back to the defaults; a second setConfig
+     (card editor) re-renders, refetches and collapses the stack; the refresh
+     timer only starts while connected; a slow history response can no longer
+     overwrite a newer one; dead row-0 press guard removed.
+   - v1.4 (2026-09-06): threshold rows colour the line BY HEIGHT - a vertical
+     SVG gradient with hard stops at each threshold's y position, so the curve
+     is green where the value was green and red where it was red, instead of
+     the whole 24h line wearing the colour of the current reading. Rows without
+     thresholds are unchanged. An unavailable row keeps its history colours and
+     relies on the 40% dim (the v1.3 neutral-grey line only applied to the
+     current-value scheme). */
 
 const DEF_ROWS = [
   { entity: 'sensor.living_room_desk_meter_pro_co2_b98a_temperature',
@@ -53,24 +74,42 @@ class FlatSensorStackCard extends HTMLElement {
   static getStubConfig() { return {}; }
 
   setConfig(config) {
-    this._config = Object.assign({ hours: 24 }, config);
-    this._rows = (config.rows && config.rows.length ? config.rows : DEF_ROWS)
-      .map(r => Object.assign({}, r));
+    config = config || {};
+    let hours = parseInt(config.hours, 10);
+    if (!(hours > 0)) hours = 24;
+    this._config = Object.assign({}, config, { hours });
+    const custom = Array.isArray(config.rows) && config.rows.length;
+    this._rows = (custom ? config.rows : DEF_ROWS)
+      .map(r => Object.assign({}, r, custom ? {} : { name: r.name.replace('24h', hours + 'h') }));
     this._open = false;
-    this._hist = {};        // entity -> [{t, v}]
+    this._hist = {};        // entity -> [{t, v, x, y, cx, cy}] (drawable)
+    this._raw = {};         // entity -> {pts, t0, t1} (hourly buckets before the live pin)
     if (!this.shadowRoot) this._createDom();
     else this._buildRows();
+    this._el.kids.style.maxHeight = '0px';
+    if (this._hass) { this._renderStates(); this._fetchHistory(); }
   }
 
   getCardSize() { return 2; }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
-    if (!this._fetchTimer) {
+    if (this.isConnected && !this._fetchTimer) {
       this._fetchHistory();
       this._fetchTimer = setInterval(() => this._fetchHistory(), REFRESH_MS);
     }
     this._renderStates();
+    // A changed row re-pins its live end point and re-evaluates its colour now,
+    // instead of waiting for the next 5-minute history refresh.
+    if (prev && this._rowEls) {
+      this._rows.forEach((r, i) => {
+        const raw = this._raw[r.entity];
+        if (!raw || prev.states[r.entity] === hass.states[r.entity]) return;
+        this._hist[r.entity] = this._finish(raw, r);
+        this._drawGraph(i, r, this._hist[r.entity]);
+      });
+    }
   }
 
   disconnectedCallback() {
@@ -170,10 +209,7 @@ class FlatSensorStackCard extends HTMLElement {
   _bindRow(els, r, i) {
     // press feedback (house style: dip + wash, no hover wash on large regions)
     const press = (el) => {
-      el.addEventListener('pointerdown', (e) => {
-        if (i === 0 && e.composedPath().includes(els.head)) return;
-        el.classList.add('pressed');
-      });
+      el.addEventListener('pointerdown', () => el.classList.add('pressed'));
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
         el.addEventListener(ev, () => el.classList.remove('pressed')));
     };
@@ -205,12 +241,12 @@ class FlatSensorStackCard extends HTMLElement {
       const uom = (s && s.attributes.unit_of_measurement) || '';
       els.tv.textContent = this._fmt(p.v, r) + (uom ? ' ' + uom : '');
       els.tt.textContent = this._fmtTime(p.t);
-      const dotY = ROW_H - GRAPH_H + p.y;
-      const px = p.x * rect.width;
+      const dotY = ROW_H - GRAPH_H + p.cy;
+      const px = p.cx * rect.width;
       els.tip.style.left = Math.max(60, Math.min(rect.width - 60, px)) + 'px';
       els.tip.style.top = Math.max(6, dotY - 32) + 'px';
       els.tip.style.visibility = 'visible';
-      els.dot.style.left = (p.x * 100) + '%';
+      els.dot.style.left = (p.cx * 100) + '%';
       els.dot.style.top = dotY + 'px';
       els.dot.style.visibility = 'visible';
     });
@@ -251,19 +287,14 @@ class FlatSensorStackCard extends HTMLElement {
     return h + ':' + String(m).padStart(2, '0') + ' ' + ap;
   }
   _color(r) {
-    if (r.thresholds && r.thresholds.length) {
-      const s = this._hass && this._hass.states[r.entity];
-      const v = s ? parseFloat(s.state) : NaN;
-      let c = r.thresholds[0].color;
-      if (!isNaN(v)) for (const t of r.thresholds) { if (v >= t.value) c = t.color; }
-      return c;
-    }
+    // rows without thresholds; threshold rows paint via _gradient()
     return r.color || '#ff9800';
   }
 
   /* ---------- history ---------- */
   async _fetchHistory() {
     if (!this._hass) return;
+    const seq = this._seq = (this._seq || 0) + 1;
     const hours = this._config.hours || 24;
     const end = new Date();
     const start = new Date(end.getTime() - hours * 3600e3);
@@ -288,16 +319,18 @@ class FlatSensorStackCard extends HTMLElement {
         });
       } catch (e2) { return; }
     }
-    if (!result) return;
+    if (!result || seq !== this._seq) return;  // a newer fetch already landed
     this._rows.forEach((r, i) => {
       const items = result[r.entity] || [];
-      const pts = this._bucket(items, start.getTime(), end.getTime(), hours, r);
+      const raw = { pts: this._bucket(items, start.getTime(), hours), t0: start.getTime(), t1: end.getTime() };
+      this._raw[r.entity] = raw;
+      const pts = this._finish(raw, r);
       this._hist[r.entity] = pts;
       this._drawGraph(i, r, pts);
     });
   }
 
-  _bucket(items, t0, t1, hours, r) {
+  _bucket(items, t0, hours) {
     // hourly-averaged buckets like the native sensor card (detail: 1)
     const sums = new Array(hours).fill(0), counts = new Array(hours).fill(0);
     for (const it of items) {
@@ -315,7 +348,13 @@ class FlatSensorStackCard extends HTMLElement {
       if (!counts[b]) continue;
       out.push({ t: t0 + (b + 0.5) * 3600e3, v: sums[b] / counts[b] });
     }
+    return out;
+  }
+
+  _finish(raw, r) {
     // pin last point to the live state so the curve ends "now"
+    const out = raw.pts.map(p => ({ t: p.t, v: p.v }));
+    const t0 = raw.t0, t1 = raw.t1;
     const s = this._hass && this._hass.states[r.entity];
     const live = s && s.state !== 'unavailable' && s.state !== 'unknown' ? parseFloat(s.state) : NaN;
     if (!isNaN(live)) out.push({ t: t1, v: live });
@@ -325,9 +364,20 @@ class FlatSensorStackCard extends HTMLElement {
     out.forEach(p => { if (p.v < lo) lo = p.v; if (p.v > hi) hi = p.v; });
     if (hi - lo < 1e-9) { hi += 0.5; lo -= 0.5; }
     const padT = 26, padB = 6; // headroom keeps curves below the reading (owner-tuned)
+    const yOf = (v) => padT + (1 - (v - lo) / (hi - lo)) * (GRAPH_H - padT - padB);
     out.forEach(p => {
       p.x = (p.t - t0) / (t1 - t0);
-      p.y = padT + (1 - (p.v - lo) / (hi - lo)) * (GRAPH_H - padT - padB);
+      p.y = yOf(p.v);
+    });
+    out.yOf = yOf;  // value -> graph y, reused for the threshold gradient
+    out.vOf = (y) => lo + (1 - (y - padT) / (GRAPH_H - padT - padB)) * (hi - lo);
+    // where the drawn (midpoint-quadratic) curve actually passes for each point:
+    // interior points sit at (P[k-1] + 6 P[k] + P[k+1]) / 8, ends are exact
+    const n = out.length;
+    out.forEach((p, k) => {
+      if (k === 0 || k === n - 1) { p.cx = p.x; p.cy = p.y; return; }
+      p.cx = (out[k - 1].x + 6 * p.x + out[k + 1].x) / 8;
+      p.cy = (out[k - 1].y + 6 * p.y + out[k + 1].y) / 8;
     });
     return out;
   }
@@ -348,11 +398,33 @@ class FlatSensorStackCard extends HTMLElement {
     }
     d += ' L ' + P[P.length - 1][0].toFixed(1) + ' ' + P[P.length - 1][1].toFixed(1);
     const fill = d + ' L ' + w + ' ' + GRAPH_H + ' L 0 ' + GRAPH_H + ' Z';
-    const c = this._color(r);
-    els.svg.innerHTML =
+    const grad = this._gradient(r, pts, 'ssg' + i);
+    const c = grad ? 'url(#ssg' + i + ')' : this._color(r);
+    els.svg.innerHTML = (grad || '') +
       '<path d="' + fill + '" fill="' + c + '" opacity="0.10"></path>' +
       '<path d="' + d + '" fill="none" stroke="' + c + '" stroke-width="2"' +
       ' stroke-linecap="round" stroke-linejoin="round"></path>';
+  }
+
+  // Threshold rows: paint by height. A vertical gradient in graph coordinates
+  // with a hard stop at each threshold's y, so every part of the curve shows
+  // the colour of its own value (the reading's colour is the row's number).
+  _gradient(r, pts, id) {
+    if (!(r.thresholds && r.thresholds.length) || !pts.yOf) return null;
+    const th = r.thresholds.slice().sort((a, b) => a.value - b.value);
+    const colorAt = (v) => { let c = th[0].color; for (const t of th) { if (v >= t.value) c = t.color; } return c; };
+    const stops = [[0, colorAt(pts.vOf(0))]];         // colour at the graph's top edge
+    for (let k = th.length - 1; k >= 0; k--) {
+      const o = pts.yOf(th[k].value) / GRAPH_H;
+      if (!(o > 0 && o < 1)) continue;             // threshold outside the drawn range
+      const below = k > 0 ? th[k - 1].color : th[0].color;
+      stops.push([o, th[k].color], [o, below]);
+    }
+    stops.push([1, colorAt(pts.vOf(GRAPH_H))]);      // colour at the bottom edge
+    return '<defs><linearGradient id="' + id + '" gradientUnits="userSpaceOnUse"' +
+      ' x1="0" y1="0" x2="0" y2="' + GRAPH_H + '">' +
+      stops.map(s => '<stop offset="' + (s[0] * 100).toFixed(2) + '%" stop-color="' + s[1] + '"></stop>').join('') +
+      '</linearGradient></defs>';
   }
 }
 

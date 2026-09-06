@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.1.1 = 107,150 B, FNV-1a dc8824c7; this repo copy = 107,363 B, FNV-1a 4f830560.
+Deployed v2.2 = 114,022 B, FNV-1a a4bfd39f; this repo copy = 114,235 B, FNV-1a 5e5e7b7a.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -14,7 +14,10 @@ thermostat's own thermometer.
 
 - **Hero (always visible):** indoor-vs-outdoor delta headline + OPEN WINDOWS chip
   (delta-only with hysteresis; a moisture gate was deliberately removed after
-  historical dew-point analysis — reasoning in the source header) over a 24h
+  historical dew-point analysis — reasoning in the source header; **v2.2:** hidden
+  while the thermostat reports `heating`, and replaced by an amber **CLOSE WINDOWS**
+  chip when a window contact is open and it is no longer cooler outside — own
+  hysteresis `chip.close_on` 0 / `close_off` 1) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
   Legend tap = spotlight; band-gated scrub with graph-anchored viewport-fixed
@@ -52,10 +55,10 @@ thermostat's own thermometer.
 
 ## Config
 `type: custom:flat-climate-card` — defaults cover the original household; override:
-`hours`, `indoor: [{entity, humidity, name, color}...]`, `outdoor: [...]`,
+`hours` (coerced to a positive integer; labels follow it), `indoor: [{entity, humidity, name, color}...]`, `outdoor: [...]`,
 `hall: {entity, humidity, name, color, in_average}` or `false`, `sun_cap`,
-`avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label}`,
-`moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]` or `false`,
+`avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label, close_on, close_off, close_label}`,
+`moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]`, a single id, or `false`,
 `hvac_entity` or `false`, `forecast_entity` (hourly-capable weather entity) or `false`,
 `band_smooth` (0 = raw envelopes).
 
@@ -76,9 +79,21 @@ thermostat's own thermometer.
   tile (same-length preceding window, cached, silently absent without data).
 - v2.1.1 (2026-08-31): 3m heatmap rows are Monday-aligned weeks labeled by
   start date; 6m/1y keep months.
+- v2.1.2 (2026-09-06): full source audit, nine items in one version — pop-out
+  lines/bands moved onto the same padded x-axis as the hairline, dots, shading
+  and labels (they were up to 8px apart at the chart edges); captured-% tile says
+  "window data unavailable" instead of a false 0% when the contact history did
+  not load; "Loading history…" state + the 24h tab re-renders when history
+  lands; `set hass` renders only when one of the card's own entities changed;
+  failed range clears the previous range's tiles; `hours`/`contacts` hardening;
+  re-`setConfig` cleanup; listener/subscription hygiene; header refresh.
+- v2.2 (2026-09-06): chip hidden while heating; amber CLOSE WINDOWS chip
+  (contact open + no longer cooler outside, own hysteresis).
 
 ## Verification
-Headless Chromium harness: stubbed hass (raw history incl. a sparse reporter,
+jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1
+and fixed-mode against v2.1.2, an 11-state chip matrix for v2.2, and a render-identity
+comparison across tabs. Earlier headless Chromium harness: stubbed hass (raw history incl. a sparse reporter,
 synthetic statistics incl. a deliberately zero-poisoned row, contact/hvac history,
 forecast via subscription and service fallback); ~45 assertions across card + pop-out
 at 470px and 400px widths. Rebuildable from this description; no HA needed.

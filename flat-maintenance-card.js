@@ -1,4 +1,22 @@
-/* flat-maintenance-card v1.7
+/* flat-maintenance-card v1.8
+ *
+ * v1.8: AUDIT RELEASE (2026-09-06). (1) The widespread-outage banner names the
+ * platforms that are actually down and gives the Matter Server / OTBR /
+ * battery-reseat advice only when Matter devices are the majority - the watch
+ * list outgrew Matter when the YAML widened `platforms`. (2) LAST 24H history is
+ * fetched at load and refreshed every 5 min whether the card is open or
+ * collapsed, so the collapsed "24h: N outages" suffix is current instead of
+ * frozen at the last expand. (3) `blip_min_s` (default 90): unavailable spells
+ * shorter than this are dropped from the timeline and do not rename the header
+ * (a battery doorbell's one-minute poll timeouts); real outages (past
+ * debounce_minutes) are unaffected. (4) Header says "filters: no data" or
+ * "no battery data" instead of OK when nothing is readable (a header that fits
+ * 430px has no room for a "(1 no data)" suffix - the body row carries it); a
+ * failed history refresh keeps the last good lanes; a rejected statistics call
+ * reads "trend unavailable"; a negligible drain slope reads "holding" instead of
+ * a far-future date; list options accept a bare string and thresholds accept
+ * quoted numbers; open network-event member lists key on the event's start
+ * time; setConfig resets fold state.
  *
  * v1.7: RECHARGEABLE BATTERY FORECAST + WI-FI WATCH. A battery whose device also
  * carries a charge-state enum sensor (options include 'charging' - e.g. the
@@ -91,10 +109,11 @@
  *   battery_crit: 10        # red at/below this %
  *   filter_warn: 30         # amber at/below this %
  *   debounce_minutes: 15    # unavailable shorter than this = "settling", not an issue
- *   banner_threshold: 5     # this many down at once = radio banner, rows suppressed
+ *   banner_threshold: 5     # this many down at once = widespread-outage banner (body still lists each)
  *   history_hours: 24       # LAST 24H lanes window; 0 = no history section
  *   history_max_lanes: 6    # worst-first fold, then a tappable "+N more"
  *   history_event_window_s: 120  # drops within this many seconds = one network event
+ *   blip_min_s: 90          # unavailable spells shorter than this are ignored (timeline + header)
  *   forecast_days: 3        # rechargeable: alert when battery_warn is this close (days)
  *   forecast_window_days: 7 # rechargeable: statistics window for the drain fit
  *   wifi_warn: -70          # dBm; a watched Wi-Fi signal below this = amber row + alert
@@ -124,7 +143,11 @@
 (() => {
   "use strict";
 
-  const num = (v, d) => (typeof v === "number" && isFinite(v) ? v : d);
+  const num = (v, d) => {
+    if (typeof v === "string" && v.trim() !== "" && isFinite(Number(v))) v = Number(v);
+    return typeof v === "number" && isFinite(v) ? v : d;
+  };
+  const list = (v) => (Array.isArray(v) ? v : typeof v === "string" && v.trim() ? [v] : []);
   const esc = (s) =>
     String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -354,8 +377,8 @@
       this._cfg = {
         title: config.title || "Devices",
         auto: auto,
-        platforms: Array.isArray(config.platforms) && config.platforms.length ? config.platforms : ["matter"],
-        exclude: (Array.isArray(config.exclude) ? config.exclude : []).map((x) => String(x).toLowerCase()),
+        platforms: list(config.platforms).length ? list(config.platforms) : ["matter"],
+        exclude: list(config.exclude).map((x) => String(x).toLowerCase()),
         rename: config.rename && typeof config.rename === "object" ? config.rename : {},
         devices: config.devices || [],
         filters: config.filters || [],
@@ -367,6 +390,7 @@
         history_hours: num(config.history_hours, 24),
         history_max_lanes: num(config.history_max_lanes, 6),
         history_event_window_s: num(config.history_event_window_s, 120),
+        blip_min_s: num(config.blip_min_s, 90),
         forecast_days: num(config.forecast_days, 3),
         forecast_window_days: num(config.forecast_window_days, 7),
         wifi_warn: num(config.wifi_warn, -70)
@@ -376,13 +400,16 @@
       this._disc = null;
       this._hist = null;
       this._histAt = 0;
+      this._histError = false;
+      this._moreOpen = false;
+      this._evtOpen = {};
       this._fc = {};
       this._fcAt = 0;
       this._build();
       if (this._hass) {
         this._update();
         this._maybeFetchForecast(true);
-        if (this._open) this._maybeFetchHistory(true);
+        this._maybeFetchHistory(true);
       }
     }
 
@@ -392,7 +419,7 @@
       if (this._built) {
         this._update();
         if (first || Date.now() - this._fcAt > 3600000) this._maybeFetchForecast(false);
-        if (this._open && (first || Date.now() - this._histAt > 300000)) this._maybeFetchHistory(false);
+        if (first || Date.now() - this._histAt > 300000) this._maybeFetchHistory(false);
       }
     }
 
@@ -510,7 +537,7 @@
       if (!force && this._hist && Date.now() - this._histAt < 300000) return;
       if (typeof H.callWS !== "function") return;
       const targets = this._historyTargets();
-      if (!targets.length) { this._setHist({ lanes: [], events: [], outages: 0, more: 0, start: 0, end: 0 }); return; }
+      if (!targets.length) { this._setHist({ lanes: [], events: [], outages: 0, start: 0, end: 0 }); return; }
       const now = Date.now();
       const start = now - C.history_hours * 3600000;
       this._histPending = true;
@@ -531,8 +558,8 @@
         this._setHist(this._computeHistory(raw || {}, targets, start, now));
       }).catch(() => {
         this._histPending = false;
-        this._histError = true;
-        this._setHist(null);
+        this._histError = !this._hist; // a failed REFRESH keeps the last good lanes
+        this._setHist(this._hist);
       });
     }
 
@@ -556,7 +583,7 @@
     _computeHistory(raw, targets, start, now) {
       const C = this._cfg;
       const deb = C.debounce_minutes * 60000;
-      const MIN_MS = 30000; // micro-blips (integration reloads) are noise
+      const MIN_MS = Math.max(0, C.blip_min_s) * 1000; // spells shorter than blip_min_s are noise
       const byEnt = {};
       for (const t of targets) byEnt[t.ent] = t;
 
@@ -687,7 +714,7 @@
       }
       for (let k = 0; k < h.events.length; k++) {
         const ev = h.events[k];
-        const key = "e" + k;
+        const key = "e" + Math.round(ev.s / 1000);
         const dur = fmtDur2(ev.e - ev.s);
         out += '<div class="lane evt" data-evt="' + key + '">' +
           '<span class="lk">Network event <span class="dim">x' + ev.members.length + "</span></span>" +
@@ -752,7 +779,9 @@
         if (this._built) this._update();
       }).catch(() => {
         this._fcPending = false;
-        this._fc = {};
+        const fc = {};
+        for (const id of ids) fc[id] = { slope: null, hours: 0, err: true };
+        this._fc = fc;
         this._fcStamp++;
         this._sig = "";
         if (this._built) this._update();
@@ -847,12 +876,13 @@
               name: (dv && (dv.name_by_user || dv.name)) || reg.device_id,
               area: this._areaName(hass, dv && dv.area_id),
               ents: [],
+              plats: {},
               watched: false
             };
             byDevice[reg.device_id] = rec;
           }
           rec.ents.push(eid);
-          if (platforms[reg.platform]) rec.watched = true;
+          if (platforms[reg.platform]) { rec.watched = true; rec.plats[reg.platform] = true; }
         }
         for (const id in byDevice) {
           const rec = byDevice[id];
@@ -863,6 +893,7 @@
             name: Object.prototype.hasOwnProperty.call(C.rename, rec.name) ? C.rename[rec.name] : rec.name,
             area: rec.area,
             dev: id,
+            plats: Object.keys(rec.plats),
             ents: rec.ents
           });
         }
@@ -951,8 +982,8 @@
         conn.total++;
         if (allUnavail) {
           const age = now - newestFlip;
-          if (age < deb) conn.settling.push({ name: d.name, area: d.area, ent: tapEnt, dev: d.dev, age });
-          else conn.down.push({ name: d.name, area: d.area, ent: tapEnt, dev: d.dev, age });
+          if (age < deb) conn.settling.push({ name: d.name, area: d.area, ent: tapEnt, dev: d.dev, age, blip: age < C.blip_min_s * 1000 });
+          else conn.down.push({ name: d.name, area: d.area, ent: tapEnt, dev: d.dev, age, plats: d.plats || [] });
         } else {
           conn.up++;
         }
@@ -977,7 +1008,7 @@
           const f = this._fc[b.ent] || null;
           let slope = f && typeof f.slope === "number" ? f.slope : null;
           let daysTo = null, whenMs = null;
-          if (!charging && slope !== null && slope < 0 && v > C.battery_warn) {
+          if (!charging && slope !== null && slope < -0.05 && v > C.battery_warn) {
             daysTo = (v - C.battery_warn) / -slope;
             whenMs = now + daysTo * 86400000;
           }
@@ -985,7 +1016,7 @@
             name: b.name, area: b.area, ent: b.ent, dev: b.dev, v: v,
             crit: v <= C.battery_crit, low: v <= C.battery_warn,
             charging: charging, full: full, slope: slope, daysTo: daysTo, whenMs: whenMs,
-            pending: !charging && slope === null
+            pending: !charging && slope === null, err: !!(f && f.err)
           };
           bats.rech.push(r);
           if (!r.low && daysTo !== null && daysTo <= C.forecast_days) bats.forecast.push(r);
@@ -1008,8 +1039,8 @@
             conn.missing.push({ name: d.name, ent: d.entity });
           } else if (st.state === "unavailable") {
             const age = now - Date.parse(st.last_changed);
-            if (age < deb) conn.settling.push({ name: d.name, area: area, ent: d.entity, age });
-            else conn.down.push({ name: d.name, area: area, ent: d.entity, age });
+            if (age < deb) conn.settling.push({ name: d.name, area: area, ent: d.entity, age, blip: age < C.blip_min_s * 1000 });
+            else conn.down.push({ name: d.name, area: area, ent: d.entity, age, plats: [] });
           } else {
             conn.up++;
           }
@@ -1064,13 +1095,13 @@
         m.banner, m.issues,
         m.conn.total, m.conn.up,
         m.conn.down.map((x) => [x.name, x.area, fmtDur(x.age)]),
-        m.conn.settling.map((x) => [x.name, x.area, fmtDur(x.age)]),
+        m.conn.settling.map((x) => [x.name, x.area, fmtDur(x.age), x.blip]),
         m.conn.missing.map((x) => x.name),
         m.bats.total, m.bats.lowest,
         m.bats.low.map((x) => [x.name, x.area, x.v, x.crit]),
         m.bats.nodata.map((x) => x.name),
         this._fcStamp,
-        m.bats.rech.map((x) => [x.name, x.v, x.charging, x.full, x.pending, x.slope === null ? null : Math.round(x.slope * 100), x.daysTo === null ? null : Math.round(x.daysTo * 10)]),
+        m.bats.rech.map((x) => [x.name, x.v, x.charging, x.full, x.pending, x.err, x.slope === null ? null : Math.round(x.slope * 100), x.daysTo === null ? null : Math.round(x.daysTo * 10)]),
         m.wifi.weak.map((x) => [x.name, x.v]),
         m.filt.total, m.filt.lowest,
         m.filt.low.map((x) => [x.name, x.v]),
@@ -1081,16 +1112,32 @@
       this._render(m);
     }
 
+    _bannerInfo(m) {
+      // which platforms are down; Matter advice only when Matter is the majority
+      const counts = {};
+      let matter = 0;
+      for (const x of m.conn.down) {
+        const ps = x.plats && x.plats.length ? x.plats : ["other"];
+        for (const p of ps) counts[p] = (counts[p] || 0) + 1;
+        if (ps.indexOf("matter") !== -1) matter++;
+      }
+      const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+      const summary = names.map((p) => p + " x" + counts[p]).join(", ");
+      return { matter: matter * 2 > m.conn.down.length, summary: summary };
+    }
+
     _render(m) {
       const el = this._el;
       const conn = m.conn;
+      const quiet = conn.settling.filter((x) => !x.blip);
 
       el.card.classList.toggle("down", m.banner);
       el.card.classList.toggle("warn", !m.banner && m.issues > 0);
 
       if (m.banner) {
+        const bi = this._bannerInfo(m);
         el.s.textContent =
-          "Matter mesh trouble - " + conn.down.length + " of " + conn.total + " unreachable";
+          (bi.matter ? "Matter mesh trouble - " : "Widespread outage - ") + conn.down.length + " of " + conn.total + " unreachable";
       } else if (m.issues === 1 && m.bats.forecast.length === 1) {
         const r = m.bats.forecast[0];
         el.s.textContent = r.name + " battery " + r.v + "% - charge in " + this._fmtDays(r.daysTo);
@@ -1100,14 +1147,18 @@
         el.s.textContent =
           m.issues + (m.issues === 1 ? " issue" : " issues") +
           " - " + conn.up + " / " + conn.total + " reachable";
-      } else if (conn.settling.length === 1) {
+      } else if (quiet.length === 1) {
         el.s.textContent =
-          "All quiet - " + conn.up + " reachable - " + conn.settling[0].name + " settling";
-      } else if (conn.settling.length) {
+          "All quiet - " + conn.up + " reachable - " + quiet[0].name + " settling";
+      } else if (quiet.length) {
         el.s.textContent =
-          "All quiet - " + conn.up + " reachable - " + conn.settling.length + " settling";
+          "All quiet - " + conn.up + " reachable - " + quiet.length + " settling";
       } else {
-        el.s.textContent = "All quiet - " + conn.up + " reachable - batteries OK - filters OK";
+        const parts = ["All quiet", conn.up + " reachable"];
+        // (no "(N no data)" suffix: the quiet line is already at the 430px limit with a 58-device count)
+        parts.push(m.bats.total ? "batteries OK" : "no battery data");
+        if (this._cfg.filters.length) parts.push(m.filt.total ? "filters OK" : "filters: no data");
+        el.s.textContent = parts.join(" - ");
       }
 
       const h = this._hist;
@@ -1119,7 +1170,9 @@
       el.alerts.innerHTML = this._alertsHtml(m);
       el.sect.innerHTML = this._sectHtml(m);
       el.foot.innerHTML = m.banner
-        ? "Wait out the ~10 min reconnect storm before battery reseats - reseats during the storm fail."
+        ? (this._bannerInfo(m).matter
+          ? "Wait out the ~10 min reconnect storm before battery reseats - reseats during the storm fail."
+          : "Several integrations dropped together - check the network (router / DHCP / proxies) before touching devices.")
         : "Reachable is not proven alive - a sleepy remote can die silently; press a button to truly verify after Matter trouble." +
           (m.bats.rech.length ? " Rechargeable forecast = " + this._cfg.forecast_window_days + "-day drain fit; Wi-Fi rows appear only when weak." : "");
     }
@@ -1128,9 +1181,10 @@
       const alerts = [];
       if (m.banner) {
         const oldest = m.conn.down.length ? fmtDur(m.conn.down[0].age) : "";
+        const bi = this._bannerInfo(m);
         alerts.push(
           this._alert("red plain", ICON_ALERT,
-            "Widespread outage - check Matter Server / OTBR",
+            bi.matter ? "Widespread outage - check Matter Server / OTBR" : "Outage - " + esc(bi.summary),
             m.conn.down.length + " down - " + oldest, null)
         );
       } else {
@@ -1186,13 +1240,13 @@
       h += this._barRow(cls, this._kName(x), x.v, x.ent);
       let k, v;
       if (x.slope === null) {
-        k = "rechargeable"; v = x.full ? "charged" : '<span class="dim">trend pending</span>';
+        k = "rechargeable"; v = x.full ? "charged" : '<span class="dim">' + (x.err ? "trend unavailable" : "trend pending") + "</span>";
       } else {
         const perDay = Math.abs(x.slope) < 0.05 ? "0.0" : (x.slope > 0 ? "+" : "-") + Math.abs(x.slope).toFixed(1);
         k = "rechargeable - " + perDay + " %/day";
         if (x.low) v = "below " + C.battery_warn + "%";
         else if (x.daysTo === null) v = "holding";
-        else v = C.battery_warn + "% in " + this._fmtDays(x.daysTo).replace("~", "~").replace(" days", " d").replace(" day", " d") +
+        else v = C.battery_warn + "% in " + this._fmtDays(x.daysTo).replace(" days", " d").replace(" day", " d") +
           ' <span class="dim">- ' + esc(fmtDate(x.whenMs)) + "</span>";
       }
       h += this._row("sub" + (cls ? " " + cls : ""), k, v, x.ent);

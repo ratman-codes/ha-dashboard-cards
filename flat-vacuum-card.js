@@ -1,4 +1,31 @@
-/* flat-vacuum-card v2.9.2 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.10 - custom Lovelace card for the main dashboard.
+   v2.10 (2026-09-06, source audit): one visible fix + a no-visible-change
+   bundle. (1) ROBOT ERROR IS THREE-VALUED: an unavailable / unknown /
+   missing vacuum_error sensor is no longer reported as a robot error -
+   every HA restart and every Roborock cloud outage used to render
+   "\u26a0 blocked" in the header plus an amber "Robot: unavailable" (or
+   "Robot: undefined") issue row and hid the eligibility text; the
+   Unavailable header line already carries an outage. Bundle: (2) slider
+   pointermove/up listeners live on the track (pointer capture) instead
+   of window - nine window listeners per card instance were never
+   removed, leaking a whole card each time HA re-created it; (3) set hass
+   re-renders only when one of the card's own entities changed identity
+   (ids harvested from the config), a slider drag repaints only its
+   slider, and optimistic holds schedule their own repaint at expiry;
+   (4) elapsed / drying times round to whole minutes BEFORE splitting -
+   119.6 min printed "1h 60m"; (5) a failed history fetch no longer
+   stamps the 5-min throttle (opening the group retries at once, pushes
+   retry after 60 s) and keeps the last good rows under a "refresh
+   failed" line; (6) Config rows whose entity is unavailable dim and go
+   inert instead of firing services that fail (~30 s after a restart);
+   (7) a second setConfig (card editor) rebuilds the DOM so controls
+   follow the new config; (8) long-press / press feedback on the primary
+   button only, header text not selectable during the hold; (9) "cleaned
+   N days ago" clamped at 0 against clock skew; (10) the profile popup
+   hides smart_mode like the Config dropdown; dropdown menu + sticky tip
+   close on a tap anywhere on the page; map dialog title keeps the
+   "Cleaning" word; dead CSS, duplicate header line, stale comments and
+   the four identical PRETTY maps cleaned up. No YAML change.
    v2.9.2 (2026-09-05, run-7 audit): "Detaching mops" added to the dock-activity
    map - the robot reports detaching_the_mop for ~8 s at the start of a
    two-sweep run (pads dropped at the dock for the vacuum pass; run 7:
@@ -107,7 +134,6 @@
    Nothing here changes any HA entity; new YAML keys all have baked
    defaults: dirty_tank_sensor, clean_tank_sensor, cleaning_time_sensor,
    dust_empty_switch, mop_wash_switch.
-   v2.7rev4 (2026-08-27): HISTORY FIX - the begin/end pairing window in
    v2.7rev4 (2026-08-27): HISTORY FIX - the begin/end pairing window in
    _parseHist widens 6h -> 12h. An away run with a mid-run recharge stall
    ran 6h15m wall clock (2026-08-27: leave 15:05 -> stall 17:08-19:35 ->
@@ -279,13 +305,15 @@
      hard max 30 is COUPLED to the automation's window_open +30min offset.
    - HA-side dependencies (labeled "Vacuum Auto" except the presence sensor,
      "Household Presence" - SHARED, not vacuum teardown): the auto-clean
-     automation, the maintenance notify automation, + 7 helpers. */
+     automation, the profile-restore automation, the maintenance notify
+     automation, + 14 helpers (labeled vacuum_auto). */
 
 const ACCENT = '#00bcd4';
 const ACCENT_TEXT = '#4dd0e1';
 const GREEN = '#4caf50';
 const AMBER = '#ffc107';
 const GREY = '#9e9e9e';
+const PRETTY = { max_plus: 'max+', deep_plus: 'deep+' };
 
 class FlatVacuumCard extends HTMLElement {
   static getStubConfig() { return {}; }
@@ -349,25 +377,87 @@ class FlatVacuumCard extends HTMLElement {
       history_days: 14,
     }, config);
     this._open = false;
-    this._grp = null;          // 'auto' | 'maint' | 'conf' | null (accordion)
+    this._grp = null;          // 'auto' | 'maint' | 'conf' | 'hist' | null (accordion)
     this._dragKey = null;
     this._opt = {};            // optimistic values by key
     this._optUntil = 0;
-    if (!this.shadowRoot) this._createDom();
+    this._menuKey = null; this._profDlg = null; this._mapOpen = false;
+    this._subHtml = null; this._ttlHtml = null;
+    this._ents = null;         // harvested entity ids (render gate)
+    /* v2.10: a second setConfig (card editor) rebuilds the DOM so every
+       control follows the new config */
+    this._createDom();
+    if (this._runs !== undefined) this._renderHist();
+    if (this._hass) this._render();
   }
 
   getCardSize() { return 3; }
+
+  connectedCallback() {
+    /* v2.10: a tap anywhere outside the card closes an open dropdown or a
+       sticky tooltip; registered here and removed on disconnect */
+    if (!this._docDown) this._docDown = (e) => {
+      if (!this._menuKey && !this._tipSticky) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (path.indexOf(this) >= 0) return;
+      if (this._closeMenu) this._closeMenu();
+      if (this._tipHide) this._tipHide();
+    };
+    document.addEventListener('pointerdown', this._docDown);
+  }
 
   disconnectedCallback() {
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
     if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }
     if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = null; }
+    if (this._optTimer) { clearTimeout(this._optTimer); this._optTimer = null; }
+    if (this._docDown) document.removeEventListener('pointerdown', this._docDown);
+  }
+
+  /* optimistic hold (8 s) with its own repaint at expiry - the render gate
+     no longer guarantees a push will land in time to clear it (v2.10) */
+  _hold() {
+    this._optUntil = Date.now() + 8e3;
+    if (this._optTimer) clearTimeout(this._optTimer);
+    this._optTimer = setTimeout(() => { this._optTimer = null; this._render(); }, 8100);
+  }
+  _unav(id) {
+    const s = this._st(id);
+    return !s || s.state === 'unavailable' || s.state === 'unknown';
+  }
+  /* whole minutes -> "1h 05m" / "45m" (rounded first: 119.6 is 2h 00m) */
+  _hm(min) {
+    const m = Math.round(min);
+    return m >= 60 ? Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm' : m + 'm';
   }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
-    if (!this._histAt && !this._histBusy) this._fetchHist();
+    if (!this._histAt && !this._histBusy
+      && (!this._histTriedAt || Date.now() - this._histTriedAt > 60000)) this._fetchHist();
+    /* v2.10 render gate: skip the render when none of the card's own
+       entities changed identity. Timed states (warning tick, arm chips,
+       starting lock, optimistic holds) render through their own timers. */
+    if (prev && prev.states && hass && hass.states && !this._entsChanged(prev.states, hass.states)) return;
     this._render();
+  }
+  _entIds() {
+    if (this._ents) return this._ents;
+    const ids = [];
+    const walk = (v) => {
+      if (typeof v === 'string') { if (/^[a-z_]+\.[a-z0-9_]+$/.test(v)) ids.push(v); }
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.keys(v).forEach((k) => walk(v[k]));
+    };
+    walk(this._config);
+    this._ents = ids;
+    return ids;
+  }
+  _entsChanged(a, b) {
+    const ids = this._entIds();
+    for (let i = 0; i < ids.length; i++) if (a[ids[i]] !== b[ids[i]]) return true;
+    return false;
   }
 
   _st(id) { return this._hass && this._hass.states[id]; }
@@ -406,7 +496,7 @@ class FlatVacuumCard extends HTMLElement {
 
   _createDom() {
     const c = this._config;
-    const root = this.attachShadow({ mode: 'open' });
+    const root = this.shadowRoot || this.attachShadow({ mode: 'open' });
     const maintRows = c.maint.map(([id, icon, name]) => `
           <div class="srow act" id="${id}">
             <ha-icon class="sic" id="${id}_ic" icon="${icon}"></ha-icon>
@@ -419,7 +509,8 @@ class FlatVacuumCard extends HTMLElement {
         :host { display: block; }
         ha-card { padding: 0; overflow: hidden; position: relative; }
         .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
-          cursor: pointer; transition: transform .12s ease, background .12s ease; }
+          cursor: pointer; transition: transform .12s ease, background .12s ease;
+          user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .hdr:hover { background: rgba(255,255,255,.04); }
         .grow:hover { background: rgba(255,255,255,.05); }
         .grow:active { transform: scale(.99); }
@@ -470,11 +561,11 @@ class FlatVacuumCard extends HTMLElement {
           color: rgba(158,158,158,.6); }
         .slbl { font-size: 13px; color: #ccc; white-space: nowrap; }
         .srow .rt { margin-left: auto; display: flex; align-items: center; gap: 7px; }
-        .row ha-icon.info, ha-icon.info { --mdc-icon-size: 12px; width: 12px; height: 12px;
+        ha-icon.info { --mdc-icon-size: 12px; width: 12px; height: 12px;
           display: flex; align-items: center; justify-content: center; line-height: 0;
           flex: none; color: rgba(158,158,158,.45) !important; cursor: pointer;
           margin-left: -2px; }
-        .row ha-icon.info.on, ha-icon.info.on { color: ${ACCENT_TEXT} !important; }
+        ha-icon.info.on { color: ${ACCENT_TEXT} !important; }
         .tip { position: absolute; background: rgba(0,0,0,.88); border-radius: 6px;
           padding: 5px 10px; font-size: 11.5px; color: #e8e8e8; z-index: 5;
           max-width: 260px; line-height: 1.4; pointer-events: none; }
@@ -917,7 +1008,10 @@ class FlatVacuumCard extends HTMLElement {
 
   /* ---------- interactions ---------- */
   _press(node, cls) {
-    node.addEventListener('pointerdown', () => node.classList.add(cls || 'pressed'));
+    node.addEventListener('pointerdown', (e) => {
+      if (e.button != null && e.button !== 0) return;
+      node.classList.add(cls || 'pressed');
+    });
     ['pointerup','pointercancel','pointerleave'].forEach(ev =>
       node.addEventListener(ev, () => node.classList.remove(cls || 'pressed')));
   }
@@ -944,8 +1038,9 @@ class FlatVacuumCard extends HTMLElement {
     /* header: click toggles body, long-press = vacuum more-info */
     this._press(el.hdr);
     let timer = null; this._lp = false;
-    el.hdr.addEventListener('pointerdown', () => {
+    el.hdr.addEventListener('pointerdown', (e) => {
       this._lp = false;
+      if (e.button != null && e.button !== 0) return;
       timer = setTimeout(() => { this._lp = true; this._moreInfo(c.vacuum); }, 550);
     });
     ['pointerup','pointercancel','pointerleave'].forEach(ev =>
@@ -1065,10 +1160,11 @@ class FlatVacuumCard extends HTMLElement {
       sw.addEventListener('pointerdown', (e) => e.stopPropagation());
       sw.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (this._unav(entity)) return;   /* v2.10: inert while unavailable */
         const s = this._st(entity);
         const on = this._optv(key, s ? s.state : 'off') === 'on';
         this._opt[key] = on ? 'off' : 'on';
-        this._optUntil = Date.now() + 8000;
+        this._hold();
         this._render();
         this._svc(domain, on ? 'turn_off' : 'turn_on', { entity_id: entity });
       });
@@ -1088,7 +1184,7 @@ class FlatVacuumCard extends HTMLElement {
         Math.max(a.min != null ? a.min : 0, cur + d * (a.step || 1)));
       if (v === cur || isNaN(v)) return;
       this._opt.days = v;
-      this._optUntil = Date.now() + 8000;
+      this._hold();
       this._render();
       this._svc('input_number', 'set_value', { entity_id: c.min_days_entity, value: v });
     };
@@ -1117,7 +1213,7 @@ class FlatVacuumCard extends HTMLElement {
       sp.addEventListener('click', () => {
         const m = sp.dataset.m;
         this._opt.mode = m;
-        this._optUntil = Date.now() + 8000;
+        this._hold();
         this._render();
         this._svc('input_select', 'select_option', { entity_id: c.notify_mode_entity, option: m });
       });
@@ -1159,7 +1255,7 @@ class FlatVacuumCard extends HTMLElement {
           d.addEventListener('click', (ev) => {
             ev.stopPropagation();
             this._opt[key] = o;
-            this._optUntil = Date.now() + 8000;
+            this._hold();
             closeMenu();
             this._render();
             spec.set(o);
@@ -1204,10 +1300,10 @@ class FlatVacuumCard extends HTMLElement {
       node.addEventListener('click', (e) => {
         e.stopPropagation();
         const s = this._st(entity);
-        if (!s) return;
+        if (!s || this._unav(entity)) return;
         const on = this._optv(key, s.state) === 'on';
         this._opt[key] = on ? 'off' : 'on';
-        this._optUntil = Date.now() + 8000;
+        this._hold();
         this._render();
         this._svc('switch', on ? 'turn_off' : 'turn_on', { entity_id: entity });
       });
@@ -1220,7 +1316,6 @@ class FlatVacuumCard extends HTMLElement {
       set: (o) => this._svc('vacuum', 'set_fan_speed', { entity_id: c.vacuum, fan_speed: o }),
     });
     /* profile editor popup (away / default) */
-    const PRETTY = { max_plus: 'max+', deep_plus: 'deep+' };
     const pv = (s) => PRETTY[s] || s;
     const PV_SETTINGS = [
       { key: 'suction', node: el.pv_suct, away: c.suction_away_entity, def: c.suction_default_entity },
@@ -1233,7 +1328,7 @@ class FlatVacuumCard extends HTMLElement {
       PV_SETTINGS.forEach((s) => {
         const ent = st.kind === 'away' ? s.away : s.def;
         const opts = ((((this._st(ent) || {}).attributes || {}).options) || [])
-          .filter((o) => o !== 'deep');   /* device rejects route 301 (v2.8) */
+          .filter((o) => HIDDEN_OPTS.indexOf(o) < 0);   /* same filter as the Config dropdown (v2.10) */
         s.node.innerHTML = '';
         opts.forEach((o) => {
           const d = document.createElement('div');
@@ -1414,11 +1509,13 @@ class FlatVacuumCard extends HTMLElement {
       this._tipIcon = icon;
     };
     const tipHide = () => {
+      this._tipSticky = false;
       el.tip.style.display = 'none';
       if (this._tipIcon) this._tipIcon.classList.remove('on');
       this._tipIcon = null;
       this._tipSticky = false;
     };
+    this._tipHide = tipHide;
     Object.keys(TIPS).forEach((id) => {
       const icon = el[id];
       icon.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1453,33 +1550,37 @@ class FlatVacuumCard extends HTMLElement {
       let f = Math.max(0, Math.min(1, (x - r.left) / r.width));
       return Math.min(mx, Math.max(mn, Math.round((mn + f * (mx - mn)) / st) * st));
     };
+    const repaint = () => { if (track._repaint) track._repaint(); else this._render(); };
     const down = (e) => {
-      if (!this._st(entity)) return;
+      if (this._unav(entity)) return;
+      if (e.button != null && e.button !== 0) return;
       this._dragKey = key;
       this._opt[key] = valFromX(e.clientX);
       track.setPointerCapture && track.setPointerCapture(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
-      this._render();
+      repaint();
     };
     const move = (e) => {
       if (this._dragKey !== key) return;
       track.classList.add('dragging');
       this._opt[key] = valFromX(e.clientX);
-      this._render();
+      repaint();
     };
     const up = () => {
       if (this._dragKey !== key) return;
       this._dragKey = null;
       track.classList.remove('dragging');
-      this._optUntil = Date.now() + 8000;
+      this._hold();
       if (this._opt[key] != null)
         this._svc(domain, 'set_value', { entity_id: entity, value: this._opt[key] });
     };
+    /* v2.10: pointer capture delivers move/up to the track itself - no
+       window listeners, nothing outlives the element */
     track.addEventListener('pointerdown', down);
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    track.addEventListener('pointermove', move);
+    track.addEventListener('pointerup', up);
+    track.addEventListener('pointercancel', up);
   }
 
   _bindEdit(lbl, inp, track, key, entity, parse) {
@@ -1510,7 +1611,7 @@ class FlatVacuumCard extends HTMLElement {
         if (a.max != null) v = Math.min(a.max, v);
         v = Math.round(v * 100) / 100;
         this._opt[key] = v;
-        this._optUntil = Date.now() + 8000;
+        this._hold();
         this._svc('input_number', 'set_value', { entity_id: entity, value: v });
       }
       close();
@@ -1544,6 +1645,7 @@ class FlatVacuumCard extends HTMLElement {
     } else {
       valEl.textContent = '--';
     }
+    track._repaint = () => this._renderSlider(track, valEl, key, entity, fmt, softMax);
   }
 
   /* ---------- cleaning history (websocket fetch, cached 5 min) ---------- */
@@ -1565,12 +1667,16 @@ class FlatVacuumCard extends HTMLElement {
     }).then((res) => {
       this._histBusy = false;
       this._histAt = Date.now();
+      this._histErr = false;
       this._runs = this._parseHist(res || {});
       this._renderHist();
     }).catch(() => {
+      /* v2.10: no throttle stamp on failure - opening the group retries at
+         once, pushes retry after 60 s; the last good rows are kept */
       this._histBusy = false;
-      this._histAt = Date.now();
-      this._runs = null;
+      this._histTriedAt = Date.now();
+      this._histErr = true;
+      if (!this._runs) this._runs = null;
       this._renderHist();
     });
   }
@@ -1599,9 +1705,8 @@ class FlatVacuumCard extends HTMLElement {
       let beginT = null;
       begins.forEach((b) => {
         const bt = Date.parse(b.s);
-        if (!isNaN(bt) && bt <= endT + 5e3 && endT - bt < 12 * 3600e3 && (beginT == null || bt > beginT)) beginT = bt;
+        if (!isNaN(bt) && bt <= endT && endT - bt < 12 * 3600e3 && (beginT == null || bt > beginT)) beginT = bt;
       });
-      if (beginT != null && endT < beginT) beginT = null;
       let area = null;
       areas.forEach((a) => {
         const v = parseFloat(a.s);
@@ -1653,7 +1758,6 @@ class FlatVacuumCard extends HTMLElement {
       const m = Math.round((r.endT - r.beginT) / 60e3);
       return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
     };
-    const PRETTY_H = { max_plus: 'max+', deep_plus: 'deep+' };
     el.hlist.innerHTML = runs.slice(0, 4).map((r) => {
       const right = [dur(r), r.area != null ? Math.round(r.area) + ' m\u00b2' : '']
         .filter(Boolean).join(' \u00b7 ');
@@ -1661,13 +1765,15 @@ class FlatVacuumCard extends HTMLElement {
       let profLine = '';
       if (r.prof && r.prof.length > 2) {
         const away = r.prof.slice(0, 2) === 'A:';
-        const body = r.prof.slice(2).split('|').map((p) => PRETTY_H[p] || p).join(' \u00b7 ');
+        const body = r.prof.slice(2).split('|').map((p) => PRETTY[p] || p).join(' \u00b7 ');
         profLine = '<div class="hprof' + (away ? ' away' : '') + '">' + body + '</div>';
       }
       return '<div class="hrun"><div class="hl1"><span class="hday">' + dayLbl(r.endT) +
         '</span><span class="hmid">' + mid +
         '</span><span class="rt stat">' + right + '</span></div>' + profLine + '</div>';
     }).join('') || '<div class="hrun"><div class="hl1"><span class="hmid">no runs in the last 14 days</span></div></div>';
+    if (this._histErr) el.hlist.innerHTML +=
+      '<div class="hrun"><div class="hl1"><span class="hmid">refresh failed \u00b7 showing the last good history</span></div></div>';
     const cleaned = new Set(runs.map((r) => {
       const d = new Date(r.endT); d.setHours(0, 0, 0, 0); return d.getTime();
     }));
@@ -1692,10 +1798,15 @@ class FlatVacuumCard extends HTMLElement {
     const unavailable = vstate === 'unavailable' || vstate === 'unknown';
     const as = this._st(c.automation);
     const autoOn = this._optv('auto', as ? as.state : 'off') === 'on';
-    const errVac = (this._st(c.error_sensor) || {}).state !== 'none';
-    /* dormant-entity guard: the Edge 2 integration does not (currently)
-       expose a dock error sensor. Absent entity = no dock issues; if a
-       future integration update creates it, the row+token wake untouched. */
+    /* robot error is THREE-VALUED (v2.10): unavailable / unknown / missing is
+       not an error - every restart and cloud outage used to print
+       "blocked" + "Robot: unavailable"; the Unavailable line says enough */
+    const vacErrState = (this._st(c.error_sensor) || {}).state;
+    const errVac = vacErrState != null && vacErrState !== 'none'
+      && vacErrState !== 'unknown' && vacErrState !== 'unavailable';
+    /* dormant-entity guard (dock error sensor exists since 2026.9 / 7.1.1;
+       the guard stays for older or reloading integrations): absent entity =
+       no dock issue; unknown / unavailable = no claim either way */
     const dockSt = this._hass.states[c.dock_error_sensor]
       ? this._hass.states[c.dock_error_sensor].state : null;
     const errDock = dockSt != null && dockSt !== 'ok'
@@ -1714,9 +1825,7 @@ class FlatVacuumCard extends HTMLElement {
     const elStale = prog === 0 && elSt && vs && elSt.last_changed && vs.last_changed
       && Date.parse(elSt.last_changed) < Date.parse(vs.last_changed);
     const elMin = elStale ? null : this._num(c.cleaning_time_sensor);
-    const eTxt = elMin != null && elMin >= 1
-      ? ' \u00b7 ' + (elMin >= 60 ? Math.floor(elMin / 60) + 'h ' + String(Math.round(elMin % 60)).padStart(2, '0') + 'm'
-        : Math.round(elMin) + 'm') : '';
+    const eTxt = elMin != null && elMin >= 1 ? ' \u00b7 ' + this._hm(elMin) : '';
 
     /* warning period */
     const idleish = vstate === 'docked' || vstate === 'idle';
@@ -1781,7 +1890,7 @@ class FlatVacuumCard extends HTMLElement {
       if (lc && !isNaN(lc)) {
         const today = new Date(); today.setHours(0,0,0,0);
         const lcd = new Date(lc); lcd.setHours(0,0,0,0);
-        const d = Math.round((today - lcd) / 86400e3);
+        const d = Math.max(0, Math.round((today - lcd) / 86400e3));   /* clock skew (v2.10) */
         const x = this._num(c.min_days_entity);
         sub += ' \u00b7 cleaned ' + (d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago');
         if (!errVac && x != null) sub += ' \u00b7 ' + (d >= x ? 'eligible today'
@@ -1824,12 +1933,12 @@ class FlatVacuumCard extends HTMLElement {
 
     /* map dialog: keep title + image fresh while open */
     if (this._mapOpen) {
-      this._el.dtitle.textContent = 'Map \u00b7 ' + sub;
+      el.dtitle.textContent = 'Map \u00b7 ' + (titleState ? titleState + ' \u00b7 ' : '') + sub;
       const ms = this._st(c.map_entity);
       const pic = ms && ms.attributes.entity_picture;
       if (pic && pic !== this._mapPic) {
         this._mapPic = pic;
-        this._el.dimg.src = pic;
+        el.dimg.src = pic;
       }
     }
 
@@ -1859,10 +1968,8 @@ class FlatVacuumCard extends HTMLElement {
     el.atxt.style.color = away ? AMBER : '';
     el.aico.style.color = away ? AMBER : '';
 
-    /* maintenance group */
     /* maintenance group: issue rows first, then counters */
     const pretty = (s) => String(s).replace(/_/g, ' ');
-    const vacErrState = (this._st(c.error_sensor) || {}).state;
     const dockErrState = (this._st(c.dock_error_sensor) || {}).state;
     show(el.iss_vac, errVac);
     if (errVac) el.iss_vac_t.textContent = 'Robot: ' + pretty(vacErrState);
@@ -1918,15 +2025,26 @@ class FlatVacuumCard extends HTMLElement {
     el.msum.style.color = overdue > 0 || issueCt > 0 ? AMBER : '';
 
     /* config group */
+    /* v2.10: rows whose entity is unavailable dim + go inert (Config only;
+       the helpers' rows never go unavailable) */
+    el.rfan.classList.toggle('dim', unavailable);
+    el.rmopi.classList.toggle('dim', this._unav(c.mop_intensity_entity));
+    el.rmopm.classList.toggle('dim', this._unav(c.mop_mode_entity));
+    el.rempty.classList.toggle('dim', this._unav(c.empty_mode_entity));
+    el.rvol.classList.toggle('dim', this._unav(c.volume_entity));
+    el.rdnd.classList.toggle('dim', this._unav(c.dnd_entity));
+    el.rlock.classList.toggle('dim', this._unav(c.child_lock_entity));
+    el.rdry.classList.toggle('dim', !!this._st(c.drying_entity) && this._unav(c.drying_entity));
+    el.c_wash.classList.toggle('ro', this._unav(c.mop_wash_switch));
+    el.c_dust.classList.toggle('ro', this._unav(c.dust_empty_switch));
     const selTxt = (key, entity) => {
       const s = this._st(entity);
       return this._optv(key, s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null) || '--';
     };
-    const PRETTY_R = { max_plus: 'max+', deep_plus: 'deep+' };
     const pvr = (id) => {
       const s = this._st(id);
       const v = s && s.state !== 'unavailable' && s.state !== 'unknown' ? s.state : null;
-      return v ? (PRETTY_R[v] || v) : '--';
+      return v ? (PRETTY[v] || v) : '--';
     };
     el.c_sucta.textContent = pvr(c.suction_away_entity) + ' \u00b7 ' + pvr(c.mop_intensity_away_entity)
       + ' \u00b7 ' + pvr(c.mop_mode_away_entity) + ' \u203a';
@@ -1962,8 +2080,7 @@ class FlatVacuumCard extends HTMLElement {
     const dts = this._st(c.drying_time_entity);
     let dryMin = this._num(c.drying_time_entity);
     if (dryMin != null && dts && dts.attributes && dts.attributes.unit_of_measurement === 'h') dryMin *= 60;
-    const dryTxt = dryMin != null && dryMin >= 1
-      ? ' \u00b7 ' + (dryMin >= 60 ? Math.floor(dryMin / 60) + 'h ' + String(Math.round(dryMin % 60)).padStart(2, '0') + 'm' : Math.round(dryMin) + 'm') + ' left' : '';
+    const dryTxt = dryMin != null && dryMin >= 1 ? ' \u00b7 ' + this._hm(dryMin) + ' left' : '';
     if (drying === 'on') {
       el.drytxt.textContent = 'drying' + dryTxt;
       el.drytxt.style.color = ACCENT_TEXT;
@@ -1998,11 +2115,10 @@ class FlatVacuumCard extends HTMLElement {
       el.battxt.style.color = '';
       el.battic.style.color = '';
     }
-    const PRETTY_C = { max_plus: 'max+', deep_plus: 'deep+' };
     const fanNow = this._optv('fan', va.fan_speed);
-    el.csum.textContent = (fanNow ? (PRETTY_C[fanNow] || fanNow) : '--') +
-      ' \u00b7 ' + (PRETTY_C[selTxt('mopi', c.mop_intensity_entity)] || selTxt('mopi', c.mop_intensity_entity)) +
-      ' \u00b7 ' + (PRETTY_C[selTxt('mopm', c.mop_mode_entity)] || selTxt('mopm', c.mop_mode_entity));
+    el.csum.textContent = (fanNow ? (PRETTY[fanNow] || fanNow) : '--') +
+      ' \u00b7 ' + (PRETTY[selTxt('mopi', c.mop_intensity_entity)] || selTxt('mopi', c.mop_intensity_entity)) +
+      ' \u00b7 ' + (PRETTY[selTxt('mopm', c.mop_mode_entity)] || selTxt('mopm', c.mop_mode_entity));
   }
 }
 

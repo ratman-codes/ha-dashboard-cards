@@ -15,7 +15,7 @@ headers are ground truth. If an entry here ever disagrees with a header, trust t
 header.)*
 
 ## Contents
-- `flat-thermostat-card.js` — v2.12.1. Slim flat replica of the native HA thermostat
+- `flat-thermostat-card.js` — v2.12.3. Slim flat replica of the native HA thermostat
   dial: dual/single-handle temperature track, native-measured colors, mode strip,
   a detached eco-preset leaf button (green when on; track renders the
   entity-reported eco setpoints read-only, since the device rejects setpoint
@@ -70,7 +70,22 @@ header.)*
   presence_entity; pure flag, no behavior). The summary tiles sharpened too:
   the middle tile now shows the selected period's TOTAL runtime (avg per day
   stays one tap away in the period view), and the peak tile follows the
-  period selector instead of being pinned to the 14-day window.
+  period selector instead of being pinned to the 14-day window. v2.12.2 is a
+  source-audit bundle with no visible change on a healthy card: a failed
+  statistics fetch in the runtime panel retries after 60 s instead of on every
+  state push; an eco-leaf long-press that slid off no longer swallows the next
+  tap (both long-presses now ignore non-primary buttons); the card re-renders
+  only when one of its own entities changes (a 60 s tick runs while the panel
+  is open); the mode strip rebuilds when the mode list or config changes;
+  window pointer listeners are released when the card is removed; the ribbon
+  tooltip says "unavailable" rather than "off"; the records scatter's dots,
+  trend line and axis labels share one mapping; quoted numeric options are
+  coerced; an empty statistics id is named under the bars. v2.12.3: the
+  RECORDS scatter pairs the heating series with the day's outdoor LOW
+  (heating tracks the overnight low; cooling keeps the high — same entity),
+  and while the panel is open a mode / action / setpoint change refetches
+  today's history after a 20 s settle so the ribbon catches up in seconds
+  instead of on the 15-minute cadence.
   Used as `type: custom:flat-thermostat-card` with a climate entity + optional
   runtime_cooling/runtime_heating (daily meters),
   runtime_cooling_stats/runtime_heating_stats (long-term stats sources),
@@ -84,39 +99,74 @@ header.)*
   household-away binary sensor powering the eco-while-home warning).
   HA resource id:
   `a1bc4b7a12124ab38ded7859b5ed12bc`.
-- `flat-treadmill-card.js` — v2.11. Controller for an Egofit M2 walking pad via the
+- `flat-treadmill-card.js` — v2.13. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
-  (all entity ids are baked-in defaults). HA resource id: `698b5e9479724e12a978aec4cb7b17dc`.
-- `flat-weather-card.js` — v1.5.1. Merged weather card: station current conditions
+  (all entity ids are baked-in defaults). v2.12 (2026-09-06 source audit): speed
+  track primary-button only / cancel aborts / release re-renders, progress bar goes
+  green at the printed precision, net kcal reads `--` when the hands helper is
+  unavailable, entity-identity render gate, window listeners cleaned up on
+  disconnect. v2.13: time-to-target estimate on the progress readout while walking
+  ("~1h 12m" at the current pace); the stats pill follows the belt (NOW while
+  moving, TODAY when idle; a tap still overrides until the next start/stop).
+  HA resource id: `698b5e9479724e12a978aec4cb7b17dc`.
+- `flat-weather-card.js` — v1.6. Merged weather card: station current conditions
   header (incl. optional threshold-colored dew-point line for ventilation
   decisions), forecast-vs-actual chip with signed delta, 12h hourly
   temperature curve, 5-day strip, press feedback, station tap-throughs, and
   card-level auto-fallback to a backup station's entities whenever the primary
-  PWS reads unavailable (v1.5). All entity ids and URLs are card YAML config — the
+  PWS reads unavailable (v1.5). v1.6 (2026-09-06 source audit): the curve and
+  strip re-evaluate against the clock once a minute instead of freezing at the
+  last forecast push, forecast subscriptions restart when either source entity
+  returns, hour labels sit under their own curve points, today's cell survives
+  the source dropping the day's high after 3pm, calm wind prints no compass
+  point, stale forecast sections dim, plus pointer/render-gate/lifecycle
+  hygiene. All entity ids and URLs are card YAML config — the
   source is location-clean by design. Used as `type: custom:flat-weather-card`
   (see notes for the YAML shape). HA resource id: `9bb445a4ae6a4bdb984fa563e4897e2d`.
-- `flat-scoreboard-card.js` — v1.0. Leaderboard card for the permanent forecast
+- `flat-scoreboard-card.js` — v1.1. Leaderboard card for the permanent forecast
   accuracy lab: per-source average-error ranking with medal chips and scaled bars,
   today's calls with "busted" marking, yesterday's misses with blowup alerts, and
-  a long-term trend strip fed by HA's permanent statistics. Used as
+  a long-term trend strip fed by HA's permanent statistics. v1.1 (2026-09-06 source
+  audit): busted/orange marks decided on the rounded degrees the card prints; the
+  trend strip keeps its last good chart and says "trend unavailable" when a
+  statistics fetch fails (60 s retry) instead of pretending no data exists yet;
+  trend rows placed on a shared day axis; no-data rows show a dash rank; rows
+  rebuild only when a printed value changes. Used as
   `type: custom:flat-scoreboard-card` (sources configured in YAML). Resource
   identified by its `name=flat-scoreboard-card` label.
-- `flat-sensor-stack-card.js` — v1.2. Collapsible stack of compact sensor history
+- `flat-sensor-stack-card.js` — v1.4. Collapsible stack of compact sensor history
   graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
-  label toggles the rest. Used as `type: custom:flat-sensor-stack-card`.
+  label toggles the rest. v1.4 (2026-09-06): threshold rows paint the line BY
+  HEIGHT — a vertical SVG gradient with hard stops at each threshold's y, so the
+  curve is green where the value was green and red where it was red, rather than
+  the whole day wearing the current reading's colour. v1.3 (2026-09-06 source
+  audit): the curve's live end point follows every state change instead of the
+  5-minute history refresh; the scrub dot sits on the smoothed curve; `hours` coerced to a positive
+  integer (a quoted value used to collapse history to two points); re-setConfig
+  re-renders and refetches; refresh timer only while connected; slow history
+  responses can no longer overwrite newer ones. Used as
+  `type: custom:flat-sensor-stack-card` (see `notes/flat-sensor-stack-card-notes.md`).
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.9.2. Roborock control card (Qrevo Edge 2): status
+- `flat-vacuum-card.js` — v2.10. Roborock control card (Qrevo Edge 2): status
   header (state word on the title line while cleaning; mid-run pit-stop, recharge
   stall and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors;
   play arms an Away/Default picker that applies the profile for one run and starts),
   maintenance counters + dock issue rows (dock error, water tanks), dock config
   (empty mode, wash/empty actions, mop drying toggle), run history. Needs the
   HA 2026.9+ Roborock integration (python-roborock 7.1.1) for the dock entities;
-  rows sleep when their entity is absent. Used as `type: custom:flat-vacuum-card`
+  rows sleep when their entity is absent. v2.10 (2026-09-06 source audit): an
+  unavailable/unknown/missing robot-error sensor is no longer reported as a robot
+  error (no false "blocked" on restarts and cloud outages); entity-identity render
+  gate; slider listeners on the track instead of `window`; elapsed/drying times
+  round before splitting ("1h 60m" gone); a failed history fetch keeps the last
+  good rows and retries; unavailable Config rows dim and go inert; re-setConfig
+  rebuilds; primary-button-only long-press. Used as `type: custom:flat-vacuum-card`
   (see `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
-- `flat-cat-card.js` — v1.22. Consolidated cats card (pet-tech litter box + two
-  feeders + per-cat rows): header-zone expand/collapse with hover strip and
+- `flat-cat-card.js` — v1.25. Consolidated cats card (pet-tech litter box + two
+  feeders + per-cat rows showing MEASURED weight — the smoothed scale average
+  from permanent statistics, never the app-side profile number): header-zone
+  expand/collapse with hover strip and
   animated height (grid-rows technique), per-cat litter history panels (tap a cat
   row: visits-per-day bars with day filtering, recent-visit log with duration +
   scale weight, long-term weight trend from permanent statistics with a
@@ -139,22 +189,34 @@ header.)*
   read-only previews; one-tap Apply writes both feeders; Load-into-editor
   copies a preset into the draft for tweaking before saving),
   configurable event-snapshot camera tiles (camera_image: eat | visit | feed,
-  tap for live), amber alert strip (litter low, bin full, hopper empty, offline,
+  tap for live), amber alert strip (litter low, bin full, hopper empty,
+  device offline or unavailable — unknown is never rendered as good,
   frequent-use health flag), pulsing occupied dot. Child panels reset with
   their parents (closing More closes Settings; collapsing the card closes
   Settings + the plans popup; Escape/scrim also close it). All entities via
-  YAML config (cat list + entity prefixes).
+  YAML config (cat list + entity prefixes). v1.23/v1.24 = a full source
+  audit (availability honesty for missing/unavailable entities incl. the
+  Settings panel, sticky-error and partial-write fixes in the plans popup,
+  an entity-identity render gate, lifecycle/pointer hygiene; the audit
+  procedure is in the private project docs).
   Used as `type: custom:flat-cat-card` (see notes for the YAML shape).
   HA resource id: `6de3dc9ee5524b81a702ecbabae6e156`.
-- `flat-music-card.js` — v1.26. Whole-home music control card for Music Assistant
+- `flat-music-card.js` — v1.28. Whole-home music control card for Music Assistant
   sync groups: header mini-player with active-output retargeting, queue-transfer
   output switching, scrubber and transport controls, live favorites picker,
   per-room balance with ratio lock and a shared lock helper, mute-wins policy,
   PC-cast toggle chip, and switchable linear/anchored per-room volume-scaling
-  curves with an in-card anchor editor. All entities via YAML config. Used as
-  `type: custom:flat-music-card` (see notes for the YAML shape).
+  curves with an in-card anchor editor. All entities via YAML config. v1.27 is
+  a source-audit pass: an unavailable target reads "Unavailable" with inert
+  transport instead of "Idle", muted-row sliders are inert (mute-wins extended
+  to the row itself), picker retry/refresh, an entity-identity render gate,
+  save-hold and config-shape hygiene (the audit procedure is in the private
+  project docs). v1.28 flags a room that drops out of the sync group while
+  the group keeps playing (amber row tag + art-corner dot; 30 s grace,
+  cleared on rejoin / pause / 10 min). Used as `type: custom:flat-music-card`
+  (see notes for the YAML shape).
   HA resource id: `87772b46cd93458f86bb144df94f502c`.
-- `flat-security-card.js` — v1.5. Collapsible Alarmo security card: a one-line
+- `flat-security-card.js` — v1.6. Collapsible Alarmo security card: a one-line
   sentinel header (state-colored shield, flat-hero state word, open-sensor and
   person glyphs, and a slim countdown strip during exit/entry delays — visible
   even when collapsed) that expands to a camera-forward panel — entry-camera
@@ -168,10 +230,16 @@ header.)*
   surface pulses while triggered. Card chrome (background/border/radius) comes
   from the theme's card variables. v1.5 adds an optional `package` entity that
   shows an orange box glyph + age in the header's notable slot while on (a
-  package-waiting helper). All entities via YAML config. Used as
+  package-waiting helper). v1.6 (audit pass): armed/arming headers say
+  "N no signal" when a contact is unavailable instead of "All closed"; the
+  entry-delay/triggered cause comes from Alarmo's `open_sensors` attribute so
+  the tripped door keeps its name and its single row after being shut; Alarmo's
+  `bypassed_sensors` attribute is read; optimistic arming counts from the tap
+  and a refused service call drops the hold; re-render only when one of the
+  card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). Resource
   identified by its `name=flat-security-card` label.
-- `flat-climate-card.js` — v2.1.1. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.2. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -197,7 +265,13 @@ header.)*
   offered-vs-captured, muggy hours, and a "vs prior period" outdoor-mean
   comparison; on the seasonal tabs the heatmap rows become weeks (3m) or
   calendar months (6m/1y) — the seasonal fingerprint; hourly stats fetched
-  in chunks, empty cells until data accumulates. Zero HA-side entities. Default
+  in chunks, empty cells until data accumulates. v2.1.2 = full source audit
+  (pop-out x-axis unified so scrub dots/shading sit on the curves at the chart
+  edges; contact-history honesty on the captured tile; loading state + live 24h
+  re-render; entity-identity render gate; config hardening). v2.2: the OPEN
+  WINDOWS chip hides while the thermostat is heating, and an amber CLOSE
+  WINDOWS chip appears when a window contact is open and it is no longer
+  cooler outside (`chip.close_on/close_off/close_label`). Zero HA-side entities. Default
   entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
   and the pop-out keys (contacts/hvac_entity/forecast_entity/popout).
   Used as `type: custom:flat-climate-card`.
@@ -205,8 +279,8 @@ header.)*
   SANITIZED COPY NOTE: from v2.0.2 this repo file is NOT byte-identical to
   the deployed blob — the deployed default forecast entity id is
   location-bearing and is replaced here by a `weather.home` placeholder
-  (set `forecast_entity` in YAML). Deployed v2.1.1 = 107,150 B FNV-1a dc8824c7;
-  repo copy = 107,363 B FNV-1a 4f830560; sole difference is that one
+  (set `forecast_entity` in YAML). Deployed v2.2 = 114,022 B FNV-1a a4bfd39f;
+  repo copy = 114,235 B FNV-1a 5e5e7b7a; sole difference is that one
   constant + comment.
 - `flat-server-card.js` — v1.12. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
@@ -237,7 +311,7 @@ header.)*
   hygiene). All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.7. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.8. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
@@ -255,7 +329,13 @@ header.)*
   sub-line fitted from recorder statistics, a "low soon" alert a few days
   before the warn line, and a green bar while charging; a sibling Wi-Fi
   signal sensor surfaces as an amber Connectivity row only when weak) and Filters (purifier filter life, hidden until low;
-  no-data rows stay dim). AUTO-DISCOVERING: reads the frontend entity/device/area
+  no-data rows stay dim). v1.8 (audit release): the outage banner names the
+  platforms actually down and gives Matter-specific advice only when Matter is
+  the majority; the 24h history refreshes while collapsed so the header's outage
+  count stays true; `blip_min_s` (90) keeps sub-floor blips off the timeline and
+  out of the header while real outages are untouched; a failed refresh keeps the
+  last good lanes; bare-string list options and quoted thresholds are accepted.
+  AUTO-DISCOVERING: reads the frontend entity/device/area
   registries, so every device owned by the configured integrations (default:
   matter) and every battery-% sensor is watched with zero YAML upkeep — new
   pairings appear automatically; curation via `exclude` substrings and a `rename`
@@ -279,6 +359,27 @@ header.)*
   / media-source websocket calls. Used as `type: custom:flat-front-door-card`
   (see notes for the YAML shape). Resource identified by its
   `name=flat-front-door-card` label.
+- `flat-party-card.js` — v1.4.1. Party-mode control card that lives inside a
+  dashboard expander: five color swatches plus an inline hue/saturation wheel
+  (one tap paints every party-frozen light through a set-color script), motion
+  chips (Static / Pulse / Cycle / Chase driving an HA-side flip-book engine),
+  per-fixture Govee native-effect override rows whose chips are the live options
+  of an `input_select` helper — a pencil opens a popup editor over the light's
+  full `effect_list` catalog (search filter, N-of-M count, admin websocket save),
+  a party brightness track, per-room freeze pills and a Reset-to-schedule button.
+  State is read from the helpers only (the Govee integration's own state lags);
+  8 s optimistic holds; long-press opens more-info. v1.4 (2026-09-06 source
+  audit): the editor can no longer wipe a chip list when the light's catalog is
+  unreadable (Save disabled, existing chips kept; chips missing from today's
+  catalog shown dashed and preserved; a rejected save stays open with the error),
+  Reset only darkens the motion chip when no room is frozen, unknown helpers
+  render as no selection / `--`, slider tracks set touch-action, primary-button
+  taps only, re-render gated on the card's own entities, re-config rebuilds.
+  v1.4.1: no swatch shows as selected while motion is Off — after the 3 AM
+  kill or a full Reset nothing is painted, so nothing looks selected.
+  All entities are card YAML config with defaults for the party_mode helper set
+  (see the source header). Used as `type: custom:flat-party-card`. Resource
+  identified by its `name=flat-party-card` label.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -300,7 +401,8 @@ header.)*
   `notes/flat-music-card-notes.md`, `notes/vacuum-system-notes.md`,
   `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
   `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md`,
-  `notes/flat-maintenance-card-notes.md`, `notes/flat-front-door-card-notes.md` —
+  `notes/flat-maintenance-card-notes.md`, `notes/flat-front-door-card-notes.md`,
+  `notes/flat-sensor-stack-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 

@@ -1,4 +1,4 @@
-/* flat-thermostat-card v2.12.1 - custom Lovelace card for the main dashboard.
+/* flat-thermostat-card v2.12.3 - custom Lovelace card for the main dashboard.
    Slim dual-handle flat thermostat: current temp left, dual/single-handle
    temperature track right, native-style mode strip below (with optional
    daily-runtime chip at its left), detached eco (leaf) toggle beside the
@@ -7,17 +7,63 @@
    by Claude for Ratman (design spec archived in the "NAS / Smart Home"
    Claude project, doc claude/ha-dashboard-notes.md).
 
+   v2.12.3 (2026-09-06, post-audit revisit; owner took 2 of 3 ideas):
+   - RECORDS scatter pairs the HEATING series with the day's outdoor LOW
+     (statistics `min` of outdoor_high_stats) instead of the high - heating
+     tracks the overnight low, not the afternoon high; labels read "outdoor
+     low" / "low N". Cooling unchanged (max / "high"). The config key keeps
+     its name; the same entity serves both.
+   - RIBBON CATCH-UP: while the runtime panel is open, a change of the
+     thermostat's mode, hvac_action or setpoint(s) schedules a refetch of
+     TODAY's history after a 20 s settle (dial-turn bursts collapse to one),
+     so the ran-during ribbon reflects a change in seconds instead of on the
+     15-minute cadence. current_temperature changes do not trigger it; the
+     default-layer ribbon and the TODAY view (today only) both refresh;
+     nothing fires while the panel is closed (opening refetches anyway).
+
+   v2.12.2 (2026-09-06 source audit, no visible change on a healthy card):
+   - runtime panel: a failed statistics fetch now retries after 60s instead
+     of on every HA state push (it re-asked 3 WS calls per push while the
+     recorder was refusing queries);
+   - eco leaf: the long-press flag resets on pointerdown (a long-press whose
+     finger slid off used to swallow the NEXT short tap); both long-presses
+     ignore non-primary buttons; leaf + strip carry user-select/touch-callout
+     none;
+   - set hass only re-renders when one of the card's configured entities
+     changed identity (200 unrelated pushes used to mean 200 full renders,
+     ~21 DOM mutations each); a 60s tick runs only while the panel is open
+     (15-min refetch, now-marker), and optimistic holds schedule their own
+     expiry render;
+   - mode strip rebuilds when the entity's hvac_modes list (or the config)
+     changes - it was build-once, and a second setConfig on a live element
+     appended a duplicate strip;
+   - window pointer listeners bind in connectedCallback and unbind in
+     disconnectedCallback (they leaked per discarded instance);
+   - ribbon tooltip says "unavailable"/"unknown" for such history rows
+     instead of "off";
+   - records scatter: dots, trend line and x-axis labels share one mapping
+     (dots used 1..95% of the plot, labels 0..100% - a 4.5%-of-width gap at
+     the hot end);
+   - quoted numeric min_temp/max_temp/step/gap coerced (gap "2" used to
+     string-concat into a 702 degree setpoint); a stats id that returns no
+     rows is named under the 14-day bars instead of drawing silent zeros;
+   - dead #offlbl element/CSS and an unused drag variable removed; this
+     HOW-TO corrected to the name= data-URL form Card Manager requires.
+
    HOW THIS WORKS / HOW TO MAINTAIN IT (read me first, future person):
    - This entire card is plain JavaScript encoded as base64 and stored as a
-     dashboard resource URL: data:text/javascript;base64,<blob>. There is no
+     dashboard resource URL: data:text/javascript;name=flat-thermostat-card;base64,<blob>. There is no
      file on disk and no internet dependency - the code lives inside the URL
      itself, in HA's own config (.storage/lovelace_resources), and is included
      in every Home Assistant backup automatically.
    - To READ it: copy everything after "base64," and run it through any
      base64 decoder (or atob() in a browser console). You get this file.
-   - To MODIFY it: edit the decoded JS, re-encode to base64, then in
-     Settings > Dashboards > Resources replace this resource's URL with
-     data:text/javascript;base64,<new blob>. Hard-refresh the browser.
+   - To MODIFY it: edit the decoded JS, re-encode to base64, then via the
+     Card Manager dashboard (row Update) or Settings > Dashboards > Resources
+     replace this resource's URL with
+     data:text/javascript;name=flat-thermostat-card;base64,<new blob>
+     (the ;name= parameter is REQUIRED - Card Manager rejects a bare
+     data:text/javascript;base64, prefix). Hard-refresh the browser.
    - Used from the dashboard as:  type: custom:flat-thermostat-card
                                   entity: climate.hall_nest_thermostat
 
@@ -43,7 +89,8 @@
    compact rows); configured meters for the active mode are ALWAYS shown,
    including at "0m" (owner choice, v2.4.1) - the chip hides only when
    unconfigured, mode off, or the thermostat is unavailable. Unavailable
-   meter shows '--'. Tap = more-info history of the shown meter.
+   meter shows '--'. Tap = toggles the in-card runtime graph (v2.5; v2.4
+   opened more-info).
    v2.4.5 (owner request): NO resting background on the chip - it reads as
    a quiet stat, not a button; a subtle hover highlight (wrapped in
    media hover:hover so touch devices skip it, per house style) reveals
@@ -134,8 +181,9 @@
      midnight when the day starts already-on - and every setpoint
      change while on gets its own tick + value beside it. NOTHING is
      centered: a label always marks "from this moment: this value"
-     (owner rejected centered labels as illogical). A label is skipped
-     (tick kept) only when it would overlap the previous label; the
+     (owner rejected centered labels as illogical). Colliding labels:
+     the longest-governing value wins, losers keep a quiet tick (v2.9.3,
+     see the notes doc; v2.9's earlier-wins rule is gone); the
      scrub TOOLTIP always has the exact values: press/hover anywhere on
      the ribbon for "time - mode - set X - running/idle". The "above"
      style was chosen over inline-in-band after a comparison mockup:
@@ -243,7 +291,8 @@
      today excluded; tapping a rank opens that day in the TODAY view),
      and - when config outdoor_high_stats is set to a temperature entity
      with LTS (the PWS station sensor) - a runtime-vs-outdoor-high
-     scatter of the last 60 days, peak highlighted, other days gray.
+     scatter of the last 60 days, peak highlighted, other days gray
+     (v2.12.3: the heating series uses the day's outdoor LOW instead).
    All view data comes from the two WS APIs already trusted here
    (recorder/statistics_during_period + history/history_during_period);
    no new helpers, no deps. Views follow the active series (_gDef) like
@@ -386,6 +435,23 @@ class FlatThermostatCard extends HTMLElement {
   setConfig(config) {
     if (!config.entity) throw new Error('flat-thermostat-card: "entity" is required');
     this._config = Object.assign({ modes: ['off', 'cool', 'heat', 'heat_cool'], gap: 2 }, config);
+    // v2.12.2 config-shape robustness: quoted numerics coerce (a quoted gap
+    // string-concatenated into the drag math), a bare modes string becomes a list
+    ['min_temp', 'max_temp', 'step', 'gap'].forEach((k) => {
+      if (typeof this._config[k] === 'string') { const f = parseFloat(this._config[k]); this._config[k] = isNaN(f) ? null : f; }
+    });
+    if (typeof this._config.modes === 'string') this._config.modes = [this._config.modes];
+    if (!Array.isArray(this._config.modes)) this._config.modes = ['off', 'cool', 'heat', 'heat_cool'];
+    // v2.12.2 render gate: every entity id anywhere in the config (any depth)
+    const ids = new Set();
+    const harvest = (v) => {
+      if (typeof v === 'string') { if (/^[a-z_]+\.[a-z0-9_]+$/.test(v)) ids.add(v); }
+      else if (Array.isArray(v)) v.forEach(harvest);
+      else if (v && typeof v === 'object') Object.keys(v).forEach((k) => harvest(v[k]));
+    };
+    harvest(config);
+    this._gateIds = Array.from(ids);
+    this._dirty = true;
     this._drag = null;
     this._opt = {};
     this._optUntil = 0;
@@ -419,15 +485,114 @@ class FlatThermostatCard extends HTMLElement {
     this._vLoading = false;
     this._vCache = '';
     if (!this.shadowRoot) this._createDom();
-    this._modesBuilt = false;
+    this._modesSig = null;
   }
 
   getCardSize() { return 2; }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
+    // v2.12.2: skip the re-render when none of the card's entities changed
+    // identity (HA pushes a new hass object on EVERY state change in the
+    // house). Time-driven updates have their own tick (panel) or scheduled
+    // render (optimistic holds), so a skipped push costs nothing.
+    if (prev && !this._dirty && prev.states && hass && hass.states) {
+      let changed = false;
+      for (let i = 0; i < this._gateIds.length; i++) {
+        const id = this._gateIds[i];
+        if (prev.states[id] !== hass.states[id]) { changed = true; break; }
+      }
+      if (!changed) return;
+    }
+    this._dirty = false;
+    if (prev && prev.states && hass && hass.states) this._noteClimateChange(prev.states[this._config.entity], hass.states[this._config.entity]);
     this._render();
   }
+
+  // v2.12.3: a mode / hvac_action / setpoint change while the panel is open
+  // schedules a refetch of today's history after a settle window, so the
+  // ran-during ribbon catches up in seconds rather than on the 15-min cadence
+  _noteClimateChange(a, b) {
+    if (!a || !b || a === b || !this._gOpen) return;
+    const aa = a.attributes || {}, ba = b.attributes || {};
+    const same = a.state === b.state && aa.hvac_action === ba.hvac_action && aa.temperature === ba.temperature &&
+      aa.target_temp_low === ba.target_temp_low && aa.target_temp_high === ba.target_temp_high;
+    if (same) return;
+    clearTimeout(this._ribTimer);
+    this._ribTimer = setTimeout(() => { this._ribTimer = null; this._refreshRibbon(); }, this._ribSettleMs || 20000);
+  }
+
+  _refreshRibbon() {
+    if (!this._gOpen || !this._gDef || !this._hass) return;
+    if (this._view === 'today' && this._vDay === 0) {
+      // the TODAY view owns its own data - force its reload (hour stats + ribbon)
+      this._vData = null;
+      this._viewTick();
+      return;
+    }
+    if (this._view || this._gLoading || this._ribLoading) return;
+    const sigEnt = this._config[this._gDef.key + '_signal'];
+    const a0 = new Date(); a0.setHours(0, 0, 0, 0);
+    const hEnd = new Date();
+    this._ribLoading = true;
+    Promise.all([
+      sigEnt ? this._histFetch(sigEnt, a0, hEnd).catch(() => null) : Promise.resolve(null),
+      this._histAttrFetch(this._config.entity, a0, hEnd).catch(() => null),
+    ]).then((res) => {
+      this._ribLoading = false;
+      if (!this._gOpen) return;
+      this._gRib = { hist: res[0], modeHist: res[1], aT: a0.getTime() };
+      this._gCache = '';
+      this._renderGraph();
+    }).catch(() => { this._ribLoading = false; });
+  }
+
+  connectedCallback() {
+    // v2.12.2: window pointer listeners live with the element's connection
+    if (this._winHandlers && !this._winBound) {
+      window.addEventListener('pointermove', this._winHandlers.move);
+      window.addEventListener('pointerup', this._winHandlers.up);
+      window.addEventListener('pointercancel', this._winHandlers.up);
+      this._winBound = true;
+    }
+    if (this._gOpen) this._armTick();
+  }
+
+  disconnectedCallback() {
+    if (this._winBound) {
+      window.removeEventListener('pointermove', this._winHandlers.move);
+      window.removeEventListener('pointerup', this._winHandlers.up);
+      window.removeEventListener('pointercancel', this._winHandlers.up);
+      this._winBound = false;
+    }
+    this._disarmTick();
+    clearTimeout(this._laterTimer);
+    clearTimeout(this._ribTimer);
+    clearTimeout(this._ecoLpTimer);
+    // a pending debounced delay edit is written now rather than lost
+    if (this._ecoDelayTimer) { clearTimeout(this._ecoDelayTimer); this._ecoDelayTimer = null; this._ecoDelayFlush(); }
+  }
+
+  // one-shot re-render (optimistic holds expire on their own, not on the next push)
+  _renderLater(ms) {
+    clearTimeout(this._laterTimer);
+    this._laterTimer = setTimeout(() => { this._laterTimer = null; this._render(); }, ms);
+  }
+
+  // 60s tick while the runtime panel is open: drives the 15-min refetch,
+  // the ribbon's now-marker and the age of the live today value
+  _armTick() {
+    if (this._tickTimer) return;
+    this._tickTimer = setInterval(() => {
+      if (!this._gOpen) { this._disarmTick(); return; }
+      this._render();
+      const now = this._el.grib.querySelector('.vnow');
+      if (now && this._gRib) now.style.left = ((Date.now() - this._gRib.aT) / 864000) + '%';
+    }, 60000);
+  }
+
+  _disarmTick() { if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; } }
 
   _stateObj() { return this._hass && this._hass.states[this._config.entity]; }
 
@@ -469,13 +634,11 @@ class FlatThermostatCard extends HTMLElement {
           transform: translate(-50%,-50%); pointer-events: none; z-index: 2; display: none;
           transition: left .35s cubic-bezier(.4,0,.2,1); }
         .bar.dragging .fill, .bar.dragging .handle, .bar.dragging .blabel, .bar.dragging .curdot { transition: none; }
-        .offlabel { position: absolute; top: -28px; left: 50%; transform: translateX(-50%);
-          color: var(--secondary-text-color); font-size: 13px; display: none; }
         .bottom { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
         .chipslot { flex: 0 0 76px; box-sizing: border-box; padding-right: 6px; display: flex; align-items: center; justify-content: center; }
         .modes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); height: 42px;
           border-radius: 12px; background: rgba(255,255,255,.04); overflow: hidden;
-          user-select: none; -webkit-user-select: none; }
+          user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .mode { display: flex; align-items: center; justify-content: center; border-radius: 12px;
           cursor: pointer; transition: background .15s; position: relative; }
         .mode.armed ha-icon { color: #ffd54f; }
@@ -494,7 +657,8 @@ class FlatThermostatCard extends HTMLElement {
           align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
         .mode.active ha-icon { color: #fff; }
         .ecobtn { position: relative; flex: 0 0 46px; height: 42px; border-radius: 12px; background: rgba(255,255,255,.04);
-          display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .15s; }
+          display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .15s;
+          user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .ecobtn:hover { background: rgba(255,255,255,.07); }
         .ecobtn ha-icon { --mdc-icon-size: 20px; width: 20px; height: 20px; display: flex;
           align-items: center; justify-content: center; line-height: 0; color: var(--primary-text-color); }
@@ -684,7 +848,6 @@ class FlatThermostatCard extends HTMLElement {
               <div class="handle" id="hhigh"></div>
               <div class="blabel" id="blow"></div>
               <div class="blabel" id="bhigh"></div>
-              <div class="offlabel" id="offlbl">Off</div>
             </div>
           </div>
         </div>
@@ -710,7 +873,7 @@ class FlatThermostatCard extends HTMLElement {
       </ha-card>
     `;
     this._el = {};
-    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','curdot','hlow','hhigh','blow','bhigh','offlbl','modes','ecobtn','rtchip','gwrap','gtitle','gright','grib','glab','gplot','gxrow','ecorow','gstats','gdef','gview','curval','unit','state']
+    ['main','curblock','bar','fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','curdot','hlow','hhigh','blow','bhigh','modes','ecobtn','rtchip','gwrap','gtitle','gright','grib','glab','gplot','gxrow','ecorow','gstats','gdef','gview','curval','unit','state']
       .forEach(id => this._el[id] = root.getElementById(id));
     this._el.bfheat.style.background = COLORS.heat;
     this._el.bfcool.style.background = COLORS.cool;
@@ -719,7 +882,9 @@ class FlatThermostatCard extends HTMLElement {
     // the same gesture grammar as the power button's run-once; short-tap
     // stays manual eco, the click trailing a long-press is swallowed
     const eb = this._el.ecobtn;
-    eb.addEventListener('pointerdown', () => {
+    eb.addEventListener('pointerdown', (e) => {
+      this._ecoLpFired = false; // v2.12.2: a stale flag used to swallow the next tap
+      if (e.button != null && e.button !== 0) return; // primary button / touch only
       if (!this._ecoAwayEnt()) return;
       clearTimeout(this._ecoLpTimer);
       this._ecoLpTimer = setTimeout(() => { this._ecoLpFired = true; this._toggleEcoAway(); }, 550);
@@ -816,6 +981,7 @@ class FlatThermostatCard extends HTMLElement {
     this._optEcoAwayUntil = Date.now() + 8000;
     this._hass.callService('input_boolean', next ? 'turn_on' : 'turn_off', { entity_id: ent });
     this._render();
+    this._renderLater(8100);
   }
 
   _ecoDelayAdj(dir) {
@@ -830,11 +996,15 @@ class FlatThermostatCard extends HTMLElement {
     v = Math.min(isNaN(max) ? 1e9 : max, Math.max(isNaN(min) ? 0 : min, v + dir * step));
     this._ecoDelayDraft = v;
     clearTimeout(this._ecoDelayTimer);
-    this._ecoDelayTimer = setTimeout(() => {
-      this._hass.callService('input_number', 'set_value', { entity_id: ent, value: v });
-    }, 800);
+    this._ecoDelayTimer = setTimeout(() => { this._ecoDelayTimer = null; this._ecoDelayFlush(); }, 800);
     this._gCache = '';
     this._renderGraph();
+  }
+
+  _ecoDelayFlush() {
+    const ent = this._config.eco_away_delay_entity;
+    if (!ent || this._ecoDelayDraft == null || !this._hass) return;
+    this._hass.callService('input_number', 'set_value', { entity_id: ent, value: this._ecoDelayDraft });
   }
 
   /* ---------- run once (v2.7) ---------- */
@@ -854,6 +1024,7 @@ class FlatThermostatCard extends HTMLElement {
     this._optOnce = !on;
     this._optOnceUntil = Date.now() + 8000;
     this._render();
+    this._renderLater(8100);
     this._hass.callService('input_boolean', on ? 'turn_off' : 'turn_on', { entity_id: ent });
   }
 
@@ -955,11 +1126,14 @@ class FlatThermostatCard extends HTMLElement {
     this._gOpen = true;
     this._el.gwrap.classList.add('open');
     this._el.rtchip.classList.add('open');
+    this._armTick();
     this._loadGraph();
   }
 
   _closeGraph() {
     this._gOpen = false;
+    this._disarmTick();
+    clearTimeout(this._ribTimer); this._ribTimer = null;
     this._el.gwrap.classList.remove('open');
     this._el.rtchip.classList.remove('open');
     // closing the panel resets any open view so reopening shows the default bars
@@ -1023,6 +1197,9 @@ class FlatThermostatCard extends HTMLElement {
       this._gLoading = false;
       this._gRows = null;
       this._gRib = null;
+      // v2.12.2: retry in 60s, not on the next state push (a failing recorder
+      // was being re-asked 3 WS calls per push while the panel was open)
+      this._gFetched = Date.now() - 900000 + 60000;
       this._graphMsg('History unavailable');
     });
   }
@@ -1095,7 +1272,9 @@ class FlatThermostatCard extends HTMLElement {
       el.gdef.style.display = '';
       el.gview.style.display = 'none';
     }
-    el.glab.innerHTML = 'Last ' + GRAPH_DAYS + ' days \u00b7 hours/day';
+    el.glab.innerHTML = 'Last ' + GRAPH_DAYS + ' days \u00b7 hours/day' +
+      // v2.12.2: an id that returns no rows is named instead of drawing silent zeros
+      (this._gRows && !this._gRows.length ? ' \u00b7 <span style="opacity:.7">no statistics for ' + this._statsEntity() + '</span>' : '');
 
     const H = 96;
     const maxV = Math.max.apply(null, days.map((x) => x.v));
@@ -1714,7 +1893,7 @@ class FlatThermostatCard extends HTMLElement {
     const scrub = document.createElement('div');
     scrub.className = 'rscrub';
     rib.appendChild(scrub);
-    const MODE_TXT = { cool: 'cool', heat: 'heat', heat_cool: 'heat/cool', off: 'off', unavailable: 'off', unknown: 'off' };
+    const MODE_TXT = { cool: 'cool', heat: 'heat', heat_cool: 'heat/cool', off: 'off', unavailable: 'unavailable', unknown: 'unknown' };
     const show = (clientX) => {
       // frac comes from the RIBBON's own rect (segments are positioned in it);
       // the wrap rect only anchors the tooltip pixel position
@@ -2217,10 +2396,13 @@ class FlatThermostatCard extends HTMLElement {
     const a = this._dayStart(365);
     const b = new Date(this._dayStart(0).getTime() + 86400000);
     const outEnt = this._config.outdoor_high_stats;
+    // v2.12.3: the heating series pairs with the day's outdoor LOW (heating
+    // tracks the overnight low); cooling keeps the HIGH. Same entity.
+    const stat = this._gDef.key === 'runtime_heating' ? 'min' : 'max';
     Promise.all([
       this._statsFetch(statsEnt, a, b, 'day', ['change']),
-      outEnt ? this._statsFetch(outEnt, this._dayStart(59), b, 'day', ['max']).catch(() => []) : Promise.resolve([]),
-    ]).then((res) => done({ days: res[0] || [], out: res[1] || [] })).catch(fail);
+      outEnt ? this._statsFetch(outEnt, this._dayStart(59), b, 'day', [stat]).catch(() => []) : Promise.resolve([]),
+    ]).then((res) => done({ days: res[0] || [], out: res[1] || [], stat: stat })).catch(fail);
   }
 
   _renderRecords() {
@@ -2239,10 +2421,12 @@ class FlatThermostatCard extends HTMLElement {
     past.sort((x, y) => y.v - x.v);
     const top = past.slice(0, 5);
     const outByT = {};
+    const stat = d.stat || 'max';
+    const outWord = stat === 'min' ? 'low' : 'high';
     (d.out || []).forEach((r) => {
-      if (r.max == null) return;
+      if (r[stat] == null) return;
       const rd = new Date(r.start); rd.setHours(0, 0, 0, 0);
-      outByT[rd.getTime()] = r.max;
+      outByT[rd.getTime()] = r[stat];
     });
     // scatter pairs: last 60 full days where BOTH runtime stats and outdoor high exist
     const pairs = [];
@@ -2250,7 +2434,7 @@ class FlatThermostatCard extends HTMLElement {
       const t = this._dayStart(i).getTime();
       if (outByT[t] != null && runByT[t] != null) pairs.push({ t: t, temp: outByT[t], v: runByT[t] });
     }
-    const cache = 'records|' + top.map((x) => x.t + ':' + x.v.toFixed(2)).join(',') + '|' + pairs.length;
+    const cache = 'records|' + stat + '|' + top.map((x) => x.t + ':' + x.v.toFixed(2)).join(',') + '|' + pairs.length;
     if (cache === this._vCache) return;
     this._vCache = cache;
 
@@ -2265,12 +2449,12 @@ class FlatThermostatCard extends HTMLElement {
     gv.innerHTML =
       '<div class="vhero">' + this._fmtRuntime(peak.v) + '<small>peak day &middot; ' + this._midDate(new Date(peak.t)) + '</small></div>' +
       '<div class="vsect">Top days &middot; last 12 months</div><div id="vranks"></div>' +
-      (showScatter ? '<div class="vsect">Runtime vs outdoor high &middot; last 60 days</div><div class="vplot" id="vsc"></div>' +
-        '<div class="vxax" style="margin-left:2px" id="vscx"></div>' : '');
+      (showScatter ? '<div class="vsect">Runtime vs outdoor ' + outWord + ' &middot; last 60 days</div><div class="vplot" id="vsc"></div>' +
+        '<div class="vxax" style="margin-right:28px" id="vscx"></div>' : '');
     const ranks = gv.querySelector('#vranks');
     top.forEach((x, i) => {
       const row = document.createElement('div'); row.className = 'vrrow';
-      const note = i === 0 && outByT[x.t] != null ? '<span class="vrnote">high ' + Math.round(outByT[x.t]) + '\u00b0</span>' : '';
+      const note = i === 0 && outByT[x.t] != null ? '<span class="vrnote">' + outWord + ' ' + Math.round(outByT[x.t]) + '\u00b0</span>' : '';
       row.innerHTML = '<span class="vrd">' + this._shortDate(x.t) + '</span>' +
         '<span class="vrbar" style="width:' + Math.max(6, Math.round(x.v / peak.v * 46)) + '%;background:' + (i === 0 ? lite : bar) + '"></span>' +
         note + '<span class="vrv">' + this._fmtRuntime(x.v) + '</span>';
@@ -2301,7 +2485,13 @@ class FlatThermostatCard extends HTMLElement {
         const g = document.createElement('div'); g.className = 'gline'; g.style.top = y + 'px'; plot.appendChild(g);
         const t = document.createElement('div'); t.className = 'ggtxt'; t.style.top = y + 'px'; t.textContent = v + 'h'; plot.appendChild(t);
       }
-      const px = (temp) => ((temp - tmin) / (tmax - tmin)) * 94 + 1; // % (keep off the h-axis labels)
+      // v2.12.2: dots, trend line and the x-axis labels share ONE mapping - a
+      // layer that stops at the 26px y-label gutter (like the bar plots), 0..100%
+      // inside it; the axis row below carries the same right margin.
+      const lay = document.createElement('div');
+      lay.style.cssText = 'position:absolute;left:0;right:26px;top:0;bottom:0;';
+      plot.appendChild(lay);
+      const px = (temp) => ((temp - tmin) / (tmax - tmin)) * 100;
       let hi = null;
       pairs.forEach((p) => { if (!hi || p.v > hi.v) hi = p; });
       pairs.forEach((p) => {
@@ -2311,7 +2501,7 @@ class FlatThermostatCard extends HTMLElement {
         dot.style.left = px(p.temp) + '%';
         dot.style.bottom = (p.v / scale) * H + 'px';
         dot.title = this._shortDate(p.t) + ' \u00b7 ' + Math.round(p.temp) + '\u00b0 \u00b7 ' + this._fmtRuntime(p.v);
-        plot.appendChild(dot);
+        lay.appendChild(dot);
       });
       if (hi) {
         const dot = document.createElement('div'); dot.className = 'vdot hi';
@@ -2319,12 +2509,12 @@ class FlatThermostatCard extends HTMLElement {
         dot.style.left = px(hi.temp) + '%';
         dot.style.bottom = (hi.v / scale) * H + 'px';
         dot.title = this._shortDate(hi.t) + ' \u00b7 ' + Math.round(hi.temp) + '\u00b0 \u00b7 ' + this._fmtRuntime(hi.v);
-        plot.appendChild(dot);
+        lay.appendChild(dot);
         const l = document.createElement('div'); l.className = 'vdlab';
         l.style.left = px(hi.temp) + '%';
         l.style.bottom = (hi.v / scale) * H + 'px';
         l.textContent = this._shortDate(hi.t);
-        plot.appendChild(l);
+        lay.appendChild(l);
       }
       // least-squares trend (v2.6.2) - hidden when the fit is noise (r^2 < 0.1)
       const n = pairs.length;
@@ -2352,7 +2542,7 @@ class FlatThermostatCard extends HTMLElement {
           ln.setAttribute('stroke-dasharray', '4 4');
           ln.setAttribute('vector-effect', 'non-scaling-stroke');
           svg.appendChild(ln);
-          plot.insertBefore(svg, plot.firstChild);
+          lay.insertBefore(svg, lay.firstChild);
         }
       }
       const mid = Math.round((tmin + tmax) / 2);
@@ -2362,10 +2552,17 @@ class FlatThermostatCard extends HTMLElement {
   }
 
   _buildModes() {
-    if (this._modesBuilt) return;
+    // v2.12.2: rebuild whenever the effective mode list changes (it was
+    // build-once: an entity whose first state carried no hvac_modes stayed
+    // empty, and a second setConfig appended a duplicate strip)
     const avail = this._attrs().hvac_modes || [];
     const list = this._config.modes.filter(m => avail.includes(m));
-    (list.length ? list : avail).forEach(m => {
+    const eff = list.length ? list : avail;
+    const sig = eff.join(',');
+    if (sig === this._modesSig) return;
+    this._modesSig = sig;
+    this._el.modes.innerHTML = '';
+    eff.forEach(m => {
       const d = document.createElement('div');
       d.className = 'mode';
       d.dataset.mode = m;
@@ -2385,8 +2582,9 @@ class FlatThermostatCard extends HTMLElement {
         d.appendChild(arc);
         let lpt = null;
         const clearT = () => { if (lpt) { clearTimeout(lpt); lpt = null; } };
-        d.addEventListener('pointerdown', () => {
+        d.addEventListener('pointerdown', (e) => {
           this._lpFired = false;
+          if (e.button != null && e.button !== 0) return; // v2.12.2: primary button / touch only
           if (!this._onceEnt()) return;
           lpt = setTimeout(() => {
             lpt = null;
@@ -2404,7 +2602,6 @@ class FlatThermostatCard extends HTMLElement {
       } else d.addEventListener('click', () => this._setMode(m));
       this._el.modes.appendChild(d);
     });
-    this._modesBuilt = true;
   }
 
   _updateModes(mode) {
@@ -2421,7 +2618,7 @@ class FlatThermostatCard extends HTMLElement {
     const a = this._attrs();
     const v = this._vals();
     const eco = this._ecoOn();
-    const ALL = ['fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','hlow','hhigh','blow','bhigh','curdot','offlbl'];
+    const ALL = ['fheat','fcool','fsingle','bfheat','bfcool','emlow','emhigh','hlow','hhigh','blow','bhigh','curdot'];
     const used = new Set();
     const show = (k) => { if (el[k].style.display !== 'block') el[k].style.display = 'block'; used.add(k); };
 
@@ -2529,7 +2726,7 @@ class FlatThermostatCard extends HTMLElement {
       handle('hlow', v.single);
       label('blow', v.single, 'cool');
     }
-    // off mode: bar stays empty - the status text under the temp already says "Off" (offlbl removed in v2.2)
+    // off mode: bar stays empty - the status text under the temp already says "Off" (the v2.2 track label is gone; its dead element removed v2.12.2)
 
     if (used.has('curdot')) {
       // native darkens the current-temp dot when it sits on the bright fill so it stays visible
@@ -2555,7 +2752,6 @@ class FlatThermostatCard extends HTMLElement {
       const mode = this._mode();
       if (mode === 'off' || this._ecoOn() || !this._stateObj()) return; // eco: Nest rejects setpoint changes
       const v = this._vals();
-      const gap = this._config.gap;
       this._opt = { low: v.low, high: v.high, single: v.single };
       if (mode === 'heat_cool') {
         const x = this._valFromX(e.clientX);
@@ -2588,9 +2784,9 @@ class FlatThermostatCard extends HTMLElement {
     el.hlow.addEventListener('pointerdown', down);
     el.hhigh.addEventListener('pointerdown', down);
     const moveWin = (e) => { if (!this._drag) return; el.bar.classList.add('dragging'); move(e); };
-    window.addEventListener('pointermove', moveWin);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    // v2.12.2: attached to window in connectedCallback, detached in disconnectedCallback
+    this._winHandlers = { move: moveWin, up: up };
+    if (this.isConnected) this.connectedCallback();
   }
 
   _commit() {
@@ -2607,6 +2803,7 @@ class FlatThermostatCard extends HTMLElement {
       data.temperature = this._opt.single;
     }
     this._optUntil = Date.now() + 8000;
+    this._renderLater(8100);
     this._hass.callService('climate', 'set_temperature', data);
   }
 
@@ -2616,6 +2813,7 @@ class FlatThermostatCard extends HTMLElement {
     this._optModeUntil = Date.now() + 8000;
     this._updateModes(m);
     this._updateBar(m);
+    this._renderLater(8100);
     this._hass.callService('climate', 'set_hvac_mode', { entity_id: this._config.entity, hvac_mode: m });
   }
 
@@ -2625,6 +2823,7 @@ class FlatThermostatCard extends HTMLElement {
     this._optEco = !on;
     this._optEcoUntil = Date.now() + 8000;
     this._render();
+    this._renderLater(8100);
     this._hass.callService('climate', 'set_preset_mode', { entity_id: this._config.entity, preset_mode: on ? 'none' : 'eco' });
   }
 }
