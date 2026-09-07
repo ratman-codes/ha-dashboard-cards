@@ -1,7 +1,7 @@
 # Custom Home Assistant dashboard cards
 
 Backup archive of the bespoke Lovelace cards (and their design notes) built for the
-main Home Assistant dashboard, July 2026, by Claude + Ratman.
+main Home Assistant dashboard, July–September 2026, by Claude + Ratman.
 
 **This repo is an archive, not the deployment.** The cards do NOT run from here.
 Each card is deployed as a self-contained dashboard resource inside Home Assistant
@@ -99,7 +99,7 @@ header.)*
   household-away binary sensor powering the eco-while-home warning).
   HA resource id:
   `a1bc4b7a12124ab38ded7859b5ed12bc`.
-- `flat-treadmill-card.js` — v2.13. Controller for an Egofit M2 walking pad via the
+- `flat-treadmill-card.js` — v2.13.1. Controller for an Egofit M2 walking pad via the
   FTMS HACS integration: speed track, start/stop, NOW/TODAY stats, daily target
   progress bar, live net-kcal model. Used as `type: custom:flat-treadmill-card`
   (all entity ids are baked-in defaults). v2.12 (2026-09-06 source audit): speed
@@ -109,6 +109,8 @@ header.)*
   disconnect. v2.13: time-to-target estimate on the progress readout while walking
   ("~1h 12m" at the current pace); the stats pill follows the belt (NOW while
   moving, TODAY when idle; a tap still overrides until the next start/stop).
+  v2.13.1: status word centred under the digits by CSS grid (the measured padding
+  read 0 on an off-screen first render); NOW is the highlighted pill state.
   HA resource id: `698b5e9479724e12a978aec4cb7b17dc`.
 - `flat-weather-card.js` — v1.6. Merged weather card: station current conditions
   header (incl. optional threshold-colored dew-point line for ventilation
@@ -133,8 +135,8 @@ header.)*
   statistics fetch fails (60 s retry) instead of pretending no data exists yet;
   trend rows placed on a shared day axis; no-data rows show a dash rank; rows
   rebuild only when a printed value changes. Used as
-  `type: custom:flat-scoreboard-card` (sources configured in YAML). Resource
-  identified by its `name=flat-scoreboard-card` label.
+  `type: custom:flat-scoreboard-card` (sources configured in YAML). HA resource id:
+  `8f38491dafcf41258a7e6f7eff08338a`.
 - `flat-sensor-stack-card.js` — v1.4. Collapsible stack of compact sensor history
   graphs (desk temperature, CO2, humidity — 24h); row 0 always visible, top-right
   label toggles the rest. v1.4 (2026-09-06): threshold rows paint the line BY
@@ -237,8 +239,8 @@ header.)*
   `bypassed_sensors` attribute is read; optimistic arming counts from the tap
   and a refused service call drops the hold; re-render only when one of the
   card's own entities changed. All entities via YAML config. Used as
-  `type: custom:flat-security-card` (see notes for the YAML shape). Resource
-  identified by its `name=flat-security-card` label.
+  `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
+  `1532f17af469489b863f711848d36fb2`.
 - `flat-climate-card.js` — v2.2. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
@@ -357,8 +359,8 @@ header.)*
   come from per-event snapshot files (HA does not record an automation's
   last_triggered). Zero HA entities created; all data via recorder / statistics
   / media-source websocket calls. Used as `type: custom:flat-front-door-card`
-  (see notes for the YAML shape). Resource identified by its
-  `name=flat-front-door-card` label.
+  (see notes for the YAML shape). HA resource id:
+  `38d0766a27f14b8aa6dc3c0172e3ac03`.
 - `flat-party-card.js` — v1.4.1. Party-mode control card that lives inside a
   dashboard expander: five color swatches plus an inline hue/saturation wheel
   (one tap paints every party-frozen light through a set-color script), motion
@@ -378,8 +380,8 @@ header.)*
   v1.4.1: no swatch shows as selected while motion is Off — after the 3 AM
   kill or a full Reset nothing is painted, so nothing looks selected.
   All entities are card YAML config with defaults for the party_mode helper set
-  (see the source header). Used as `type: custom:flat-party-card`. Resource
-  identified by its `name=flat-party-card` label.
+  (see the source header). Used as `type: custom:flat-party-card`. HA resource id:
+  `0a36883149024a919d3846c38894d2ec`.
 - `card-manager-card.js` — v1.2. The admin card that manages all of the above:
   lists every dashboard resource, decodes each data-URL card's header
   (name/version/size/FNV-1a), and replaces the old raw paste-in-Settings update
@@ -402,7 +404,7 @@ header.)*
   `notes/hvac-runtime-tracking-notes.md`, `notes/flat-security-card-notes.md`,
   `notes/flat-climate-card-notes.md`, `notes/flat-server-card-notes.md`,
   `notes/flat-maintenance-card-notes.md`, `notes/flat-front-door-card-notes.md`,
-  `notes/flat-sensor-stack-card-notes.md` —
+  `notes/flat-sensor-stack-card-notes.md`, `notes/flat-cat-card-notes.md` —
   sanitized per-card / per-system deep
   notes (tap maps, helper inventories, version history pointers).
 

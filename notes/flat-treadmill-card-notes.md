@@ -1,6 +1,6 @@
-# flat-treadmill-card — archive notes (v2.13, 2026-09-06)
+# flat-treadmill-card — archive notes (v2.13.1, 2026-09-07)
 
-Companion source file: `flat-treadmill-card.js` (v2.13 — 36,373 B, FNV-1a `09bf271f`; v2.12 = 34,718 B, `596aa894`; v2.11 = 32,349 B, `505e43be`).
+Companion source file: `flat-treadmill-card.js` (v2.13.1 — 36,861 B, FNV-1a `a426ca35`; v2.13 = 36,373 B, `09bf271f`; v2.12 = 34,718 B, `596aa894`; v2.11 = 32,349 B, `505e43be`).
 Sibling of flat-thermostat-card; same hosting pattern, same dashboard.
 
 ## What it is
@@ -130,7 +130,11 @@ unavailable; meters got always_available) -> v2.11 availability from status sens
 -> v2.12 (2026-09-06 source audit, one version for everything — see below)
 -> v2.13 (2026-09-06 post-audit revisit: time-to-target estimate on the progress readout
 while walking; stats pill follows the belt — NOW while moving, TODAY when idle, a tap
-overrides until the next start/stop; speed presets offered and declined for now).
+overrides until the next start/stop; speed presets offered and declined for now)
+-> v2.13.1 (2026-09-07: status word centred under the digits by a CSS grid — the old
+measured `paddingRight` read 0 when the first render ran off-screen and, behind the v2.12
+render gate, stuck until a treadmill entity changed; pill highlight flipped: NOW amber,
+TODAY plain, since TODAY is now the idle default).
 
 ## 2026-09-06 source audit (v2.12)
 Per the per-card audit playbook: full-source read, every behavioral finding reproduced in

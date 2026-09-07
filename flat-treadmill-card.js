@@ -1,4 +1,4 @@
-/* flat-treadmill-card v2.13 - custom Lovelace card for the main dashboard.
+/* flat-treadmill-card v2.13.1 - custom Lovelace card for the main dashboard.
    Slim treadmill controller for the Egofit M2 (via FTMS/HACS): live mph + status left,
    speed track (drag = native kph preview), play/stop, NOW/TODAY stats pill, daily
    distance progress bar vs input_number.treadmill_daily_mile_target, and a ~net kcal
@@ -23,6 +23,11 @@
    remaining time); hidden when idle, done, or the speed is unknown. (2) the stats pill
    follows the belt: NOW while walking/starting, TODAY when idle or unavailable; a tap
    still overrides until the next start/stop. No YAML change.
+   v2.13.1 (2026-09-07): status word ("Idle"/"Walking") centred under the digits by a
+   CSS grid instead of a measured padding - the measurement read 0 when the first
+   render happened off-screen and, with the v2.12 render gate, stuck there until a
+   treadmill entity changed (owner saw "Idle" drift right at random). Stats pill
+   highlight flipped: NOW is the amber one, TODAY (now the idle default) is plain.
 
    HOW THIS WORKS / HOW TO MAINTAIN IT (read me first, future person):
    - This entire card is plain JavaScript encoded as base64 and stored as a
@@ -181,10 +186,10 @@ class FlatTreadmillCard extends HTMLElement {
         ha-card { padding: 12px 14px 10px 14px; }
         .main { display: flex; align-items: center; padding: 4px 0 0 0; }
         .curblock { flex: 0 0 22%; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; cursor: pointer; }
-        .curwrap { display: inline-block; }
-        .cur { font-size: 32px; font-weight: 500; line-height: 1.05; color: var(--primary-text-color); white-space: nowrap; }
-        .cur .unit { font-size: 14px; color: var(--secondary-text-color); font-weight: 400; vertical-align: top; }
-        .st { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; text-align: center; }
+        .curwrap { display: inline-grid; grid-template-columns: auto auto; align-items: start; }
+        .cur { grid-column: 1; grid-row: 1; font-size: 32px; font-weight: 500; line-height: 1.05; color: var(--primary-text-color); white-space: nowrap; }
+        .unit { grid-column: 2; grid-row: 1; font-size: 14px; line-height: 1.05; color: var(--secondary-text-color); font-weight: 400; white-space: pre; }
+        .st { grid-column: 1; grid-row: 2; font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; text-align: center; }
         .bar-wrap { position: relative; flex: 1; padding: 0 10px; }
         .bar { position: relative; height: 16px; border-radius: 8px; background: rgba(70,70,70,.3); touch-action: none; cursor: pointer; }
         .fill { position: absolute; left: 0; top: 0; bottom: 0; background: ${ACCENT}; opacity: .5;
@@ -210,10 +215,10 @@ class FlatTreadmillCard extends HTMLElement {
           border-right: 1px solid rgba(255,255,255,.06); transition: background .15s; }
         .modetag span { font-size: 9px; color: var(--secondary-text-color); letter-spacing: 1px;
           writing-mode: vertical-rl; transform: rotate(180deg); }
-        .modetag.today { background: rgba(255,193,7,.08); }
-        .modetag.today span { color: ${ACCENT_TEXT}; }
+        .modetag.live { background: rgba(255,193,7,.08); }
+        .modetag.live span { color: ${ACCENT_TEXT}; }
         .statswrap:hover:not(:has(.cellkcal:hover)) .modetag { background: rgba(255,255,255,.08); }
-        .statswrap:hover:not(:has(.cellkcal:hover)) .modetag.today { background: rgba(255,193,7,.16); }
+        .statswrap:hover:not(:has(.cellkcal:hover)) .modetag.live { background: rgba(255,193,7,.16); }
         .stats { flex: 1; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); align-items: center; }
         .stat { text-align: center; font-size: 13px; color: var(--primary-text-color); white-space: nowrap; min-width: 0; overflow: hidden; line-height: 1.2; }
         .stat .lbl { display: block; font-size: 10px; color: var(--secondary-text-color); letter-spacing: .3px; }
@@ -283,7 +288,7 @@ class FlatTreadmillCard extends HTMLElement {
         <div class="main" id="main">
           <div class="curblock" id="curblock">
             <div class="curwrap">
-              <div class="cur"><span id="curval">--</span><span class="unit" id="unit"> mph</span></div>
+              <div class="cur" id="curval">--</div><div class="unit" id="unit"> mph</div>
               <div class="st" id="state"></div>
             </div>
           </div>
@@ -456,7 +461,6 @@ class FlatTreadmillCard extends HTMLElement {
     }
     el.state.textContent = unavailable ? 'Unavailable' : statusText;
     el.state.style.color = active ? ACCENT_TEXT : '';
-    el.state.style.paddingRight = el.unit.offsetWidth + 'px';
 
     const t = this._target();
     if (t != null) {
@@ -476,7 +480,7 @@ class FlatTreadmillCard extends HTMLElement {
     el.bstop.classList.toggle('dim', !active && statusRaw !== 'post_workout');
 
     const today = this._scope === 'today';
-    el.modetag.classList.toggle('today', today);
+    el.modetag.classList.toggle('live', !today);
     el.modetxt.textContent = today ? 'TODAY' : 'NOW';
     const dailyFt = this._num(this._config.daily_distance_sensor);
     const dailyMi = dailyFt != null ? dailyFt / 5280 : null;
