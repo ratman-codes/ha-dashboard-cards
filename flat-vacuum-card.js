@@ -1,4 +1,36 @@
-/* flat-vacuum-card v2.10 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.12 - custom Lovelace card for the main dashboard.
+   v2.12 (2026-09-11): HELD-BY-DND STATE + BATTERY ROW MOVE. (1) A mid-run
+   recharge stall that overlaps the robot's DND window is not going to
+   resume by itself: DND suppresses auto-resume, and the app holds the job
+   until the owner picks "continue" or "end run" (2026-09-10: backstop run
+   hit 14 % at 19:52, docked at 62 %, DND began 22:00 at 68 % charge, the
+   card read "Charging to resume" all night; ending the run in the app at
+   23:10 wrote the clean record and reset progress). Now stall + DND switch
+   on + clock inside the begin-end window (wrap-safe across midnight) =
+   "Held by DND - 62% done - 3h 18m" in amber with the map button, a resume
+   button (vacuum.start under the 30-s starting lock = the app's "continue
+   during DND") and the dock button as END RUN (vacuum.stop, as before).
+   Outside the window the stall line is unchanged. A 60-s tick repaints
+   while a stall is showing, since the 10 PM / 8 AM boundaries move no
+   entity. Unknown DND times = plain stall line. (2) Battery moved out of
+   Config to its own group-level row between Maintenance and Config (same
+   readout: bolt while charging, amber under 20 % off-charger; tap =
+   more-info). No YAML change.
+   v2.11 (2026-09-08): PAUSED-ASLEEP STATE. A pause longer than ~10 min puts
+   the robot to sleep where it stands: status charger_disconnected, vacuum
+   entity 'idle', job still pending (cleaning_progress holds mid-range; the
+   app offers Resume). The card only knew cleaning/paused as run-in-progress,
+   so a slept pause fell through to the idle "Idle - cleaned yesterday" line
+   with the two-tap play - no resume anywhere (2026-09-08 16:20 pause ->
+   16:30 sleep, 1 %). Same rule as the v2.8 recharge-stall detector, off the
+   dock: vacuum 'idle' + progress strictly 0-100 = a paused run. Renders
+   "Paused (asleep) - 1% done - 12m" in amber with map + resume (play icon)
+   + dock (return_to_base) controls; resume sends vacuum.start (the same
+   call the paused-state resume sends; app_start wakes the robot) under the
+   30-s starting lock, so the cloud-poll gap reads "Starting..." instead of
+   inviting a second tap. Accepted edge: a run cancelled off-dock with
+   progress stuck mid-range would show this line until progress resets -
+   resume there just starts a fresh run. No YAML change.
    v2.10 (2026-09-06, source audit): one visible fix + a no-visible-change
    bundle. (1) ROBOT ERROR IS THREE-VALUED: an unavailable / unknown /
    missing vacuum_error sensor is no longer reported as a robot error -
@@ -408,6 +440,7 @@ class FlatVacuumCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._tick) { clearInterval(this._tick); this._tick = null; }
+    if (this._stallTick) { clearInterval(this._stallTick); this._stallTick = null; }
     if (this._armTimer) { clearTimeout(this._armTimer); this._armTimer = null; }
     if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = null; }
     if (this._optTimer) { clearTimeout(this._optTimer); this._optTimer = null; }
@@ -484,6 +517,22 @@ class FlatVacuumCard extends HTMLElement {
   _optv(key, fallback) {
     return (this._opt[key] != null && (this._dragKey === key || Date.now() < this._optUntil))
       ? this._opt[key] : fallback;
+  }
+  /* v2.12: is the local clock inside the window [begin, end) drawn by two
+     time entities ("HH:MM:SS")? Wraps across midnight; unknown = false */
+  _inWindow(beginEnt, endEnt) {
+    const mins = (id) => {
+      const st = this._st(id);
+      const v = st ? st.state : '';
+      if (!v || v.length < 5 || v === 'unknown' || v === 'unavailable') return null;
+      const h = parseInt(v.slice(0, 2), 10), m = parseInt(v.slice(3, 5), 10);
+      return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+    };
+    const b = mins(beginEnt), e = mins(endEnt);
+    if (b == null || e == null || b === e) return false;
+    const d = new Date();
+    const now = d.getHours() * 60 + d.getMinutes();
+    return b < e ? (now >= b && now < e) : (now >= b || now < e);
   }
   _t12(state) {
     if (!state || state.length < 5 || state === 'unknown' || state === 'unavailable') return '--:--';
@@ -855,6 +904,12 @@ class FlatVacuumCard extends HTMLElement {
             </div>
           </div>
 
+          <div class="grow" id="rbatt">
+            <ha-icon class="gic" id="battic" icon="mdi:battery"></ha-icon>
+            <span class="lbl">Battery</span>
+            <span class="rt gsum" id="battxt">--</span>
+          </div>
+
           <div class="grow" id="g_conf">
             <ha-icon class="gic" icon="mdi:cog-outline"></ha-icon>
             <span class="lbl">Config</span>
@@ -929,11 +984,6 @@ class FlatVacuumCard extends HTMLElement {
                 <span class="stat" id="drytxt">--</span>
                 <span class="sw" id="drysw"><span class="knob"></span></span>
               </span>
-            </div>
-            <div class="srow act" id="rbatt">
-              <ha-icon class="sic" id="battic" icon="mdi:battery"></ha-icon>
-              <span class="slbl">Battery</span>
-              <span class="rt stat" id="battxt">--</span>
             </div>
           </div>
 
@@ -1136,7 +1186,14 @@ class FlatVacuumCard extends HTMLElement {
     el.hpause.addEventListener('click', (e) => {
       e.stopPropagation();
       const s = this._st(c.vacuum);
-      const paused = s && s.state === 'paused';
+      /* v2.11: a slept pause (vacuum 'idle', job pending) resumes with the
+         same vacuum.start; the starting lock covers the cloud-poll gap */
+      const asleep = s && s.state === 'idle' && this._asleep;
+      /* v2.12: a DND-held recharge stall resumes the same way (the app's
+         "continue during DND") */
+      const held = s && s.state === 'docked' && this._held;
+      const paused = s && (s.state === 'paused' || asleep || held);
+      if (asleep || held) this._lockStart();
       this._svc('vacuum', paused ? 'start' : 'pause', { entity_id: c.vacuum });
     });
     el.hdock.addEventListener('click', (e) => {
@@ -1478,7 +1535,7 @@ class FlatVacuumCard extends HTMLElement {
       i_pres: 'Who the automation currently thinks is home.',
       i_maint: "Roborock's recommended service countdowns, in CLEANING RUNTIME hours (the robot runs ~1-1.5h per clean, so 150h is several months). Amber = overdue; a notification fires when an item crosses zero.",
       i_conf: 'Device settings - changes apply to the robot immediately.',
-      i_dnd: "The robot's own quiet hours: suppresses its internal schedules, auto-resume, and dock auto-empty. Commanded starts still run.",
+      i_dnd: "The robot's own quiet hours: suppresses its internal schedules, auto-resume, and dock auto-empty. Commanded starts still run. A mid-run recharge that runs into DND is held - the header shows Held by DND with resume and end-run buttons.",
       i_lock: 'Disables the physical buttons on the robot and dock (cat insurance).',
       i_empty: 'How hard the dock vacuums the robot\u2019s dustbin after a run: smart lets the dock decide, light / balanced / max trade noise and bag life for suction.',
       i_act: 'Start (or stop) a dock job by hand: wash the mop pads or empty the dustbin now. The robot must be on the dock. Normal runs do both automatically.',
@@ -1856,12 +1913,29 @@ class FlatVacuumCard extends HTMLElement {
     const stall = !warning && !dockAct && vstate === 'docked' && statusRaw === 'charging'
       && prog != null && prog > 0 && prog < 100;
     this._stall = stall;
+    /* HELD BY DND (v2.12): DND suppresses auto-resume, so a stall that
+       overlaps the DND window waits for the owner (the app asks continue /
+       end). Same controls as the stall line plus a resume button. */
+    const held = stall && (this._st(c.dnd_entity) || {}).state === 'on'
+      && this._inWindow(c.dnd_begin_entity, c.dnd_end_entity);
+    this._held = held;
+    /* the window boundaries move no entity - tick once a minute while a
+       stall is showing so the label follows the clock */
+    if (stall && !this._stallTick) this._stallTick = setInterval(() => this._render(), 60000);
+    if (!stall && this._stallTick) { clearInterval(this._stallTick); this._stallTick = null; }
+    /* PAUSED-ASLEEP (v2.11): a pause longer than ~10 min puts the robot to
+       sleep off the dock - status charger_disconnected, vacuum 'idle' - with
+       the job still pending. Same rule as the stall detector, off-dock:
+       idle + progress strictly 0-100 = a paused run, not an idle robot. */
+    const asleep = !warning && !dockAct && vstate === 'idle'
+      && prog != null && prog > 0 && prog < 100;
+    this._asleep = asleep;
     /* STARTING LOCK (v2.8) */
     if (this._startUntil && (Date.now() > this._startUntil || !idleish)) {
       this._startUntil = 0;
       if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = null; }
     }
-    const starting = !!this._startUntil && idleish && !warning && !dockAct && !stall;
+    const starting = !!this._startUntil && idleish && !warning && !dockAct && (!stall || held);
 
     /* header text (warning-first two-tone: amber prefix token + state-colored rest) */
     let sub, titleState = null;
@@ -1869,7 +1943,7 @@ class FlatVacuumCard extends HTMLElement {
     else if (warning) sub = vstate.replace(/^./, ch => ch.toUpperCase()) + ' \u00b7 starting in ' + mmss;
     else if (starting) sub = 'Starting\u2026';
     else if (dockAct) sub = dockAct + (prog != null && prog > 0 ? pTxt : '');
-    else if (stall) sub = 'Charging to resume' + pTxt + eTxt;
+    else if (stall) sub = (held ? 'Held by DND' : 'Charging to resume') + pTxt + eTxt;
     else if (vstate === 'cleaning') {
       /* v2.8.1: the state word lives on the title line while cleaning; the
          secondary line is progress - elapsed - room (room last, truncates
@@ -1881,6 +1955,7 @@ class FlatVacuumCard extends HTMLElement {
       titleState = parts.length ? 'Cleaning' : null;
     }
     else if (vstate === 'paused') sub = 'Paused' + pTxt + eTxt;
+    else if (asleep) sub = 'Paused (asleep)' + pTxt + eTxt;
     else if (vstate === 'returning') sub = 'Returning to dock';
     else {
       sub = vstate.replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase());
@@ -1907,29 +1982,31 @@ class FlatVacuumCard extends HTMLElement {
 
     /* header state machine */
     if (this._armUntil && Date.now() > this._armUntil) this._armUntil = 0;
-    const running = vstate === 'cleaning' || vstate === 'paused';
+    const asleepCtl = asleep && !starting;   /* v2.11: lock window shows Starting... only */
+    const heldCtl = held && !starting;       /* v2.12: same rule for the held stall */
+    const running = vstate === 'cleaning' || vstate === 'paused' || asleepCtl;
     const show = (n, v) => { const d = v ? 'flex' : 'none'; if (n.style.display !== d) n.style.display = d; };
     if (warning) el.hico.setAttribute('icon', 'mdi:alarm');
     else if (vstate === 'returning') el.hico.setAttribute('icon', 'mdi:home-import-outline');
     else el.hico.setAttribute('icon', 'mdi:robot-vacuum');
-    const active = vstate === 'cleaning' || vstate === 'returning' || dockAct || stall || starting;
+    const active = vstate === 'cleaning' || vstate === 'returning' || dockAct || (stall && !heldCtl) || starting;
     el.hico.style.color = warning ? AMBER
       : active ? ACCENT_TEXT
-      : vstate === 'paused' ? AMBER
+      : vstate === 'paused' || asleepCtl || heldCtl ? AMBER
       : autoOn ? GREY : 'rgba(255,255,255,.25)';
-    el.hsub.style.color = warning || vstate === 'paused' ? AMBER
+    el.hsub.style.color = warning || vstate === 'paused' || asleepCtl || heldCtl ? AMBER
       : active ? ACCENT_TEXT : '';
     const armed = this._armUntil > 0;
-    const idleCtl = idleish && !warning && !dockAct && !unavailable && !stall && !starting;
+    const idleCtl = idleish && !warning && !dockAct && !unavailable && !stall && !starting && !asleep;
     show(el.hmap, running || vstate === 'returning' || !!dockAct || stall);
     show(el.hplay, idleCtl && !armed);
     show(el.haway, idleCtl && armed);
     show(el.hdef, idleCtl && armed);
     show(el.hstart, warning);
     show(el.habort, warning);
-    show(el.hpause, running || !!dockAct);
+    show(el.hpause, running || !!dockAct || heldCtl);
     show(el.hdock, running || !!dockAct || stall);
-    el.hpico.setAttribute('icon', vstate === 'paused' ? 'mdi:play' : 'mdi:pause');
+    el.hpico.setAttribute('icon', vstate === 'paused' || asleepCtl || heldCtl ? 'mdi:play' : 'mdi:pause');
 
     /* map dialog: keep title + image fresh while open */
     if (this._mapOpen) {

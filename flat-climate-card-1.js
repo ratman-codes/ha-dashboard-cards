@@ -298,9 +298,7 @@ const DEW_AMBER = '#ffc107', DEW_ORANGE = '#ff9c4a';  // window-flush thresholds
 const LS_MOIST = 'flat-climate-card-moisture-mode';
 const DEF_CONTACTS = ['binary_sensor.anything_open'];
 const DEF_HVAC = 'climate.hall_nest_thermostat';
-const DEF_FORECAST = 'weather.home'; // REPO COPY PLACEHOLDER: the deployed card's default
-// is the household's hourly-capable weather entity (location-bearing id, sanitized here).
-// Set forecast_entity in YAML to your own hourly weather entity, or false to disable.
+const DEF_FORECAST = 'weather.mdr_glencoe_weather_com';
 const DEF_COOL_STATS = 'sensor.nest_cooling_signal';     // v2.3: 0/1 LTS signals
 const DEF_HEAT_STATS = 'sensor.nest_heating_signal';
 const STRIP_COOL = '#5aa9f0', STRIP_HEAT = '#ff6f22', STRIP_WIN = '#4caf50';

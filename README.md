@@ -150,9 +150,9 @@ header.)*
   responses can no longer overwrite newer ones. Used as
   `type: custom:flat-sensor-stack-card` (see `notes/flat-sensor-stack-card-notes.md`).
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.10. Roborock control card (Qrevo Edge 2): status
+- `flat-vacuum-card.js` — v2.12. Roborock control card (Qrevo Edge 2): status
   header (state word on the title line while cleaning; mid-run pit-stop, recharge
-  stall and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors;
+  stall, held-by-DND, paused-asleep and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors;
   play arms an Away/Default picker that applies the profile for one run and starts),
   maintenance counters + dock issue rows (dock error, water tanks), dock config
   (empty mode, wash/empty actions, mop drying toggle), run history. Needs the
@@ -163,7 +163,14 @@ header.)*
   gate; slider listeners on the track instead of `window`; elapsed/drying times
   round before splitting ("1h 60m" gone); a failed history fetch keeps the last
   good rows and retries; unavailable Config rows dim and go inert; re-setConfig
-  rebuilds; primary-button-only long-press. Used as `type: custom:flat-vacuum-card`
+  rebuilds; primary-button-only long-press. v2.11 (2026-09-08): a pause longer
+  than ~10 min sleeps the robot off the dock and HA reports it `idle`; the card now
+  reads idle + mid-range progress as a paused run ("Paused (asleep) · N% done")
+  with a resume button instead of the idle line. v2.12 (2026-09-11): a recharge
+  stall that overlaps the robot's DND window is held, not resumed (the app asks
+  continue / end run); the card now reads stall + DND on + clock inside the DND
+  window as "Held by DND · N% done" with resume and end-run buttons; the Battery
+  row moved out of Config to its own row between Maintenance and Config. Used as `type: custom:flat-vacuum-card`
   (see `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
 - `flat-cat-card.js` — v1.25. Consolidated cats card (pet-tech litter box + two
   feeders + per-cat rows showing MEASURED weight — the smoothed scale average
@@ -241,7 +248,7 @@ header.)*
   card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
   `1532f17af469489b863f711848d36fb2`.
-- `flat-climate-card.js` — v2.2. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.3. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -273,7 +280,12 @@ header.)*
   re-render; entity-identity render gate; config hardening). v2.2: the OPEN
   WINDOWS chip hides while the thermostat is heating, and an amber CLOSE
   WINDOWS chip appears when a window contact is open and it is no longer
-  cooler outside (`chip.close_on/close_off/close_label`). Zero HA-side entities. Default
+  cooler outside (`chip.close_on/close_off/close_label`). v2.3: on the 14d+
+  tabs two thin strips under the temperature chart show AC running (blue,
+  heating in heat-orange) and windows open (green) from 0/1 signal sensors'
+  long-term statistics (`cooling_stats` / `heating_stats` / `window_stats`;
+  hourly on 14d/1m, daily on 3m+; a row is absent until its sensor exists).
+  Zero HA-side entities. Default
   entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
   and the pop-out keys (contacts/hvac_entity/forecast_entity/popout).
   Used as `type: custom:flat-climate-card`.
@@ -281,8 +293,8 @@ header.)*
   SANITIZED COPY NOTE: from v2.0.2 this repo file is NOT byte-identical to
   the deployed blob — the deployed default forecast entity id is
   location-bearing and is replaced here by a `weather.home` placeholder
-  (set `forecast_entity` in YAML). Deployed v2.2 = 114,022 B FNV-1a a4bfd39f;
-  repo copy = 114,235 B FNV-1a 5e5e7b7a; sole difference is that one
+  (set `forecast_entity` in YAML). Deployed v2.3 = 119,705 B FNV-1a 97a50668;
+  repo copy = 119,918 B FNV-1a 3ae822af; sole difference is that one
   constant + comment.
 - `flat-server-card.js` — v1.12. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
@@ -313,7 +325,7 @@ header.)*
   hygiene). All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.8. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.9. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
@@ -337,6 +349,8 @@ header.)*
   count stays true; `blip_min_s` (90) keeps sub-floor blips off the timeline and
   out of the header while real outages are untouched; a failed refresh keeps the
   last good lanes; bare-string list options and quoted thresholds are accepted.
+  v1.9: the quiet header drops the "batteries OK - filters OK" filler so the
+  conditional "24h: N outages" suffix fits — only problems earn a place on that line.
   AUTO-DISCOVERING: reads the frontend entity/device/area
   registries, so every device owned by the configured integrations (default:
   matter) and every battery-% sensor is watched with zero YAML upkeep — new

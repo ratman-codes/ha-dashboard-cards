@@ -1,4 +1,11 @@
-/* flat-maintenance-card v1.8
+/* flat-maintenance-card v1.9
+ *
+ * v1.9: QUIET LINE SAYS ONLY WHAT MATTERS (2026-09-08). The collapsed header no
+ * longer pads "All quiet - N reachable" with "batteries OK - filters OK"; those
+ * segments pushed the conditional "24h: N outages" suffix off the 430px line
+ * so it read "...filters OK - 2". Now: "All quiet - 59 reachable - 24h: 14
+ * outages" (suffix only when the window has outages); "no battery data" /
+ * "filters: no data" still appear because they flag something broken.
  *
  * v1.8: AUDIT RELEASE (2026-09-06). (1) The widespread-outage banner names the
  * platforms that are actually down and gives the Matter Server / OTBR /
@@ -1154,10 +1161,10 @@
         el.s.textContent =
           "All quiet - " + conn.up + " reachable - " + quiet.length + " settling";
       } else {
+        // v1.9: no "batteries OK" / "filters OK" filler - only problems earn a place on this line
         const parts = ["All quiet", conn.up + " reachable"];
-        // (no "(N no data)" suffix: the quiet line is already at the 430px limit with a 58-device count)
-        parts.push(m.bats.total ? "batteries OK" : "no battery data");
-        if (this._cfg.filters.length) parts.push(m.filt.total ? "filters OK" : "filters: no data");
+        if (!m.bats.total) parts.push("no battery data");
+        if (this._cfg.filters.length && !m.filt.total) parts.push("filters: no data");
         el.s.textContent = parts.join(" - ");
       }
 

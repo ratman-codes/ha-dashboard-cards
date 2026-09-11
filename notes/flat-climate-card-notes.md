@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.2 = 114,022 B, FNV-1a a4bfd39f; this repo copy = 114,235 B, FNV-1a 5e5e7b7a.
+Deployed v2.3 = 119,705 B, FNV-1a 97a50668; this repo copy = 119,918 B, FNV-1a 3ae822af.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -42,7 +42,11 @@ thermostat's own thermometer.
   Venting heatmap = mean Δ by hour × weekday (square cells, all 24 hour labels,
   hover tooltip; capped at the last 30 days on seasonal tabs). Faint overlays on
   24h/7d: window-open (green, from contact sensors), cooling (blue) / heating
-  (heat-orange) from the thermostat's `hvac_action` history. Tiles: venting offered
+  (heat-orange) from the thermostat's `hvac_action` history. **v2.3:** on 14d+ two
+  thin strips under the chart carry the same story from long-term statistics of
+  0/1 signal sensors (`cooling_stats` / `heating_stats` / `window_stats`; hourly on
+  14d/1m, daily on 3m+; intensity = share of the period on; a row is absent until
+  its sensor exists or if the fetch fails). Tiles: venting offered
   h/day + share captured (chip-on hours with a window actually open, past 7d),
   range extremes (sun-trimmed), warmest/selected room, muggy hours (outdoor dew
   ≥65/≥60 share). Both pop-out charts scrub like the card rows.
@@ -60,6 +64,7 @@ thermostat's own thermometer.
 `avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label, close_on, close_off, close_label}`,
 `moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]`, a single id, or `false`,
 `hvac_entity` or `false`, `forecast_entity` (hourly-capable weather entity) or `false`,
+`cooling_stats` / `heating_stats` / `window_stats` (0/1 signal sensors with LTS, or `false`),
 `band_smooth` (0 = raw envelopes).
 
 ## Version history (details in the source header)
@@ -89,6 +94,8 @@ thermostat's own thermometer.
   re-`setConfig` cleanup; listener/subscription hygiene; header refresh.
 - v2.2 (2026-09-06): chip hidden while heating; amber CLOSE WINDOWS chip
   (contact open + no longer cooler outside, own hysteresis).
+- v2.3 (2026-09-07): AC / window strips under the 14d+ pop-out charts (LTS-fed;
+  owner chose strips over full-height columns after a side-by-side mockup).
 
 ## Verification
 jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1

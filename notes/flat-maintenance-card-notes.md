@@ -203,7 +203,7 @@ devices:                # optional manual extras
   mid-window uses only the post-charge segment; empty statistics -> trend
   pending; non-rechargeable low battery unchanged) + headless-Chromium render
   + node --check + zero non-ASCII.
-- v1.8 (2026-09-06, 60,954 B, FNV-1a bcfb9aab, CURRENT): AUDIT RELEASE — a
+- v1.8 (2026-09-06, 60,954 B, FNV-1a bcfb9aab): AUDIT RELEASE — a
   full source audit of v1.7 (eight findings, each confirmed in a jsdom harness
   before being reported; all fixes shipped in one version by owner choice).
   Platform-aware outage banner; 24h history fetched at load and refreshed
@@ -222,6 +222,16 @@ devices:                # optional manual extras
   zero non-ASCII, harness bug-mode 32/32 on v1.7 + fixed-mode 34/34 on v1.8,
   Playwright/Chromium render at the dashboard's column width with a
   scrollWidth overflow check, blob decode cmp before delivery.
+- v1.9 (2026-09-08, 61,386 B, FNV-1a f0f7520a, CURRENT): QUIET LINE SAYS ONLY
+  WHAT MATTERS. The collapsed header no longer pads "All quiet - N reachable"
+  with "batteries OK - filters OK"; with a ~60-device count those segments
+  pushed the conditional "24h: N outages" suffix past the column width, so the
+  header read "...filters OK - 2". Now "All quiet - N reachable" plus
+  " - 24h: N outages" only when the window has outages; "no battery data" /
+  "filters: no data" still appear because they flag something broken. Low
+  batteries/filters were never on this line — they switch the header to
+  "N issues" and show in the alert strip. One 5-line edit + header comment;
+  node --check, zero non-ASCII, live blob byte-verified after install.
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

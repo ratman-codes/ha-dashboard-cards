@@ -166,12 +166,25 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   validation failure, 2026-09-04, caused by rebuilding the wrapper from memory).
   Before delivering a data-URL file, diff its prefix against the last accepted
   one (`head -c 52 | cmp`).
-- **Deployed: v2.9.2, FNV-1a `d4376f7e`, 111,784 bytes** — owner-confirmed
-  installed 2026-09-06 (not byte-verified against the live blob; Card Manager's
-  post-write verify stands). **DELIVERED 2026-09-06: v2.10, FNV-1a `8212d916`,
-  118,037 bytes** (`Claude outputs\flat-vacuum-card-v2.10.txt`; repo copy = decoded
-  blob = project archive, `cmp` on device) — owner install via Card Manager
-  PENDING; confirm the resource header shows `8212d916`. Lineage:
+- **Delivered: v2.12, FNV-1a `93a2501d`, 123,267 bytes** — delivered
+  2026-09-11 (`Claude outputs\flat-vacuum-card-v2.12.txt`; built from the repo's
+  v2.11 bytes, verified `1cc21f3f`; decoded = local build = project archive =
+  repo copy), **install pending** (owner installs via Card Manager). No YAML
+  change. NO ACTION NEEDED on the held-by-DND path: untested live, owner will
+  confirm at the next DND-overlapping stall. Previous:
+  **v2.11, FNV-1a `1cc21f3f`, 120,063 bytes** — delivered
+  2026-09-08 (`Claude outputs\flat-vacuum-card-v2.11.txt`, decoded on device =
+  local build = project archive = repo copy), **owner-installed 2026-09-08 via
+  Card Manager and LIVE-TESTED the same minute**: resume tapped on the card
+  → robot `cleaning` at 17:54:08, `cleaning_time` continued 12.2 → 12.75 min
+  (mid-run, not a fresh start). Live blob not re-paged (Card Manager's
+  post-write verify stands); no YAML change. Previous: **v2.10, FNV-1a
+  `8212d916`, 118,037 bytes** — delivered 2026-09-06 (`Claude outputs\flat-
+  vacuum-card-v2.10.txt`), owner-installed 2026-09-07 via Card Manager,
+  superseded by v2.11 on 2026-09-08. Before that:
+  **v2.9.2, FNV-1a `d4376f7e`, 111,784 bytes** — owner-confirmed installed
+  2026-09-06 (not byte-verified against the live blob), superseded by v2.10 on
+  2026-09-07. Lineage:
   **v2.9 `9cb7619e` / 110,052 B** (owner-installed 2026-09-04, Card Manager
   validated, first live profile start 16:47 PT) → **v2.9.1 `043e8e0a` /
   111,074 B** (owner-installed mid-run 7) → v2.9.2 → v2.10. Previous: v2.8.1 `33f14a36` / 106,793 B — owner-installed via
@@ -236,6 +249,31 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     unavailable / unknown / missing is no claim (no "⚠ blocked" token, no
     "Robot: …" issue row); the "Unavailable" header line alone carries an
     outage. Elapsed / drying times round to whole minutes before splitting.
+    **v2.11 (2026-09-08) PAUSED-ASLEEP:** vacuum `idle` + progress strictly
+    0–100 (same rule as the stall detector, off the dock) → "Paused (asleep)
+    · 1% done · 12m" in amber with map + resume (play glyph) + dock
+    (`return_to_base`) controls; the two-tap play never shows while a run is
+    pending. Resume = `vacuum.start` (the same call the paused-state resume
+    sends) under the 30-s starting lock, so the cloud-poll gap reads
+    "Starting…" instead of inviting a second tap; the lock clears when the
+    vacuum leaves idle or after 30 s (falls back to the asleep line). Idle +
+    progress 0 / unavailable + stale progress render exactly as before.
+    Accepted edge: a run cancelled off-dock with progress stuck mid-range
+    shows this line until progress resets; resume there starts a fresh run.
+    **v2.12 (2026-09-11) HELD BY DND:** a recharge stall that overlaps the
+    robot's DND window will not resume by itself — DND suppresses auto-resume
+    and the app holds the job until the owner picks "continue" or "end run"
+    (see findings). Stall + `switch.…_do_not_disturb` on + browser clock
+    inside the `time.…_do_not_disturb_begin`→`_end` window (wrap-safe across
+    midnight; either time unknown = plain stall line) → "Held by DND · 62%
+    done · 3h 18m" in AMBER with map + resume (play glyph, `vacuum.start`
+    under the 30-s starting lock = the app's "continue during DND") + dock as
+    END RUN (`vacuum.stop`, unchanged). Outside the window the cyan "Charging
+    to resume" line is unchanged. A 60-s repaint tick runs only while a stall
+    is showing (the 10 PM / 8 AM boundaries move no entity, and at 100 %
+    battery nothing else does either). Both buttons on this line are
+    UNTESTED live (`vacuum.start` during DND, `vacuum.stop` on a docked
+    robot) — a dud button does nothing; the app remains the fallback.
   - AUTO-CLEAN: toggle + 7 setting rows + Away profile / Default profile rows
     (summary chips "max+ · high · deep ›"; tap → popup editor with segmented
     Suction / Mop intensity / Mop mode pickers, Save writes the helpers) +
@@ -250,6 +288,10 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     Side brush, Sensors, Mop pads, Cleaning tray, Dust bag** with guide dialogs
     (480px, /local images, steps, intervals, app reset path) + runtime/reset
     captions.
+  - BATTERY (v2.12): its own group-level row between Maintenance and Config —
+    same 40px height as the group rows, no chevron, no expansion; readout
+    unchanged ("⚡ 96%" while charging, amber under 20 % off the charger; tap =
+    battery more-info). Moved out of Config by owner request 2026-09-11.
   - CONFIG: **Suction → Mop intensity → Mop mode** dropdowns (order matches the
     summary grammar; summary reads "balanced · medium · standard", prettified,
     mirroring the profile chips), **Dock empty mode dropdown** (writable since
@@ -258,7 +300,8 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     dust_emptying switches — tap = turn_on, tint cyan + "Washing…"/"Emptying…"
     while on, tap again = turn_off), volume, DND, child lock, **Mop drying** (v2.8:
     reads `switch.…_dock_mop_drying`, gained a toggle; remaining-time text honors
-    the sensor's unit — hours on 7.1.1), Battery status. **v2.10:** rows whose
+    the sensor's unit — hours on 7.1.1). Battery lived at the bottom of Config
+    from v2.4 to v2.11. **v2.10:** rows whose
     entity reads unavailable/unknown dim (`.dim`, chips `.ro`) and go inert —
     expect ~30 s of dimmed Config rows after every HA restart while Roborock
     loads; the helper-backed Auto-clean rows never dim.
@@ -331,7 +374,18 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   audit: three-valued robot error + bundle — see the audit section; 42
   asserted exact-string edits; jsdom `harness.js` 20/20 bug-mode on v2.9.2 +
   20/20 fixed-mode on v2.10, `identity.js` 5 states × 4 group opens
-  byte-identical vs v2.9.2, `regress.js` 9/9; no YAML change)**.
+  byte-identical vs v2.9.2, `regress.js` 9/9; no YAML change)** → **v2.11
+  1cc21f3f / 120,063 B (2026-09-08: paused-asleep state + resume; 8 asserted
+  exact-string edits; jsdom `harness.js` bug reproduced on v2.10, 13 checks
+  green on v2.11, header render byte-identical vs v2.10 on 7 untouched
+  states; no YAML change; owner-installed + resume live-proven 2026-09-08)**
+  → **v2.12 93a2501d / 123,267 B (2026-09-11: held-by-DND stall state with
+  resume + end-run buttons, 60-s stall tick, Battery row moved out of Config
+  to its own group-level row; 13 asserted exact-string edits; Playwright
+  harness at 430px 20/20 — both window shapes, midnight wrap, unknown DND
+  times, resume → `vacuum.start` + lock, end run → `vacuum.stop`, progress
+  reset clears it, cleaning/idle/paused lines unchanged; no YAML change;
+  delivered, install pending)**.
   A rev7 `48405154` history "sanitizer" (hide sub-5-minute runs) was built and
   REVERTED the same day — the owner rejected display filtering; all runs show as
   recorded. Don't rebuild it.
@@ -367,7 +421,9 @@ timer cleanup + re-arm, three-valued presence/battery/counters/dock error,
 quoted-numeric config keys, every config key read. Observations, not findings: a
 run cancelled mid-way with `cleaning_progress` held mid-range would show
 "Charging to resume" until progress resets (the restore automation's accepted
-edge; never seen — owner has not cancelled a run); the History profile line
+edge; SEEN 2026-09-10 — a stall ran into DND and sat on that line all night;
+the DND half is covered by v2.12, the general cancel-with-stuck-progress case is
+still open by design); the History profile line
 inserts the `input_text` record unescaped (entity-trusted).
 
 Harness gotchas (this card): events dispatched inside the shadow root need
@@ -531,6 +587,46 @@ state (seconds-resolution countdown).
   `high` 16:48:40; mop mode and fan speed did NOT flicker). The robot echoes
   an unmapped water-box code in its first status report — #931 family. The
   written value took; nothing to fix card-side.
+- **A PAUSE LONGER THAN ~10 MIN PUTS THE ROBOT TO SLEEP OFF THE DOCK — and HA
+  reports it as an IDLE robot (live 2026-09-08).** Backstop run 16:08:33 →
+  card pause 16:20:27 → 16:30:28 (10 min 01 s later) status
+  `charger_disconnected` (code 2), vacuum entity `idle`; `cleaning_progress`
+  HELD at 1, `cleaning_time` held at 12.2 min, `last_clean_end` unchanged,
+  app showed "Sleeping" with Resume offered. `vacuum.start` (→ `app_start`)
+  WAKES the robot and RESUMES the job mid-run: tapped from the v2.11 card
+  ~17:54, `cleaning` at 17:54:08, `cleaning_time` continued 12.2 → 12.75 —
+  not a fresh run. So: vacuum `idle` + mid-range progress = a pending job
+  (the off-dock twin of the recharge stall); the auto-clean automation's
+  not-docked hard block already keeps it from double-starting. Fixed in the
+  card (v2.11); nothing HA-side needed. Untested: whether the robot also
+  sleeps after a pause ON the dock, and the exact sleep timeout (one sample:
+  10 min).
+- **A RECHARGE STALL THAT RUNS INTO DND IS HELD, NOT CANCELLED — and HA has
+  no signal for it (live 2026-09-10).** Backstop run 16:08:33 → mop pass done
+  at 62 % (the ceiling; 105.7 m², 198.4 min) but battery hit 14 % at 19:52:21
+  → `returning_home` → docked/charging 19:54:30 with a small remainder
+  pending (a normal recharge stall; card read "Charging to resume · 62% done
+  · 3h 18m", correct). DND began 22:00 at 68 % charge; the robot did NOT
+  resume (DND suppresses auto-resume) and charged on to 100 % at 22:58. The
+  app pushed a "run cancelled due to DND" notification, but opening the app
+  at ~23:09 showed a PROMPT — "Manually continue run during DND" / "End run"
+  — so the job was HELD awaiting a decision, not cancelled. During the hold:
+  `cleaning_progress` frozen at 62, `cleaning_time` 198.4, `last_clean_begin/
+  end` still the PREVIOUS run (no record written) → the card's stall rule
+  (docked + charging + 0<progress<100) stayed true indefinitely, the restore
+  automation's charging catch was (correctly) gated off by the held progress,
+  and the auto-clean automation still saw the old last_clean date. "End run"
+  in the app at 23:10:00 wrote the clean record at once (`last_clean_begin`
+  16:08:00, `last_clean_end` 23:10:00 = the decision time, progress → 0), so
+  the History row reads begin→end wall clock INCLUDING the hold ("Yday ·
+  4:08 PM · backstop · 7h 02m · 106 m²"). Unknowns (NO ACTION NEEDED, owner
+  observes): whether the robot auto-resumes at DND end (08:00) if left
+  alone; whether `vacuum.start` is accepted during DND (the app offers
+  "continue", so presumably yes); whether `vacuum.stop` on the docked robot
+  closes the job the way the app's "End run" did. Card-side: v2.12 renders
+  the overlap as "Held by DND" with both choices as buttons; nothing HA-side.
+  Rejected on the way: a battery-100 = not-a-stall rule (would have hidden a
+  job that was still live and resumable at 100 %).
 - Guide images soften if dialogs exceed ~660px width (640px sources).
 - Service intervals are **identical to the Q Revo's** (main 300 h, side 200 h,
   filter 150 h + rinse every 2 weeks, sensors 30 h, cleaning tray monthly, dust bag
@@ -699,6 +795,16 @@ Measured so nobody re-diagnoses "the robot is too slow" as a fault:
   medium / balanced, intensity via a 0-s `unknown` transient). Away vs
   Default two-sweep cost: +77 min cleaning and a 2.5 h stall (run 6: 174.6
   min, 3h11m wall, no stall). Owner did not watch the stall header.
+- **Run 8 (2026-09-10 16:08 PT, backstop, Default profile, two-sweep — the
+  DND-hold run; card v2.11):** record `backstop 2026-09-10T16:08:00 D:balanced|
+  medium|standard`. Cord jam 16:32:04 (`error` 12 s → `paused` 7 s → cleared).
+  Curve 27 → 51–54 → 37 → 62 as always; pit stops 17:41, 18:04 (attach pads
+  18:06), 18:32, 19:02, 19:43. Battery 100 → 14 % at 19:52:21 with the mop pass
+  essentially complete (62 %, 105.7 m², 198.4 min) → `returning_home` →
+  docked 19:54:30 to recharge. DND 22:00 at 68 % → job HELD (see findings);
+  owner ended it in the app 23:10:00 → clean record 16:08:00 → 23:10:00,
+  7h 02m wall. Restore automation correctly idle (Default run). No card
+  change was needed for the run itself; v2.12 came out of the hold.
 - The "1 min/m²" folk benchmark is a single vacuum-only pass in open rooms — never
   compare a mop-carrying 7-room run against it.
 
@@ -746,17 +852,25 @@ State as of 2026-07-27 (probe session), except where dated:
 
 ## Open items
 
-- **Confirm v2.10 `8212d916` is the live blob** (delivered 2026-09-06, owner
-  install pending; no YAML change). After the paste: one phone long-press on the
-  header (the v2.10 `user-select: none` / touch-callout change is the only item
-  jsdom could not verify) and a glance that the card looks exactly as before on
-  a healthy day. History row for run 7 should still read "manual · 7h 05m ·
-  105 m²" with a cyan `max · high · deep+` line.
-- **v2.8–v2.10 LIVE WATCHES:** (1) "Charging to resume" header — the data
-  says the card was in that state 18:50–21:16 on run 7 (docked + charging +
-  progress 23) but nobody looked; an eyes-on confirmation is still wanted;
-  (2) the stall dock button = `vacuum.stop` (untested — press only to
-  actually cancel a run); (4) first real dock fault → tank issue rows +
+- **v2.12 `93a2501d` delivered 2026-09-11, INSTALL PENDING** (owner installs
+  via Card Manager; no YAML change). Expected on install: Battery row between
+  Maintenance and Config; History top row "Yday · 4:08 PM · backstop · 7h 02m
+  · 106 m²" with a dim `balanced · medium · standard` line. Held-by-DND path:
+  NO ACTION NEEDED, do not check this — owner will confirm after the next
+  stall that overlaps DND.
+- **v2.11 `1cc21f3f` owner-installed 2026-09-08 via Card Manager, resume
+  live-proven** (superseded by v2.12 once installed; no YAML change; live blob
+  not re-paged — Card Manager's post-write verify stands). Still owed from v2.10: one phone
+  long-press on the header (the `user-select: none` / touch-callout change is
+  the only item jsdom could not verify). History row for run 7 should still
+  read "manual · 7h 05m · 105 m²" with a cyan `max · high · deep+` line.
+- **v2.8–v2.12 LIVE WATCHES (owner observes; NO ASSISTANT ACTION):** (0) v2.11 asleep line eyes-on happened
+  2026-09-08 (owner tapped resume on it) — closed; (1) "Charging to resume"
+  header — EYES-ON 2026-09-10 (run 8's stall, screenshot: "Charging to resume
+  · 62% done · 3h 18m") — closed;
+  (2) the stall dock button = `vacuum.stop` (still untested — press only to
+  actually end a run); (8) v2.12 "Held by DND" line + its resume / end-run
+  buttons on the next DND-overlapping stall; (4) first real dock fault → tank issue rows +
   `⚠ dock` token + dock error row; (5) v2.9.1 stale-elapsed suppression on
   the next run start (expect "0% done · <room>" with no elapsed for the first
   ~40 s); (6) "Detaching mops" at the next start (v2.9.2); (7) v2.10: on the
@@ -808,6 +922,15 @@ mops" label (v2.9.2) ✓.
 **CLOSED 2026-09-06:** v2.9.2 owner-installed ✓ · full source audit (10 findings,
 all harness-confirmed) → v2.10 built, both-direction harness + render identity
 green, delivered, archive + repo (js + README + sanitized notes) synced ✓.
+**CLOSED 2026-09-08:** v2.10 owner-installed ✓ · slept-pause root-caused from
+the recorder (10-min sleep → `charger_disconnected` → HA `idle`) ✓ · v2.11
+paused-asleep state built, delivered, owner-installed, resume-from-card
+live-proven mid-run ✓ · archive + repo (js + README + sanitized notes) synced ✓.
+**CLOSED 2026-09-11:** DND-hold behaviour root-caused from the recorder + the
+app prompt (held, not cancelled; record written on "End run") ✓ · v2.12
+held-by-DND state + Battery row move built, harness 20/20, delivered ✓ ·
+archive + repo (js + README + sanitized notes) synced ✓. Install + live
+proof of the DND buttons: owner, passively.
 
 **Do NOT re-offer:** folding the old Q Revo's run history into the card, the rev7
 history sanitizer, or a `smart_mode` profile.
@@ -855,6 +978,21 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
   see the audit section for the full list (window-listener leak, render gate,
   "1h 60m", history failure handling, inert unavailable rows, re-setConfig,
   pointer hygiene, day clamp, popup filter).
+- **RUN LOST AFTER A LONG PAUSE (no resume on the card) — FIXED 2026-09-08
+  (v2.11).** A pause longer than ~10 min sleeps the robot: status
+  `charger_disconnected` → vacuum `idle` → the card fell through to the idle
+  "Idle · cleaned yesterday" line with the two-tap play, while the app still
+  offered Resume at 1 %. Found the same evening it first happened (owner
+  paused for a work call). v2.11 reads idle + mid-range progress as a paused
+  run and shows resume; live-proven: the tap resumed mid-job.
+- **STALL LINE STUCK ALL NIGHT WHEN DND HELD THE JOB — ADDRESSED 2026-09-11
+  (v2.12, install pending, DND buttons untested live).** Run 8's recharge
+  stall ran into DND; the robot held the job (app prompt: continue / end run)
+  and HA carried no signal, so "Charging to resume · 62% done" — truthful but
+  unexplained — stayed until the owner ended the run in the app. v2.12 reads
+  stall + DND on + inside the DND window as "Held by DND" with the app's two
+  choices as buttons. Not a card bug as such (the job WAS pending); the
+  general cancel-with-stuck-progress edge stays accepted.
 
 - **RESTORE-MID-RECHARGE — FIXED 2026-08-27** (found 2026-08-14; recurred
   2026-08-27 at 17:13:31, which prompted the owner to green-light shipping the
@@ -880,9 +1018,11 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
 
 ## Known open bugs (diagnosed, not fixed — owner deferring)
 
-- None as of 2026-09-06. (The three that lived here — `deep`/301, the double
+- None as of 2026-09-11. (The three that lived here — `deep`/301, the double
   run-record, `⚠ Dock: unknown.` — all moved to Fixed bugs; the 2026-09-06 audit
-  found ten more, all fixed in v2.10.)
+  found ten more, all fixed in v2.10; the slept-pause bug found 2026-09-08 was
+  fixed the same evening in v2.11; the DND-hold blind spot found 2026-09-10 is
+  addressed in v2.12.)
 
 ## Teardown order (if ever dismantling)
 
@@ -892,3 +1032,4 @@ mode, dock actions), `deep` picker filter. Remaining, none owner-requested:
 3. Dashboard: card entry + the flat-vacuum-card resource
 4. `/config/www/vacuum-guides/`
 5. Android channels self-clean when the app's notifications are cleared
+
