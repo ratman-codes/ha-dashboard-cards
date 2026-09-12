@@ -1,8 +1,9 @@
-/* flat-climate-card v2.3 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.4.1 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
-   outdoor delta reading ("7.3 F cooler outside") + an OPEN WINDOWS action chip
-   (green only when action-relevant, hysteresis so it doesn't flicker), drawn
+   outdoor delta reading ("7.3 F cooler outside") + an action chip - OPEN WINDOWS
+   (green), CLOSE WINDOWS (amber) or RUN AC (blue) - shown only when there is an
+   action the owner has not taken yet (hysteresis so it doesn't flicker), drawn
    over a 24h overlay of every room's temperature curve (6 solid series incl.
    the thermostat's Hall line, 2 dashed averages, legend bottom-left, no
    on-chart text). The title pill top-right toggles an expansion holding: an
@@ -32,7 +33,9 @@
       indoor:  [{entity, humidity, name, color}, ...],
       outdoor: [{entity, humidity, name, color}, ...],
       chip: {on_delta: 3, off_delta: 1.5, label: OPEN WINDOWS,
-             close_on: 0, close_off: 1, close_label: CLOSE WINDOWS}
+             close_on: 0, close_off: 1, close_label: CLOSE WINDOWS,
+             ac_label: RUN AC, ac_close_label: CLOSE - RUN AC}
+      ceiling: input_number.comfort_ceiling   (v2.4; absent/false = no ceiling)
      - example rooms use placeholder ids like sensor.room1_temperature.
       v2.3 pop-out strips (14d+): cooling_stats / heating_stats / window_stats =
       0/1 signal sensors with long-term statistics (or false).)
@@ -67,6 +70,33 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.4.1 (2026-09-12): the ceiling tag loses its outline/background and reads
+     as quiet grey text beside the chip (owner: two pills side by side made the
+     hero busy); it keeps the chip's metrics, the card's text stroke so lines
+     do not cut through it, the hover wash and the tap. CSS only.
+   - v2.4 (2026-09-12): COMFORT CEILING. Config `ceiling: <input_number id>`
+     names a Number helper holding the indoor temperature the owner still
+     finds tolerable (e.g. 78 F). With it set, the chip logic gains one rule
+     and one suppression, both with a 1 F hysteresis band (CEIL_BAND):
+     (a) OPEN WINDOWS is SUPPRESSED while the sun-trimmed outdoor average is
+     above the ceiling - venting can only bring the house down to roughly the
+     outdoor temperature, so it cannot get under the ceiling and the chip would
+     be recommending a non-solution. Turns on above the ceiling, releases once
+     outdoor is below ceiling - 1.
+     (b) RUN AC (blue, the pop-out's AC color): the house average AND the
+     outdoor average are both above the ceiling and the thermostat is not
+     already cooling (or heating) - only the AC can fix this. If a window
+     contact is open at the same time the label reads "CLOSE - RUN AC".
+     Disappears as soon as hvac_action reports cooling, or the house drops
+     below ceiling - 1. It never turns the AC on; it only points at the one
+     action not yet taken. Priority when several rules apply: RUN AC, then
+     CLOSE WINDOWS, then OPEN WINDOWS.
+     A small "<= 78" tag sits beside the chip slot whenever the ceiling entity
+     resolves (hidden while it is unavailable - no guessed value); tapping it
+     opens the helper's more-info dialog so the ceiling is changed from the
+     card. Without `ceiling` the card behaves exactly as v2.3. The dew point
+     stays out of the decision (see v1.4 below; 885 h of Aug-Sep 2026 data
+     re-checked 2026-09-12: outdoor dew 58-73 F, mean 65.5, no gate added).
    - v2.3 (2026-09-07): AC / WINDOW STRIPS ON THE 14d+ TABS. The 24h/7d tabs
      shade the chart from raw recorder history, which HA purges after ~10
      days; longer tabs had nothing. Now two thin strips sit under the
@@ -287,8 +317,11 @@ const DEF_OUTDOOR = [
     name: 'Front', color: '#199e70' },
 ];
 const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS',
-                   close_on: 0, close_off: 1, close_label: 'CLOSE WINDOWS' };  // v2.2
+                   close_on: 0, close_off: 1, close_label: 'CLOSE WINDOWS',     // v2.2
+                   ac_label: 'RUN AC', ac_close_label: 'CLOSE \u00b7 RUN AC' };  // v2.4
 const AMBER = '#ffc107';
+const AC_BLUE = '#5aa9f0';   // v2.4 RUN AC chip (same blue as the pop-out AC strip)
+const CEIL_BAND = 1;         // v2.4 F of hysteresis under the ceiling for both comparisons
 const DEF_HALL = { entity: 'sensor.hall_nest_thermostat_temperature',
                    humidity: 'sensor.hall_nest_thermostat_humidity',
                    name: 'Hall', color: '#a774d6', in_average: false };
@@ -358,6 +391,8 @@ class FlatClimateCard extends HTMLElement {
       : (typeof config.contacts === 'string' && config.contacts) ? [config.contacts]
       : (config.contacts === false ? [] : DEF_CONTACTS.slice());
     this._hvacEnt = (config.hvac_entity === false) ? null : (config.hvac_entity || DEF_HVAC);
+    // v2.4 comfort ceiling: an input_number entity id, or nothing
+    this._ceilEnt = (typeof config.ceiling === 'string' && config.ceiling) ? config.ceiling : null;
     this._fcEnt = (config.forecast_entity === false) ? null : (config.forecast_entity || DEF_FORECAST);
     // v2.3 strip sources (14d+ tabs); false or a missing window sensor = row absent
     const sig = (v, d) => (v === false) ? null : ((typeof v === 'string' && v) ? v : d);
@@ -373,13 +408,17 @@ class FlatClimateCard extends HTMLElement {
     this._focus = null;       // v1.6 legend spotlight state
     this._chipOn = false;
     this._closeOn = false;    // v2.2 CLOSE WINDOWS hysteresis state
+    this._ceilOutOn = false;  // v2.4 outdoor above the ceiling (hysteresis)
+    this._ceilInOn = false;   // v2.4 house above the ceiling (hysteresis)
+    this._ceilLast = null;    // v2.4 ceiling value the hysteresis states were built against
     this._chipShown = null;   // last applied chip state (idempotent display writes)
+    this._ceilShown = null;   // last applied ceiling tag text
     this._hist = {};          // entity -> [{t, v, x, y}]
     this._avgHist = null; this._avgRowPts = null; this._moistRowPts = null;
     // v2.1.2: entity ids whose state changes should re-render (set hass gate)
     this._watchIds = Array.from(new Set(
       this._series.map(s => s.entity).concat(this._series.map(s => s.humidity).filter(Boolean),
-        this._contacts, this._hvacEnt ? [this._hvacEnt] : [])));
+        this._contacts, this._hvacEnt ? [this._hvacEnt] : [], this._ceilEnt ? [this._ceilEnt] : [])));
     this._lastStates = null;
     if (!this.shadowRoot) this._createDom();
     else this._buildDom();
@@ -440,7 +479,8 @@ class FlatClimateCard extends HTMLElement {
           -webkit-text-stroke: 2px var(--card-background-color); paint-order: stroke fill; }
         .val .uom { font-size: 16px; font-weight: 400; color: var(--secondary-text-color);
           margin-left: 4px; -webkit-text-stroke: 0; }
-        .chipwrap { position: absolute; top: 47px; left: 16px; z-index: 2; pointer-events: none; }
+        .chipwrap { position: absolute; top: 47px; left: 16px; z-index: 2; pointer-events: none;
+          display: flex; align-items: center; gap: 6px; }
         .chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex: none;
           padding: 2px 8px; border-radius: 999px; border: 1px solid ${GOOD};
           color: ${GOOD}; font-size: 10.5px; font-weight: 600; letter-spacing: .03em;
@@ -448,6 +488,19 @@ class FlatClimateCard extends HTMLElement {
         .chip .cdot { width: 7px; height: 7px; border-radius: 50%; background: ${GOOD}; }
         .chip.close { border-color: ${AMBER}; color: ${AMBER}; }
         .chip.close .cdot { background: ${AMBER}; }
+        .chip.ac { border-color: ${AC_BLUE}; color: ${AC_BLUE}; }
+        .chip.ac .cdot { background: ${AC_BLUE}; }
+        /* v2.4.1 ceiling tag: plain grey text in the chip's metrics (no pill), text-stroked
+           like the legend so the lines never cut through it; tap = helper more-info */
+        .ceil { display: inline-flex; align-items: center; white-space: nowrap; flex: none;
+          padding: 2px 6px 2px 2px; border-radius: 6px;
+          color: var(--secondary-text-color); font-size: 10.5px; font-weight: 600;
+          letter-spacing: .03em; pointer-events: auto; cursor: pointer;
+          -webkit-text-stroke: 2px var(--card-background-color); paint-order: stroke fill;
+          transition: background .15s, transform .12s ease; }
+        @media (hover: hover) { .ceil:hover { background: rgba(255,255,255,.10);
+          color: var(--primary-text-color); } }
+        .ceil.pressed { transform: scale(.96); background: rgba(70,70,70,.3); }
         .legend { position: absolute; left: 8px; right: 8px; bottom: 4px; z-index: 2;
           display: flex; align-items: center; gap: 2px; flex-wrap: nowrap;
           overflow: hidden; }
@@ -624,7 +677,7 @@ class FlatClimateCard extends HTMLElement {
           <div class="val"><span id="dv">--</span><span class="uom" id="dw"></span></div>
         </div>
         <div class="chipwrap"><span class="chip" id="chip" style="display:none">
-          <span class="cdot"></span><span id="chiplab"></span></span></div>
+          <span class="cdot"></span><span id="chiplab"></span></span><span class="ceil" id="ceil" style="display:none"></span></div>
         <div class="legend" id="legend">${legend}</div>
         <div class="toggle" id="pill"></div>
         <div class="xline"></div>
@@ -712,6 +765,15 @@ class FlatClimateCard extends HTMLElement {
       { detail: { entityId: id }, bubbles: true, composed: true }));
     // v1.3: NO click handler on the hero/title graph (tap only scrubs there)
     hum.addEventListener('click', () => info(this._outdoor[0].humidity));
+    // v2.4: ceiling tag opens the helper's more-info (its slider)
+    const ceilEl = root.getElementById('ceil');
+    ceilEl.addEventListener('pointerdown', (e) => { e.stopPropagation(); ceilEl.classList.add('pressed'); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+      ceilEl.addEventListener(ev, () => ceilEl.classList.remove('pressed')));
+    ceilEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this._ceilEnt) info(this._ceilEnt);
+    });
     // v1.7: moisture-row title toggles Humidity <-> Dew point (persisted)
     const humlab = root.getElementById('humlab');
     humlab.addEventListener('pointerdown', (e) => { e.stopPropagation(); humlab.classList.add('pressed'); });
@@ -918,13 +980,46 @@ class FlatClimateCard extends HTMLElement {
     if (delta == null || !anyOpen) this._closeOn = false;
     else if (!this._closeOn && delta < c.close_on) this._closeOn = true;
     else if (this._closeOn && delta > c.close_off) this._closeOn = false;
-    const chipState = this._closeOn ? 'close' : (this._chipOn && !heating ? 'open' : null);
+    // v2.4: comfort ceiling - both comparisons strict (78 outside with a 78 ceiling
+    // is still tolerable), each releasing CEIL_BAND below the ceiling
+    const ceil = this._ceilEnt ? this._num(this._ceilEnt) : null;
+    if (ceil !== this._ceilLast) {   // the ceiling itself moved: re-evaluate fresh, no carried band
+      this._ceilOutOn = false; this._ceilInOn = false; this._ceilLast = ceil;
+    }
+    if (ceil == null) { this._ceilOutOn = false; this._ceilInOn = false; }
+    else {
+      if (outT == null) this._ceilOutOn = false;
+      else if (!this._ceilOutOn && outT > ceil) this._ceilOutOn = true;
+      else if (this._ceilOutOn && outT < ceil - CEIL_BAND) this._ceilOutOn = false;
+      if (inT == null) this._ceilInOn = false;
+      else if (!this._ceilInOn && inT > ceil) this._ceilInOn = true;
+      else if (this._ceilInOn && inT < ceil - CEIL_BAND) this._ceilInOn = false;
+    }
+    const cooling = !!(hv && hv.attributes && hv.attributes.hvac_action === 'cooling');
+    // RUN AC: house and outdoors both over the ceiling, AC not already on - only the
+    // AC can get under the ceiling; the label adds CLOSE while a contact is open
+    const acOn = this._ceilInOn && this._ceilOutOn && !cooling && !heating;
+    // priority: RUN AC > CLOSE WINDOWS > OPEN WINDOWS (OPEN suppressed above the ceiling)
+    const chipState = acOn ? (anyOpen ? 'acclose' : 'ac')
+      : this._closeOn ? 'close'
+      : (this._chipOn && !heating && !this._ceilOutOn ? 'open' : null);
     if (this._chipShown !== chipState) {              // idempotent display writes
       const chip = root.getElementById('chip');
       chip.classList.toggle('close', chipState === 'close');
-      root.getElementById('chiplab').textContent = chipState === 'close' ? c.close_label : c.label;
+      chip.classList.toggle('ac', chipState === 'ac' || chipState === 'acclose');
+      root.getElementById('chiplab').textContent =
+        chipState === 'close' ? c.close_label : chipState === 'ac' ? c.ac_label
+        : chipState === 'acclose' ? c.ac_close_label : c.label;
       chip.style.display = chipState ? 'inline-flex' : 'none';
       this._chipShown = chipState;
+    }
+    // v2.4 ceiling tag: shown only while the helper resolves to a number
+    const ceilTxt = ceil == null ? '' : '\u2264 ' + this._fmt(ceil, 0) + '\u00b0';
+    if (this._ceilShown !== ceilTxt) {
+      const ceilEl = root.getElementById('ceil');
+      ceilEl.textContent = ceilTxt;
+      ceilEl.style.display = ceilTxt ? 'inline-flex' : 'none';
+      this._ceilShown = ceilTxt;
     }
     // averages-row reading (v1.6): same inT/outT/delta as the headline
     const avgrow = root.getElementById('avgrow');
@@ -2318,5 +2413,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-climate-card',
   name: 'Flat Climate Card',
-  description: 'Indoor-vs-outdoor delta headline + all-rooms temperature overlay; averages, moisture, per-room strip and a history pop-out behind a toggle',
+  description: 'Indoor-vs-outdoor delta headline + all-rooms temperature overlay with an open-windows / close-windows / run-AC chip (optional comfort ceiling); averages, moisture, per-room strip and a history pop-out behind a toggle',
 });

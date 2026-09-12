@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.3 = 119,705 B, FNV-1a 97a50668; this repo copy = 119,918 B, FNV-1a 3ae822af.
+Deployed v2.4.1 = 126,292 B, FNV-1a 09643441; this repo copy = 126,505 B, FNV-1a ee15a532.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -17,7 +17,11 @@ thermostat's own thermometer.
   historical dew-point analysis — reasoning in the source header; **v2.2:** hidden
   while the thermostat reports `heating`, and replaced by an amber **CLOSE WINDOWS**
   chip when a window contact is open and it is no longer cooler outside — own
-  hysteresis `chip.close_on` 0 / `close_off` 1) over a 24h
+  hysteresis `chip.close_on` 0 / `close_off` 1; **v2.4:** optional comfort ceiling from
+  a Number helper (`ceiling`) — OPEN is suppressed while outdoors is above it, and a
+  blue **RUN AC** / **CLOSE · RUN AC** chip shows when house and outdoors are both
+  above it and the thermostat is not already cooling; a tappable "≤ N°" tag beside
+  the chip opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
   Legend tap = spotlight; band-gated scrub with graph-anchored viewport-fixed
@@ -61,7 +65,8 @@ thermostat's own thermometer.
 `type: custom:flat-climate-card` — defaults cover the original household; override:
 `hours` (coerced to a positive integer; labels follow it), `indoor: [{entity, humidity, name, color}...]`, `outdoor: [...]`,
 `hall: {entity, humidity, name, color, in_average}` or `false`, `sun_cap`,
-`avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label, close_on, close_off, close_label}`,
+`avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label, close_on, close_off, close_label, ac_label, ac_close_label}`,
+`ceiling` (an `input_number` entity id; absent/false = no ceiling logic),
 `moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]`, a single id, or `false`,
 `hvac_entity` or `false`, `forecast_entity` (hourly-capable weather entity) or `false`,
 `cooling_stats` / `heating_stats` / `window_stats` (0/1 signal sensors with LTS, or `false`),
@@ -96,9 +101,18 @@ thermostat's own thermometer.
   (contact open + no longer cooler outside, own hysteresis).
 - v2.3 (2026-09-07): AC / window strips under the 14d+ pop-out charts (LTS-fed;
   owner chose strips over full-height columns after a side-by-side mockup).
+- v2.4 (2026-09-12): comfort ceiling (`ceiling` helper): OPEN suppressed above it,
+  RUN AC / CLOSE · RUN AC chip, tappable ceiling tag; the chip shows only when
+  there is an action not yet taken. Dew point deliberately still not a gate
+  (885 h re-check: outdoor dew 58–73 °F, mean 65.5).
+- v2.4.1 (2026-09-12): the ceiling tag is plain text-stroked grey text beside the chip
+  instead of a second pill (owner: the hero got busy). CSS only.
 
 ## Verification
-jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1
+Headless Chromium harness (2026-09-12, v2.4): 71 assertions — the six chip states,
+hysteresis crossings on both ceiling comparisons, AC start/stop, heating, helper
+unavailable/absent/changed, tag tap → more-info, and hero + expansion DOM identity
+against v2.3 with no `ceiling` key. jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1
 and fixed-mode against v2.1.2, an 11-state chip matrix for v2.2, and a render-identity
 comparison across tabs. Earlier headless Chromium harness: stubbed hass (raw history incl. a sparse reporter,
 synthetic statistics incl. a deliberately zero-poisoned row, contact/hvac history,

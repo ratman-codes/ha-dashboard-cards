@@ -248,7 +248,7 @@ header.)*
   card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
   `1532f17af469489b863f711848d36fb2`.
-- `flat-climate-card.js` — v2.3. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.4.1. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -285,7 +285,14 @@ header.)*
   heating in heat-orange) and windows open (green) from 0/1 signal sensors'
   long-term statistics (`cooling_stats` / `heating_stats` / `window_stats`;
   hourly on 14d/1m, daily on 3m+; a row is absent until its sensor exists).
-  Zero HA-side entities. Default
+  v2.4: optional COMFORT CEILING — `ceiling: input_number.<id>` names a Number
+  helper ("78 = still tolerable"); OPEN WINDOWS is suppressed while outdoors is
+  above it (venting can't get under the ceiling), and a blue RUN AC chip
+  ("CLOSE · RUN AC" with a window open) appears when house AND outdoors are
+  both above it and the thermostat isn't already cooling; a tappable "≤ 78°"
+  tag beside the chip opens the helper (v2.4.1: plain text, no pill). 1 °F hysteresis; priority RUN AC >
+  CLOSE > OPEN; without `ceiling` the card behaves exactly as v2.3.
+  No HA-side entities beyond the optional helper / signal sensors. Default
   entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
   and the pop-out keys (contacts/hvac_entity/forecast_entity/popout).
   Used as `type: custom:flat-climate-card`.
