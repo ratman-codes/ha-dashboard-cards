@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.4.1 = 126,292 B, FNV-1a 09643441; this repo copy = 126,505 B, FNV-1a ee15a532.
+Deployed v2.4.2 = 127,582 B, FNV-1a 5d0a18ed; this repo copy = 127,795 B, FNV-1a da437f58.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -20,7 +20,8 @@ thermostat's own thermometer.
   hysteresis `chip.close_on` 0 / `close_off` 1; **v2.4:** optional comfort ceiling from
   a Number helper (`ceiling`) — OPEN is suppressed while outdoors is above it, and a
   blue **RUN AC** / **CLOSE · RUN AC** chip shows when house and outdoors are both
-  above it and the thermostat is not already cooling; a tappable "≤ N°" tag beside
+  above it and the thermostat is neither cooling nor set to cool/heat_cool with its
+  setpoint ≤ the ceiling (v2.4.2); a tappable "≤ N°" tag beside
   the chip opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
@@ -107,9 +108,13 @@ thermostat's own thermometer.
   (885 h re-check: outdoor dew 58–73 °F, mean 65.5).
 - v2.4.1 (2026-09-12): the ceiling tag is plain text-stroked grey text beside the chip
   instead of a second pill (owner: the hero got busy). CSS only.
+- v2.4.2 (2026-09-12): RUN AC stands down when the thermostat is already SET to handle
+  it (cool/heat_cool, setpoint ≤ ceiling), not only while the compressor runs — first
+  live afternoon it nagged at a Nest idle at its 78 setpoint. Unavailable thermostat
+  = no RUN AC.
 
 ## Verification
-Headless Chromium harness (2026-09-12, v2.4): 71 assertions — the six chip states,
+Headless Chromium harness (2026-09-12, v2.4–v2.4.2): 80 assertions — the six chip states,
 hysteresis crossings on both ceiling comparisons, AC start/stop, heating, helper
 unavailable/absent/changed, tag tap → more-info, and hero + expansion DOM identity
 against v2.3 with no `ceiling` key. jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1

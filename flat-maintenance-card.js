@@ -1,4 +1,11 @@
-/* flat-maintenance-card v1.9
+/* flat-maintenance-card v1.10
+ *
+ * v1.10: BATTERY_EXCLUDE (2026-09-17). New `battery_exclude` list: same
+ * case-insensitive substring match as `exclude`, but it drops ONLY the battery
+ * row - the device stays in the Connectivity watch. `exclude` is global (both
+ * sections), so excluding a robot vacuum's battery with it also removed the
+ * vacuum AND its dock (two registry devices sharing the name) from the
+ * reachable count. `exclude` itself is unchanged.
  *
  * v1.9: QUIET LINE SAYS ONLY WHAT MATTERS (2026-09-08). The collapsed header no
  * longer pads "All quiet - N reachable" with "batteries OK - filters OK"; those
@@ -90,7 +97,8 @@
  *     (one per device). Non-numeric values (e.g. text states) are skipped.
  * New pairings appear on the card automatically - no YAML edits.
  * Curate with `exclude` (case-insensitive substring matched against device name
- * AND entity_ids) and `rename` (exact device name -> display name).
+ * AND entity_ids; applies to BOTH sections), `battery_exclude` (same match,
+ * batteries only) and `rename` (exact device name -> display name).
  * A manual `devices` list (see below) still works and merges on top.
  *
  * Card-only by design: NO notifications, no helpers, no server-side entities.
@@ -110,6 +118,8 @@
  *   exclude:                # substring match vs device name or entity_id
  *     - my track light      # e.g. devices on a switched circuit
  *     - my phone
+ *   battery_exclude:        # same match; drops only the battery row, device stays watched
+ *     - my robot vacuum
  *   rename:
  *     "Vendor Remote (B) Red": B Red (spare)
  *   battery_warn: 20        # amber at/below this %
@@ -386,6 +396,7 @@
         auto: auto,
         platforms: list(config.platforms).length ? list(config.platforms) : ["matter"],
         exclude: list(config.exclude).map((x) => String(x).toLowerCase()),
+        battery_exclude: list(config.battery_exclude).map((x) => String(x).toLowerCase()),
         rename: config.rename && typeof config.rename === "object" ? config.rename : {},
         devices: config.devices || [],
         filters: config.filters || [],
@@ -843,9 +854,10 @@
       return dv ? this._areaName(hass, dv.area_id) : null;
     }
 
-    _excluded(name, ents) {
+    _excluded(name, ents, extra) {
       const n = String(name).toLowerCase();
-      for (const pat of this._cfg.exclude) {
+      const pats = extra && extra.length ? this._cfg.exclude.concat(extra) : this._cfg.exclude;
+      for (const pat of pats) {
         if (n.indexOf(pat) !== -1) return true;
         for (const e of ents) if (e.indexOf(pat) !== -1) return true;
       }
@@ -919,7 +931,7 @@
           const rawName =
             (dv && (dv.name_by_user || dv.name)) ||
             (a.friendly_name ? String(a.friendly_name).replace(/\s*battery.*$/i, "") : eid);
-          if (this._excluded(rawName, [eid])) continue;
+          if (this._excluded(rawName, [eid], C.battery_exclude)) continue;
           if (devId) seenBatDevice[devId] = true;
           // v1.7: siblings on the same device - charge-state enum => rechargeable; Wi-Fi signal => watched
           let chargeEnt = null, wifiEnt = null;

@@ -28,7 +28,11 @@ The card reads the frontend registry objects (`hass.entities`, `hass.devices`,
   silently in auto mode.
 - **Curation:** `exclude:` — case-insensitive substrings matched against device
   names AND entity_ids (for e.g. bulbs on a switched circuit, phones, devices
-  another card owns); `rename:` — exact device name to display label.
+  another card owns); it applies to BOTH sections. `battery_exclude:` (v1.10) —
+  same match, batteries only: the battery row goes, the device stays in the
+  connectivity watch (a robot vacuum whose battery is another card's business
+  but whose liveness is still this card's). `rename:` — exact device name to
+  display label.
 - **Manual mode / extras:** a `devices:` list (name + `entity` canary and/or
   `battery`) works standalone (`auto: false`) or merged on top of auto. Manual
   entries get a red "entity not found" row on typos and a dim "no data" row for
@@ -120,6 +124,8 @@ exclude:
   - my track light      # switched circuit - routinely unpowered
   - my phone            # battery cycles daily
   - my ups              # another card's territory
+battery_exclude:
+  - my robot vacuum     # battery lives on the vacuum card; liveness stays here
 rename:
   "Vendor Remote (B) Red": B Red (spare)
 battery_warn: 20
@@ -222,7 +228,7 @@ devices:                # optional manual extras
   zero non-ASCII, harness bug-mode 32/32 on v1.7 + fixed-mode 34/34 on v1.8,
   Playwright/Chromium render at the dashboard's column width with a
   scrollWidth overflow check, blob decode cmp before delivery.
-- v1.9 (2026-09-08, 61,386 B, FNV-1a f0f7520a, CURRENT): QUIET LINE SAYS ONLY
+- v1.9 (2026-09-08, 61,386 B, FNV-1a f0f7520a): QUIET LINE SAYS ONLY
   WHAT MATTERS. The collapsed header no longer pads "All quiet - N reachable"
   with "batteries OK - filters OK"; with a ~60-device count those segments
   pushed the conditional "24h: N outages" suffix past the column width, so the
@@ -232,6 +238,17 @@ devices:                # optional manual extras
   batteries/filters were never on this line — they switch the header to
   "N issues" and show in the alert strip. One 5-line edit + header comment;
   node --check, zero non-ASCII, live blob byte-verified after install.
+- v1.10 (2026-09-17, 62,216 B, FNV-1a 0a8194de, CURRENT): BATTERY_EXCLUDE.
+  New `battery_exclude` list, same substring match as `exclude` but applied
+  only in the battery discovery loop (`_excluded` takes an optional extra
+  pattern list; the connectivity loop passes none). Trigger: `exclude: <vacuum
+  name>` removed TWO devices from the reachable count — the roborock
+  integration registers the vacuum and its dock as separate registry devices
+  sharing the name — and took the vacuum out of the liveness watch it was
+  added to `platforms` for. Six asserted exact-string edits; node --check,
+  zero non-ASCII, jsdom harness 12/12 (bug-mode on v1.9: the four
+  battery_exclude cases fail, as expected; render identity v1.9 vs v1.10 with
+  no `battery_exclude` asserted).
 
 Verification per house checklist: node --check, zero-non-ASCII scan, headless-
 Chromium mock-hass harness (manual + auto scenarios incl. partial-unavailability,

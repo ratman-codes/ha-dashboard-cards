@@ -1,4 +1,4 @@
-/* flat-climate-card v2.4.1 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.4.2 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an action chip - OPEN WINDOWS
@@ -70,6 +70,15 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.4.2 (2026-09-12): RUN AC also stands down when the thermostat is already
+     SET to handle it - hvac mode cool or heat_cool with its cooling setpoint
+     (target_temp_high, else temperature) at or below the ceiling - not only
+     while the compressor is actually running. First live afternoon: Nest in
+     cool @78, idle at 78, meters averaging 78.6 -> the card nagged RUN AC at a
+     thermostat that was already doing the job. RUN AC now means: the Nest is
+     off / eco / set above the ceiling. An unavailable thermostat = no RUN AC
+     (unknown is not a reason to nag); hvac_entity: false = the setpoint check
+     is simply absent.
    - v2.4.1 (2026-09-12): the ceiling tag loses its outline/background and reads
      as quiet grey text beside the chip (owner: two pills side by side made the
      hero busy); it keeps the chip's metrics, the card's text stroke so lines
@@ -996,9 +1005,17 @@ class FlatClimateCard extends HTMLElement {
       else if (this._ceilInOn && inT < ceil - CEIL_BAND) this._ceilInOn = false;
     }
     const cooling = !!(hv && hv.attributes && hv.attributes.hvac_action === 'cooling');
-    // RUN AC: house and outdoors both over the ceiling, AC not already on - only the
-    // AC can get under the ceiling; the label adds CLOSE while a contact is open
-    const acOn = this._ceilInOn && this._ceilOutOn && !cooling && !heating;
+    // v2.4.2: the thermostat is already SET to handle it (cool/heat_cool with its
+    // cooling setpoint at or below the ceiling) - no nag while it is idle at target
+    const hvA = hv && hv.attributes;
+    const setpt = hvA ? (hvA.target_temp_high != null ? hvA.target_temp_high : hvA.temperature) : null;
+    const acSet = !!(hv && (hv.state === 'cool' || hv.state === 'heat_cool') &&
+      setpt != null && ceil != null && Number(setpt) <= ceil);
+    const hvUnknown = !!(hv && (hv.state === 'unavailable' || hv.state === 'unknown'));
+    // RUN AC: house and outdoors both over the ceiling and the AC is neither running
+    // nor set to - only the AC can get under the ceiling; label adds CLOSE while a
+    // contact is open. Unknown thermostat state is not a reason to nag.
+    const acOn = this._ceilInOn && this._ceilOutOn && !cooling && !heating && !acSet && !hvUnknown;
     // priority: RUN AC > CLOSE WINDOWS > OPEN WINDOWS (OPEN suppressed above the ceiling)
     const chipState = acOn ? (anyOpen ? 'acclose' : 'ac')
       : this._closeOn ? 'close'

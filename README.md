@@ -248,7 +248,7 @@ header.)*
   card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
   `1532f17af469489b863f711848d36fb2`.
-- `flat-climate-card.js` — v2.4.1. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.4.2. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -289,7 +289,8 @@ header.)*
   helper ("78 = still tolerable"); OPEN WINDOWS is suppressed while outdoors is
   above it (venting can't get under the ceiling), and a blue RUN AC chip
   ("CLOSE · RUN AC" with a window open) appears when house AND outdoors are
-  both above it and the thermostat isn't already cooling; a tappable "≤ 78°"
+  both above it and the thermostat is neither cooling nor already set to (cool /
+  heat_cool with its setpoint ≤ the ceiling — v2.4.2); a tappable "≤ 78°"
   tag beside the chip opens the helper (v2.4.1: plain text, no pill). 1 °F hysteresis; priority RUN AC >
   CLOSE > OPEN; without `ceiling` the card behaves exactly as v2.3.
   No HA-side entities beyond the optional helper / signal sensors. Default
@@ -303,7 +304,7 @@ header.)*
   (set `forecast_entity` in YAML). Deployed v2.3 = 119,705 B FNV-1a 97a50668;
   repo copy = 119,918 B FNV-1a 3ae822af; sole difference is that one
   constant + comment.
-- `flat-server-card.js` — v1.12. NAS health + backup confidence card ("is the
+- `flat-server-card.js` — v1.13. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
   quiet row; problems surface as a red-first alert strip even collapsed) that
   expands to Storage (array state/fill, parity age with next-due countdown from
@@ -329,10 +330,13 @@ header.)*
   YAML. v1.11 makes an unreadable mounts heartbeat amber instead of silently
   fresh; v1.12 is a no-visible-change audit bundle (re-render only when the
   card's own entities change, three-valued backup-agent online state, small
-  hygiene). All entities via YAML config. Used as `type: custom:flat-server-card`
+  hygiene); v1.13 adds a "Dashboard disconnected — reload" alert when the
+  frontend has pushed no state update for `dashboard_stale_min` (3), holding
+  back the mounts/outside staleness alerts whose ages are the same frozen
+  clock. All entities via YAML config. Used as `type: custom:flat-server-card`
   (see notes for the YAML shape). HA resource id:
   `54f8b17d7b9547c68be324e899b5ed0f`.
-- `flat-maintenance-card.js` — v1.9. Device maintenance card (connectivity +
+- `flat-maintenance-card.js` — v1.10. Device maintenance card (connectivity +
   batteries + filter life; renamed from flat-health-card at v1.2): green-is-boring
   collapsed header + alert strip, expanding to Connectivity (unreachable devices
   with outage duration and registry area, a 15-min debounce that keeps fresh
@@ -358,11 +362,13 @@ header.)*
   last good lanes; bare-string list options and quoted thresholds are accepted.
   v1.9: the quiet header drops the "batteries OK - filters OK" filler so the
   conditional "24h: N outages" suffix fits — only problems earn a place on that line.
+  v1.10: `battery_exclude` drops a device's battery row without removing the
+  device from the connectivity watch (`exclude` does both).
   AUTO-DISCOVERING: reads the frontend entity/device/area
   registries, so every device owned by the configured integrations (default:
   matter) and every battery-% sensor is watched with zero YAML upkeep — new
-  pairings appear automatically; curation via `exclude` substrings and a `rename`
-  map, with an optional manual devices list. Card-only by design: no
+  pairings appear automatically; curation via `exclude` / `battery_exclude`
+  substrings and a `rename` map, with an optional manual devices list. Card-only by design: no
   notifications and no helper entities; a device counts as unreachable only when
   ALL of its entities read unavailable (single orphaned entities can't false-flag
   a device). Device rows, alerts and lanes open the HA device page (v1.5);

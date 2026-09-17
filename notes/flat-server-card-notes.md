@@ -8,8 +8,19 @@ plumbing pattern.
 
 ## Current version
 
-v1.12 — 46,274 B, FNV-1a `ad33adc4`. Header self-documents the full YAML shape
+v1.13 — 48,086 B, FNV-1a `eab04c1b`. Header self-documents the full YAML shape
 (placeholder entity ids) and per-version changelog.
+
+v1.13: **Dashboard-disconnected honesty.** The frontend hands the card a new
+`hass` object on every state change in HA; when its websocket dies silently
+(app backgrounded, network switch, sleep) the card's 30 s tick keeps aging a
+frozen snapshot, so "Mounts: no report 38m" and "Outside: last check 38m ago"
+appeared in lockstep while HA itself was fine. The card now stamps the time of
+every `hass` push; once that is older than `thresholds.dashboard_stale_min`
+(default 3) it pushes amber "Dashboard disconnected — reload" (value = silence
+age) and holds back the mounts / outside staleness alerts. Real-state alerts
+(array, disks, a monitor `down`) still show. Fix is a page reload; nothing
+HA-side. No YAML change.
 
 v1.10–v1.12 came out of a full source audit (every behavioral finding confirmed
 in a jsdom harness before it was called a finding):

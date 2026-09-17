@@ -1,4 +1,4 @@
-/* flat-server-card v1.12
+/* flat-server-card v1.13
  *
  * One-card answer to "is the NAS okay and is my data safe?" for the main
  * dashboard. Green-is-boring: healthy = ONE quiet header row; problems surface
@@ -85,6 +85,9 @@
  *     cpu_temp_amber: (auto: 85 C / 185 F by sensor unit)
  *     batt_amber: 50   # UPS charge <= this: amber alert + bar tint (any UPS status)
  *     batt_red: 20     # UPS charge <= this: red alert + bar tint
+ *     dashboard_stale_min: 3   # no hass update from the frontend for this long ->
+ *       # amber "Dashboard disconnected -- reload" and the two age-based alerts
+ *       # (mounts / outside) are held back, since their ages are frozen too
  *
  * Optional extras:
  *   server_url / qbit_url / urbackup_url  -- tap the Array / qBittorrent /
@@ -117,6 +120,16 @@
  *         # is the newest of them all and robust either way.
  *       thresholds: { outside_stale_min: 5 }
  *
+ * v1.13: Dashboard-disconnected honesty. The frontend hands the card a new hass
+ *   object on every state change in HA; when its websocket dies silently (app
+ *   backgrounded, network switch, sleep) the card keeps ticking every 30 s on a
+ *   frozen snapshot, so "Mounts: no report 38m" and "Outside: last check 38m
+ *   ago" appeared in lockstep while HA itself was fine. Now the card stamps
+ *   the time of every hass update; once that is older than
+ *   thresholds.dashboard_stale_min (3) it pushes amber "Dashboard disconnected
+ *   -- reload" (val = silence age) and holds back the mounts / outside
+ *   staleness alerts, whose ages are the same frozen clock. Fix is a page
+ *   reload; nothing HA-side. No YAML change.
  * v1.12: Audit bundle (findings #3-#8 of the 2026-09-03 v1.9 audit), no visible
  *   change for a healthy card. (#3) backup_client_online is three-valued: an
  *   unavailable sensor now says "agent status unknown" instead of "offline".
@@ -284,7 +297,8 @@ const DEF_TH = {
   batt_red: 20,
   ram_amber: 90,
   ram_red: 97,
-  outside_stale_min: 5
+  outside_stale_min: 5,
+  dashboard_stale_min: 3
 };
 
 class FlatServerCard extends HTMLElement {
@@ -327,6 +341,9 @@ class FlatServerCard extends HTMLElement {
   set hass(hass) {
     const prev = this._hass;
     this._hass = hass;
+    // Every hass push is proof the frontend's websocket is alive; the model
+    // flags "Dashboard disconnected" when this goes quiet (v1.13).
+    this._hassAt = Date.now();
     // Skip the rebuild when none of OUR entities changed (HA state objects are
     // immutable, so identity compare is exact). The 30 s tick still calls
     // _render() directly to advance the ages, so a miss is bounded by 30 s.
@@ -395,6 +412,14 @@ class FlatServerCard extends HTMLElement {
     const issues = []; // {sev:'red'|'amber', text, val}
     const push = (sev, text, val) => issues.push({ sev, text, val: val || '' });
 
+    // Dashboard connection (v1.13): no hass update for dashboard_stale_min means
+    // the frontend's websocket is dead and every age below is a frozen clock.
+    // Pushed first so it leads the strip; mounts / outside staleness is held
+    // back while it stands (they would only echo the same silence).
+    const silentMs = this._hassAt ? Date.now() - this._hassAt : 0;
+    const disc = silentMs > th.dashboard_stale_min * 60000;
+    if (disc) push('amber', 'Dashboard disconnected \u2014 reload', this._fmtAge(silentMs));
+
     // Array
     const arrState = this._val(c.array_state);
     if (c.array_state && arrState === null) push('amber', 'Array state unavailable');
@@ -462,8 +487,10 @@ class FlatServerCard extends HTMLElement {
       else {
         mounts.fail.forEach(n => push('red', 'Mount down', n));
         if (ageMs !== null && ageMs > th.mounts_stale_min * 60000) {
-          mounts.stale = true;
-          push('amber', 'Mounts: no report', this._fmtAge(ageMs));
+          if (!disc) { // frozen dashboard clock -> the disconnected alert owns this
+            mounts.stale = true;
+            push('amber', 'Mounts: no report', this._fmtAge(ageMs));
+          }
         } else if (ageMs === null && c.mounts_last_report) {
           // Timestamp helper empty/unparseable: unknown freshness is NOT fresh.
           mounts.stale = true;
@@ -623,7 +650,7 @@ class FlatServerCard extends HTMLElement {
       });
       if (newest !== null) ageMs = Math.max(0, Date.now() - newest);
       const allNa = mons.every(x => x.na);
-      const stale = !allNa && ageMs !== null && ageMs > th.outside_stale_min * 60000;
+      const stale = !disc && !allNa && ageMs !== null && ageMs > th.outside_stale_min * 60000;
       outside = { mons, ageMs, allNa, stale };
       if (allNa) push('amber', 'Outside monitor unreachable');
       else {
