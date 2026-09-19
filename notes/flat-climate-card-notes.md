@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.4.2 = 127,582 B, FNV-1a 5d0a18ed; this repo copy = 127,795 B, FNV-1a da437f58.
+Deployed v2.5 = 132,375 B, FNV-1a 6f9e63b3; this repo copy = 132,588 B, FNV-1a 887389b0.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -21,7 +21,10 @@ thermostat's own thermometer.
   a Number helper (`ceiling`) — OPEN is suppressed while outdoors is above it, and a
   blue **RUN AC** / **CLOSE · RUN AC** chip shows when house and outdoors are both
   above it and the thermostat is neither cooling nor set to cool/heat_cool with its
-  setpoint ≤ the ceiling (v2.4.2); a tappable "≤ N°" tag beside
+  setpoint ≤ the ceiling (v2.4.2); **v2.5:** venting keyed on cooler/warmer outside
+  (1 °F dead band) — cooler and under the ceiling → OPEN WINDOWS until the two
+  `vent_windows` are both open, then **TURN ON FAN** until `vent_fan` is on; warmer
+  with any contact open → CLOSE WINDOWS; a tappable "≤ N°" tag beside
   the chip opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
@@ -68,6 +71,7 @@ thermostat's own thermometer.
 `hall: {entity, humidity, name, color, in_average}` or `false`, `sun_cap`,
 `avg_opacity`, `scrub_dots`, `chip: {on_delta, off_delta, label, close_on, close_off, close_label, ac_label, ac_close_label}`,
 `ceiling` (an `input_number` entity id; absent/false = no ceiling logic),
+`vent_windows` (list of contact ids — the intake/exhaust pair; defaults to the household pair), `vent_fan` (fan id or `false`), `chip.fan_label`,
 `moisture_mode: rh|dew`, `popout: false`, `contacts: [binary_sensor ids]`, a single id, or `false`,
 `hvac_entity` or `false`, `forecast_entity` (hourly-capable weather entity) or `false`,
 `cooling_stats` / `heating_stats` / `window_stats` (0/1 signal sensors with LTS, or `false`),
@@ -112,9 +116,26 @@ thermostat's own thermometer.
   it (cool/heat_cool, setpoint ≤ ceiling), not only while the compressor runs — first
   live afternoon it nagged at a Nest idle at its 78 setpoint. Unavailable thermostat
   = no RUN AC.
+- v2.4.3 (2026-09-17): CLOSE WINDOWS gated on the ceiling — shown only while the house
+  is above it; under it, warmer-outside-with-a-window-open is left alone (0.2 °F
+  wobbles are not an action; a closed unit loses airflow). Without `ceiling` the v2.2
+  rule stands.
+- v2.5 (2026-09-19): venting policy rewritten — the 3 °F delta and the v2.4.3 house
+  gate are gone; cooler outside (±1 °F dead band) and under the ceiling = vent mode
+  (OPEN WINDOWS → TURN ON FAN → quiet), warmer outside + any contact open = CLOSE.
+  Owner-declined, do not re-propose: close-while-AC-cooling; a comfort floor.
+- v2.6 (2026-09-19): pop-out window shading by count + window names on hover. The
+  per-contact tint is halved (.07 -> .035) and still stacks, so two open windows keep
+  the old look and more windows read darker (owner picked this over fixed steps from
+  a rendered comparison); the 24h/7d temperature tooltip gains "N windows open" plus
+  one line per open window (friendly name, leading "Sensor - " dropped, HTML-escaped;
+  nothing added when all closed, in the forecast area, or when the contact history did
+  not load); a `contacts` entry that is a group is read through its members in the
+  pop-out (a freshly created group has no history, which left the shading empty).
+  The chip still reads the contacts as configured. No new YAML keys.
 
 ## Verification
-Headless Chromium harness (2026-09-12, v2.4–v2.4.2): 80 assertions — the six chip states,
+Headless Chromium harness (2026-09-19, v2.6): 43 assertions (layer count + tint per tab, tooltip rows for 1/2/3 windows, an unavailable blip, the forecast area, a group contact read through its members, failed/empty contact history, and hero / expansion / 7d / 14d identity against v2.5). Headless Chromium harness (2026-09-19, v2.5): 50 assertions on the new policy (vent mode, dead band, over-ceiling, unavailable entities, no-ceiling identity vs v2.3); earlier (v2.4–v2.4.3): 91 assertions — the six chip states,
 hysteresis crossings on both ceiling comparisons, AC start/stop, heating, helper
 unavailable/absent/changed, tag tap → more-info, and hero + expansion DOM identity
 against v2.3 with no `ceiling` key. jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1

@@ -1,4 +1,4 @@
-/* flat-climate-card v2.4.2 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.6 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an action chip - OPEN WINDOWS
@@ -36,6 +36,9 @@
              close_on: 0, close_off: 1, close_label: CLOSE WINDOWS,
              ac_label: RUN AC, ac_close_label: CLOSE - RUN AC}
       ceiling: input_number.comfort_ceiling   (v2.4; absent/false = no ceiling)
+      vent_windows: [binary_sensor.patio_door, binary_sensor.bedroom_window]  (v2.5)
+      vent_fan: fan.bedroom_fan   (v2.5; false = no TURN ON FAN chip)
+      chip: {... fan_label: TURN ON FAN}
      - example rooms use placeholder ids like sensor.room1_temperature.
       v2.3 pop-out strips (14d+): cooling_stats / heating_stats / window_stats =
       0/1 signal sensors with long-term statistics (or false).)
@@ -70,6 +73,52 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.6 (2026-09-19): WINDOW SHADING BY COUNT + WINDOW NAMES ON HOVER (pop-out,
+     24h / 7d tabs). Trigger: the owner pointed `contacts` at the five window
+     sensors (to keep the front door out) and the shading doubled - the card
+     paints one tint layer per open contact and two windows are his normal
+     venting setup. (a) The per-contact tint is halved, .07 -> .035: the layers
+     still stack, so one window reads ~3.5 %, TWO read ~6.9 % (the old look),
+     three ~10 %, five ~16 % - darker simply means more windows open (owner
+     picked this from a rendered comparison over fixed 5/7/9 % steps).
+     (b) The temperature chart's scrub tooltip gains, under a separator,
+     "N windows open" plus one line per window that was open at that moment
+     (friendly name, a leading "Sensor - " dropped); nothing is added while
+     everything is closed, in the forecast area, or when the contact history
+     did not load (no data = no claim). (c) A contact that is a GROUP is read
+     through its members in the pop-out, so each window keeps its own history,
+     name and layer - a freshly made group has no past of its own, which left
+     the 24h/7d shading empty for a week. The chip still reads the contacts
+     exactly as configured. No new YAML keys, no HA-side change.
+   - v2.5 (2026-09-19): VENTING POLICY REWRITTEN around one principle the owner
+     stated after three rounds of patching: "if outside is cooler than inside
+     and under 78, the windows should be open - and the fan should be on to
+     draw air through." With a ceiling configured the chip now follows:
+       cooler outside (delta >= +1 F to arm, disarms at <= 0) AND outdoor
+       under the ceiling  ->  VENT MODE: the two vent_windows not both open
+       -> OPEN WINDOWS (green); both open and vent_fan off -> TURN ON FAN
+       (green); both open and fan on -> quiet.
+       warmer outside (delta <= -1 F to arm, disarms at >= 0) AND any
+       contact open -> CLOSE WINDOWS (amber).
+       RUN AC / CLOSE - RUN AC unchanged (house AND outdoors over the
+       ceiling, thermostat neither cooling nor set at/below it).
+       Heating -> no vent chips. Fan or a vent window unavailable -> no
+       fan chip (unknown is never a reason to nag).
+     Gone with a ceiling: the 3 F on_delta test for OPEN and the "house over
+     the ceiling" gate on CLOSE (v2.4.3) - both were patches on the wrong
+     axis. Without `ceiling` the card still runs the v2.3 delta rules.
+     DECLINED by the owner, do not re-propose: (a) "close windows while the
+     AC is cooling" - he blasts the AC briefly with windows open on purpose;
+     (b) a comfort FLOOR under which the card stops suggesting venting - "the
+     house generates its own heat", revisit only if it ever overcools.
+   - v2.4.3 (2026-09-17): CLOSE WINDOWS is gated on the ceiling. With a
+     ceiling configured the amber chip appears only while the HOUSE is above
+     the ceiling (same 1 F band); under it, "warmer outside with a window
+     open" is left alone - the owner will not open and close windows on the
+     day's 0.2 F wobbles, and a closed unit loses its airflow and retains
+     heat. Live trigger: 76.7 in, 76.9 out, window open -> CLOSE WINDOWS at a
+     house 1.3 F under the ceiling. OPEN WINDOWS and RUN AC are unchanged;
+     without `ceiling` the v2.2 rule stands as before.
    - v2.4.2 (2026-09-12): RUN AC also stands down when the thermostat is already
      SET to handle it - hvac mode cool or heat_cool with its cooling setpoint
      (target_temp_high, else temperature) at or below the ceiling - not only
@@ -327,7 +376,9 @@ const DEF_OUTDOOR = [
 ];
 const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS',
                    close_on: 0, close_off: 1, close_label: 'CLOSE WINDOWS',     // v2.2
-                   ac_label: 'RUN AC', ac_close_label: 'CLOSE \u00b7 RUN AC' };  // v2.4
+                   ac_label: 'RUN AC', ac_close_label: 'CLOSE \u00b7 RUN AC',    // v2.4
+                   fan_label: 'TURN ON FAN' };                                    // v2.5
+const VENT_BAND = 1;         // v2.5 F: cooler/warmer outside arms at +/-1, disarms at 0
 const AMBER = '#ffc107';
 const AC_BLUE = '#5aa9f0';   // v2.4 RUN AC chip (same blue as the pop-out AC strip)
 const CEIL_BAND = 1;         // v2.4 F of hysteresis under the ceiling for both comparisons
@@ -340,6 +391,10 @@ const DEW_AMBER = '#ffc107', DEW_ORANGE = '#ff9c4a';  // window-flush thresholds
 const LS_MOIST = 'flat-climate-card-moisture-mode';
 const DEF_CONTACTS = ['binary_sensor.anything_open'];
 const DEF_HVAC = 'climate.hall_nest_thermostat';
+// v2.5 venting pair (intake + exhaust) and the fan that draws air through them
+const DEF_VENT_WINDOWS = ['binary_sensor.living_room_myggbett_sensor_b_patio_sliding_door',
+                          'binary_sensor.guest_bed_myggbett_sensor_d_gb_big_right'];
+const DEF_VENT_FAN = 'fan.guest_bed_dreo_air_circulator';
 const DEF_FORECAST = 'weather.home'; // REPO COPY PLACEHOLDER: the deployed card's default
 // is the household's hourly-capable weather entity (location-bearing id, sanitized here).
 // Set forecast_entity in YAML to your own hourly weather entity, or false to disable.
@@ -400,6 +455,12 @@ class FlatClimateCard extends HTMLElement {
       : (typeof config.contacts === 'string' && config.contacts) ? [config.contacts]
       : (config.contacts === false ? [] : DEF_CONTACTS.slice());
     this._hvacEnt = (config.hvac_entity === false) ? null : (config.hvac_entity || DEF_HVAC);
+    // v2.5 vent windows (list or single id; false = none) and fan (id or false)
+    this._ventWins = Array.isArray(config.vent_windows) ? config.vent_windows.filter(Boolean)
+      : (typeof config.vent_windows === 'string' && config.vent_windows) ? [config.vent_windows]
+      : (config.vent_windows === false ? [] : DEF_VENT_WINDOWS.slice());
+    this._ventFan = (config.vent_fan === false) ? null
+      : ((typeof config.vent_fan === 'string' && config.vent_fan) ? config.vent_fan : DEF_VENT_FAN);
     // v2.4 comfort ceiling: an input_number entity id, or nothing
     this._ceilEnt = (typeof config.ceiling === 'string' && config.ceiling) ? config.ceiling : null;
     this._fcEnt = (config.forecast_entity === false) ? null : (config.forecast_entity || DEF_FORECAST);
@@ -422,12 +483,15 @@ class FlatClimateCard extends HTMLElement {
     this._ceilLast = null;    // v2.4 ceiling value the hysteresis states were built against
     this._chipShown = null;   // last applied chip state (idempotent display writes)
     this._ceilShown = null;   // last applied ceiling tag text
+    this._ventCool = false;   // v2.5 cooler outside by >= VENT_BAND (hysteresis)
+    this._ventWarm = false;   // v2.5 warmer outside by >= VENT_BAND (hysteresis)
     this._hist = {};          // entity -> [{t, v, x, y}]
     this._avgHist = null; this._avgRowPts = null; this._moistRowPts = null;
     // v2.1.2: entity ids whose state changes should re-render (set hass gate)
     this._watchIds = Array.from(new Set(
       this._series.map(s => s.entity).concat(this._series.map(s => s.humidity).filter(Boolean),
-        this._contacts, this._hvacEnt ? [this._hvacEnt] : [], this._ceilEnt ? [this._ceilEnt] : [])));
+        this._contacts, this._hvacEnt ? [this._hvacEnt] : [], this._ceilEnt ? [this._ceilEnt] : [],
+        this._ventWins, this._ventFan ? [this._ventFan] : [])));
     this._lastStates = null;
     if (!this.shadowRoot) this._createDom();
     else this._buildDom();
@@ -553,6 +617,8 @@ class FlatClimateCard extends HTMLElement {
         .tip .td { width: 7px; height: 7px; border-radius: 50%; flex: none; }
         .tip .tn { color: var(--secondary-text-color); min-width: 52px; }
         .tip .tv { margin-left: auto; padding-left: 10px; }
+        .tip .wn { color: var(--secondary-text-color); font-size: 11px; line-height: 1.45;
+          padding-left: 13px; }
         .kids { display: grid; grid-template-rows: 0fr;
           transition: grid-template-rows .35s cubic-bezier(.4,0,.2,1); }
         .kids.open { grid-template-rows: 1fr; }
@@ -1016,17 +1082,40 @@ class FlatClimateCard extends HTMLElement {
     // nor set to - only the AC can get under the ceiling; label adds CLOSE while a
     // contact is open. Unknown thermostat state is not a reason to nag.
     const acOn = this._ceilInOn && this._ceilOutOn && !cooling && !heating && !acSet && !hvUnknown;
-    // priority: RUN AC > CLOSE WINDOWS > OPEN WINDOWS (OPEN suppressed above the ceiling)
-    const chipState = acOn ? (anyOpen ? 'acclose' : 'ac')
-      : this._closeOn ? 'close'
-      : (this._chipOn && !heating && !this._ceilOutOn ? 'open' : null);
+    // v2.5: cooler / warmer outside with a 1 F dead band (arms at +/-1, disarms at 0)
+    if (delta == null) { this._ventCool = false; this._ventWarm = false; }
+    else {
+      if (!this._ventCool && delta >= VENT_BAND) this._ventCool = true;
+      else if (this._ventCool && delta <= 0) this._ventCool = false;
+      if (!this._ventWarm && delta <= -VENT_BAND) this._ventWarm = true;
+      else if (this._ventWarm && delta >= 0) this._ventWarm = false;
+    }
+    const stOf = id => { const x = this._hass.states[id]; return x ? x.state : null; };
+    const known = v => v != null && v !== 'unavailable' && v !== 'unknown';
+    const winSt = this._ventWins.map(stOf);
+    const bothOpen = winSt.length > 0 && winSt.every(v => v === 'on');
+    const fanSt = this._ventFan ? stOf(this._ventFan) : null;
+    let chipState;
+    if (ceil == null) {
+      // no ceiling (or helper unavailable): the v2.3 delta rules, unchanged
+      chipState = this._closeOn ? 'close' : (this._chipOn && !heating ? 'open' : null);
+    } else if (acOn) {
+      chipState = anyOpen ? 'acclose' : 'ac';
+    } else if (this._ventWarm && anyOpen) {
+      chipState = 'close';
+    } else if (this._ventCool && !this._ceilOutOn && !heating) {
+      // VENT MODE: windows first, then the fan; quiet once both are done
+      if (!bothOpen) chipState = winSt.every(known) ? 'open' : null;   // an unavailable contact = no guess
+      else if (this._ventFan && fanSt === 'off') chipState = 'fan';
+      else chipState = null;
+    } else chipState = null;
     if (this._chipShown !== chipState) {              // idempotent display writes
       const chip = root.getElementById('chip');
       chip.classList.toggle('close', chipState === 'close');
       chip.classList.toggle('ac', chipState === 'ac' || chipState === 'acclose');
       root.getElementById('chiplab').textContent =
         chipState === 'close' ? c.close_label : chipState === 'ac' ? c.ac_label
-        : chipState === 'acclose' ? c.ac_close_label : c.label;
+        : chipState === 'acclose' ? c.ac_close_label : chipState === 'fan' ? c.fan_label : c.label;
       chip.style.display = chipState ? 'inline-flex' : 'none';
       this._chipShown = chipState;
     }
@@ -1524,7 +1613,19 @@ class FlatClimateCard extends HTMLElement {
     for (let j = di; j < box._dots.length; j++) box._dots[j].style.visibility = 'hidden';
     if (!any) return;
     const t = sc.t0 + f * (sc.tEnd - sc.t0);
-    tip.innerHTML = '<div class="tt">' + this._popFmtT(t, sc.tEnd - sc.t0) + '</div>' + rows;
+    // v2.6: which windows were open at this moment (24h / 7d temperature chart only)
+    let wrows = '';
+    if (sc.wins && t <= sc.winsEnd) {
+      const open = sc.wins.filter(w => w.iv.some(seg =>
+        t >= seg[0] && (t <= seg[1] || !!seg[2])));   // seg[2] = still open at fetch time
+      if (open.length) {
+        wrows = '<div class="sep"></div><div class="tr"><span class="td" style="background:' + GOOD +
+          ';border-radius:2px"></span><span>' + open.length +
+          (open.length === 1 ? ' window open' : ' windows open') + '</span></div>' +
+          open.map(w => '<div class="wn">' + w.name + '</div>').join('');
+      }
+    }
+    tip.innerHTML = '<div class="tt">' + this._popFmtT(t, sc.tEnd - sc.t0) + '</div>' + rows + wrows;
     line.style.left = (sc.PL + f * span) + 'px';
     line.style.visibility = 'visible';
     tip.style.visibility = 'hidden';
@@ -1760,27 +1861,40 @@ class FlatClimateCard extends HTMLElement {
     if (c && Date.now() - c.at < REFRESH_MS) return c;
     const end = new Date(), start = new Date(end.getTime() - 7 * 864e5);
     const out = { at: Date.now(), t0: start.getTime(), t1: end.getTime(),
-                  open: [], cool: [], heat: [], openOk: false };
+                  open: [], openBy: [], cool: [], heat: [], openOk: false };
     try {
       if (this._contacts.length) {
+        // v2.6: a contact that is a GROUP is read through its members - each window
+        // keeps its own history, name and tint layer (a new group has no past)
+        const ids = [];
+        this._contacts.forEach(id => {
+          const gs = this._hass.states[id];
+          const mem = gs && gs.attributes && gs.attributes.entity_id;
+          (Array.isArray(mem) && mem.length ? mem : [id]).forEach(m => {
+            if (typeof m === 'string' && ids.indexOf(m) < 0) ids.push(m);
+          });
+        });
         const res = await this._hass.callWS({
           type: 'history/history_during_period',
           start_time: start.toISOString(), end_time: end.toISOString(),
-          entity_ids: this._contacts, include_start_time_state: true,
+          entity_ids: ids, include_start_time_state: true,
           significant_changes_only: false, minimal_response: true, no_attributes: true,
         });
-        this._contacts.forEach(id => {
+        ids.forEach(id => {
           let onT = null;
+          const iv = [];
           ((res && res[id]) || []).forEach(it => {
             const t = (it.lu != null ? it.lu * 1000 : Date.parse(it.last_updated || it.last_changed));
             const st = it.s != null ? it.s : it.state;
             if (st === 'on') { if (onT == null) onT = t; }
-            else if (onT != null) { out.open.push([onT, t]); onT = null; }
+            else if (onT != null) { iv.push([onT, t]); onT = null; }
           });
-          if (onT != null) out.open.push([onT, end.getTime()]);
+          if (onT != null) iv.push([onT, end.getTime(), 1]);   // 1 = still open at fetch time
+          iv.forEach(seg => out.open.push(seg));
+          out.openBy.push({ id: id, name: this._winName(id), iv: iv });
         });
         // v2.1.2: only a fetch that returned rows for a contact counts as data
-        out.openOk = this._contacts.some(id => ((res && res[id]) || []).length > 0);
+        out.openOk = ids.some(id => ((res && res[id]) || []).length > 0);
       }
     } catch (e) { /* contacts optional */ }
     try {
@@ -1976,9 +2090,18 @@ class FlatClimateCard extends HTMLElement {
       lines: opts.lines.filter(L => L.name && L.pts && L.pts.length > 1)
         .map(L => ({ name: L.name, c: L.c, pts: L.pts })),
       Y: Y, PL: PL, unit: opts.unit, t0: opts.t0, tEnd: opts.tEnd,
+      wins: opts.wins || null, winsEnd: opts.winsEnd,   // v2.6
     };
   }
 
+  /* v2.6: tooltip name of a window contact - friendly name, a leading "Sensor - "
+     dropped, HTML-escaped (it goes into innerHTML) */
+  _winName(id) {
+    const s = this._hass && this._hass.states[id];
+    let n = (s && s.attributes && s.attributes.friendly_name) || id;
+    n = String(n).replace(/^sensor\s*[-:]\s*/i, '');
+    return n.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
   _fmtHr(t) {
     const h = new Date(t).getHours();
     return (h % 12 || 12) + (h < 12 ? 'a' : 'p');
@@ -2232,14 +2355,16 @@ class FlatClimateCard extends HTMLElement {
           if (b <= a) return;
           zones.push({ x0: (a - t0) / (tEnd - t0), x1: (b - t0) / (tEnd - t0), fill: fill });
         });
-        push(bins.open, 'rgba(76,175,80,.07)');
+        push(bins.open, 'rgba(76,175,80,.035)');   // v2.6: per-window layer; two windows = the old .07
         push(bins.cool, 'rgba(33,150,243,.09)');
         push(bins.heat, 'rgba(255,111,34,.09)');
       }
       const xl = this._popXL(key, t0, tEnd, fcX);
       this._popChart(el.querySelector('#ptchart'),
         { H: 200, unit: '\u00b0', minSpan: 6, lines: lines, xl: xl, zones: zones,
-          strip: strip, fcX: fcX, t0: t0, tEnd: tEnd });
+          strip: strip, fcX: fcX, t0: t0, tEnd: tEnd,
+          wins: ((key === '24h' || key === '7d') && bins.openOk) ? bins.openBy : null,
+          winsEnd: t1 });
       const stripRows = this._popStripsDom(el.querySelector('#pstrips'), sigs, t0, tEnd);
       el.querySelector('#pleg1').innerHTML =
         '<i style="border-color:' + AVG_IN + '"></i>in avg' +
@@ -2430,5 +2555,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flat-climate-card',
   name: 'Flat Climate Card',
-  description: 'Indoor-vs-outdoor delta headline + all-rooms temperature overlay with an open-windows / close-windows / run-AC chip (optional comfort ceiling); averages, moisture, per-room strip and a history pop-out behind a toggle',
+  description: 'Indoor-vs-outdoor delta headline + all-rooms temperature overlay with an open-windows / turn-on-fan / close-windows / run-AC chip (optional comfort ceiling); averages, moisture, per-room strip and a history pop-out behind a toggle',
 });
