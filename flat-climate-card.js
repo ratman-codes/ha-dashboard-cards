@@ -1,4 +1,4 @@
-/* flat-climate-card v2.6 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.6.1 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an action chip - OPEN WINDOWS
@@ -73,6 +73,14 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.6.1 (2026-09-20): CLOSE WINDOWS keys on the CEILING, not on "warmer
+     than inside". Live: 76.9 in / 77.7 out, window open -> CLOSE held by the
+     v2.5 +/-1 F warm band (armed earlier at >= 1 F warmer), then vanished on
+     a page reload because the band is card-memory. Under the ceiling, warmer
+     air coming in cannot push the house past 78, so there is nothing to
+     close for. Now: outdoor over the ceiling (the existing 1 F band on
+     _ceilOutOn) AND any contact open -> CLOSE WINDOWS; otherwise never. The
+     _ventWarm state is gone. Vent mode and RUN AC unchanged.
    - v2.6 (2026-09-19): WINDOW SHADING BY COUNT + WINDOW NAMES ON HOVER (pop-out,
      24h / 7d tabs). Trigger: the owner pointed `contacts` at the five window
      sensors (to keep the front door out) and the shading doubled - the card
@@ -378,7 +386,7 @@ const DEF_CHIP = { on_delta: 3, off_delta: 1.5, label: 'OPEN WINDOWS',
                    close_on: 0, close_off: 1, close_label: 'CLOSE WINDOWS',     // v2.2
                    ac_label: 'RUN AC', ac_close_label: 'CLOSE \u00b7 RUN AC',    // v2.4
                    fan_label: 'TURN ON FAN' };                                    // v2.5
-const VENT_BAND = 1;         // v2.5 F: cooler/warmer outside arms at +/-1, disarms at 0
+const VENT_BAND = 1;         // v2.5 F: cooler outside arms at +1, disarms at 0
 const AMBER = '#ffc107';
 const AC_BLUE = '#5aa9f0';   // v2.4 RUN AC chip (same blue as the pop-out AC strip)
 const CEIL_BAND = 1;         // v2.4 F of hysteresis under the ceiling for both comparisons
@@ -484,7 +492,6 @@ class FlatClimateCard extends HTMLElement {
     this._chipShown = null;   // last applied chip state (idempotent display writes)
     this._ceilShown = null;   // last applied ceiling tag text
     this._ventCool = false;   // v2.5 cooler outside by >= VENT_BAND (hysteresis)
-    this._ventWarm = false;   // v2.5 warmer outside by >= VENT_BAND (hysteresis)
     this._hist = {};          // entity -> [{t, v, x, y}]
     this._avgHist = null; this._avgRowPts = null; this._moistRowPts = null;
     // v2.1.2: entity ids whose state changes should re-render (set hass gate)
@@ -1083,12 +1090,10 @@ class FlatClimateCard extends HTMLElement {
     // contact is open. Unknown thermostat state is not a reason to nag.
     const acOn = this._ceilInOn && this._ceilOutOn && !cooling && !heating && !acSet && !hvUnknown;
     // v2.5: cooler / warmer outside with a 1 F dead band (arms at +/-1, disarms at 0)
-    if (delta == null) { this._ventCool = false; this._ventWarm = false; }
+    if (delta == null) { this._ventCool = false; }
     else {
       if (!this._ventCool && delta >= VENT_BAND) this._ventCool = true;
       else if (this._ventCool && delta <= 0) this._ventCool = false;
-      if (!this._ventWarm && delta <= -VENT_BAND) this._ventWarm = true;
-      else if (this._ventWarm && delta >= 0) this._ventWarm = false;
     }
     const stOf = id => { const x = this._hass.states[id]; return x ? x.state : null; };
     const known = v => v != null && v !== 'unavailable' && v !== 'unknown';
@@ -1101,7 +1106,7 @@ class FlatClimateCard extends HTMLElement {
       chipState = this._closeOn ? 'close' : (this._chipOn && !heating ? 'open' : null);
     } else if (acOn) {
       chipState = anyOpen ? 'acclose' : 'ac';
-    } else if (this._ventWarm && anyOpen) {
+    } else if (this._ceilOutOn && anyOpen) {   // v2.6.1: over the ceiling, not "warmer than inside"
       chipState = 'close';
     } else if (this._ventCool && !this._ceilOutOn && !heating) {
       // VENT MODE: windows first, then the fan; quiet once both are done

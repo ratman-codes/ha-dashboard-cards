@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.5 = 132,375 B, FNV-1a 6f9e63b3; this repo copy = 132,588 B, FNV-1a 887389b0.
+Deployed v2.6.1 = 136,158 B, FNV-1a 18b02d20; this repo copy = 136,371 B, FNV-1a bd872a3b.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -23,8 +23,9 @@ thermostat's own thermometer.
   above it and the thermostat is neither cooling nor set to cool/heat_cool with its
   setpoint ≤ the ceiling (v2.4.2); **v2.5:** venting keyed on cooler/warmer outside
   (1 °F dead band) — cooler and under the ceiling → OPEN WINDOWS until the two
-  `vent_windows` are both open, then **TURN ON FAN** until `vent_fan` is on; warmer
-  with any contact open → CLOSE WINDOWS; a tappable "≤ N°" tag beside
+  `vent_windows` are both open, then **TURN ON FAN** until `vent_fan` is on; outside
+  over the ceiling with any contact open → CLOSE WINDOWS (v2.6.1 — was "warmer than
+  inside", which held on card memory and vanished on reload); a tappable "≤ N°" tag beside
   the chip opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
@@ -124,6 +125,9 @@ thermostat's own thermometer.
   gate are gone; cooler outside (±1 °F dead band) and under the ceiling = vent mode
   (OPEN WINDOWS → TURN ON FAN → quiet), warmer outside + any contact open = CLOSE.
   Owner-declined, do not re-propose: close-while-AC-cooling; a comfort floor.
+- v2.6.1 (2026-09-20): CLOSE WINDOWS keys on the ceiling (outside over it + any contact
+  open), not on warmer-than-inside; the ±1 °F warm band is removed. Under the ceiling,
+  slightly warmer air cannot push the house past it, so nothing to close for.
 - v2.6 (2026-09-19): pop-out window shading by count + window names on hover. The
   per-contact tint is halved (.07 -> .035) and still stacks, so two open windows keep
   the old look and more windows read darker (owner picked this over fixed steps from

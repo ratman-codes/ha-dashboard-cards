@@ -248,7 +248,7 @@ header.)*
   card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
   `1532f17af469489b863f711848d36fb2`.
-- `flat-climate-card.js` — v2.6. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.6.1. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -293,8 +293,8 @@ header.)*
   heat_cool with its setpoint ≤ the ceiling — v2.4.2). v2.5 rewrote the venting
   rules around one principle: cooler outside (1 °F dead band) and under the
   ceiling → OPEN WINDOWS until the two `vent_windows` are both open, then TURN ON
-  FAN until `vent_fan` is on, then quiet; warmer outside with any contact open →
-  CLOSE WINDOWS. v2.6 (pop-out, 24h/7d): the window shading is one 3.5 % layer per
+  FAN until `vent_fan` is on, then quiet; outside over the ceiling with any contact
+  open → CLOSE WINDOWS (v2.6.1; was "warmer than inside"). v2.6 (pop-out, 24h/7d): the window shading is one 3.5 % layer per
   open contact (two open windows = the old 7 % look, more = darker), the scrub
   tooltip lists which windows were open at that moment, and a `contacts` entry
   that is a group is read through its members (a new group has no history of
@@ -309,8 +309,8 @@ header.)*
   SANITIZED COPY NOTE: from v2.0.2 this repo file is NOT byte-identical to
   the deployed blob — the deployed default forecast entity id is
   location-bearing and is replaced here by a `weather.home` placeholder
-  (set `forecast_entity` in YAML). Deployed v2.6 = 135,762 B FNV-1a cd3f1f82;
-  repo copy = 135,975 B FNV-1a 74f2988d; sole difference is that one
+  (set `forecast_entity` in YAML). Deployed v2.6.1 = 136,158 B FNV-1a 18b02d20;
+  repo copy = 136,371 B FNV-1a bd872a3b; sole difference is that one
   constant + comment.
 - `flat-server-card.js` — v1.13. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one
