@@ -1,4 +1,4 @@
-/* flat-climate-card v2.6.1 - custom Lovelace card for the main dashboard.
+/* flat-climate-card v2.6.2 - custom Lovelace card for the main dashboard.
    Whole-house climate card combining a derived headline with an all-rooms
    temperature overlay ("option 2+5"). Row 0 (always visible): big indoor-vs-
    outdoor delta reading ("7.3 F cooler outside") + an action chip - OPEN WINDOWS
@@ -73,6 +73,20 @@
      agreement within ~0.6 F even during +11 F spikes), thresholded from
      the offending night's data, NOT an RH ceiling (cool coastal air is
      always high-RH; RH gates are permanently pessimistic here).
+   - v2.6.2 (2026-09-20): THE CEILING TAG MOVES TO THE LEGEND ROW (bottom right).
+     Beside the chip slot it sat at y 47-65 px while the graph lines start at
+     y 50 px, so on any day the indoor lines ran high on the left they cut
+     straight through the plain-text tag (owner screenshot: "<= 80" under six
+     lines). The legend row is the one band the lines can never enter (30 px
+     bottom padding), and the ceiling is a rarely-changed setting - it reads
+     fine beside the legend. The tag now lives inside .legend, pushed right with
+     margin-left: auto, in the legend's own type (11 px, regular weight) and
+     still text-stroked; tap -> the helper's more-info, hover wash and pressed
+     feedback unchanged; hidden while the helper is unavailable / no `ceiling`.
+     Measured on the real card: legend items end at ~294 px, the tag is ~36 px
+     - 85 px spare at a 430 px column, 35 px at 380 px; on a column too narrow
+     for both, the tag (last in the row) is what clips, never a room name.
+     Chip logic, chip position and everything else untouched. CSS + markup only.
    - v2.6.1 (2026-09-20): CLOSE WINDOWS keys on the CEILING, not on "warmer
      than inside". Live: 76.9 in / 77.7 out, window open -> CLOSE held by the
      v2.5 +/-1 F warm band (armed earlier at >= 1 F warmer), then vanished on
@@ -570,12 +584,13 @@ class FlatClimateCard extends HTMLElement {
         .chip.close .cdot { background: ${AMBER}; }
         .chip.ac { border-color: ${AC_BLUE}; color: ${AC_BLUE}; }
         .chip.ac .cdot { background: ${AC_BLUE}; }
-        /* v2.4.1 ceiling tag: plain grey text in the chip's metrics (no pill), text-stroked
-           like the legend so the lines never cut through it; tap = helper more-info */
+        /* ceiling tag: plain grey text, text-stroked; tap = helper more-info. v2.6.2: it lives
+           at the right end of the LEGEND row (the one band the lines never enter) in the
+           legend's metrics - beside the chip the lines cut through it */
         .ceil { display: inline-flex; align-items: center; white-space: nowrap; flex: none;
-          padding: 2px 6px 2px 2px; border-radius: 6px;
-          color: var(--secondary-text-color); font-size: 10.5px; font-weight: 600;
-          letter-spacing: .03em; pointer-events: auto; cursor: pointer;
+          margin-left: auto; padding: 4px 5px; border-radius: 6px;
+          color: var(--secondary-text-color); font-size: 11px; font-weight: 400;
+          pointer-events: auto; cursor: pointer;
           -webkit-text-stroke: 2px var(--card-background-color); paint-order: stroke fill;
           transition: background .15s, transform .12s ease; }
         @media (hover: hover) { .ceil:hover { background: rgba(255,255,255,.10);
@@ -759,8 +774,8 @@ class FlatClimateCard extends HTMLElement {
           <div class="val"><span id="dv">--</span><span class="uom" id="dw"></span></div>
         </div>
         <div class="chipwrap"><span class="chip" id="chip" style="display:none">
-          <span class="cdot"></span><span id="chiplab"></span></span><span class="ceil" id="ceil" style="display:none"></span></div>
-        <div class="legend" id="legend">${legend}</div>
+          <span class="cdot"></span><span id="chiplab"></span></span></div>
+        <div class="legend" id="legend">${legend}<span class="ceil" id="ceil" style="display:none"></span></div>
         <div class="toggle" id="pill"></div>
         <div class="xline"></div>
       </div>`;

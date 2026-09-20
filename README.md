@@ -248,7 +248,7 @@ header.)*
   card's own entities changed. All entities via YAML config. Used as
   `type: custom:flat-security-card` (see notes for the YAML shape). HA resource id:
   `1532f17af469489b863f711848d36fb2`.
-- `flat-climate-card.js` — v2.6.1. Whole-house climate card for a fleet of BLE
+- `flat-climate-card.js` — v2.6.2. Whole-house climate card for a fleet of BLE
   temperature/humidity meters plus the thermostat's own thermometer: an
   indoor-vs-outdoor delta headline ("5.8 F cooler outside") with an OPEN
   WINDOWS chip (temperature-delta-only with hysteresis; a moisture gate was
@@ -299,7 +299,9 @@ header.)*
   tooltip lists which windows were open at that moment, and a `contacts` entry
   that is a group is read through its members (a new group has no history of
   its own). A tappable "≤ 78°"
-  tag beside the chip opens the helper (v2.4.1: plain text, no pill). 1 °F hysteresis; priority RUN AC >
+  tag opens the helper (v2.4.1: plain text, no pill; v2.6.2: it sits at the right end
+  of the legend row — the one band the graph lines never enter — instead of beside the
+  chip, where the lines cut through it). 1 °F hysteresis; priority RUN AC >
   CLOSE > OPEN; without `ceiling` the card behaves exactly as v2.3.
   No HA-side entities beyond the optional helper / signal sensors. Default
   entities are this dashboard's sensors; override via indoor:/outdoor:/hall:
@@ -309,8 +311,8 @@ header.)*
   SANITIZED COPY NOTE: from v2.0.2 this repo file is NOT byte-identical to
   the deployed blob — the deployed default forecast entity id is
   location-bearing and is replaced here by a `weather.home` placeholder
-  (set `forecast_entity` in YAML). Deployed v2.6.1 = 136,158 B FNV-1a 18b02d20;
-  repo copy = 136,371 B FNV-1a bd872a3b; sole difference is that one
+  (set `forecast_entity` in YAML). Deployed v2.6.2 = 137,321 B FNV-1a d2e6a7e6;
+  repo copy = 137,534 B FNV-1a e94293d3; sole difference is that one
   constant + comment.
 - `flat-server-card.js` — v1.13. NAS health + backup confidence card ("is the
   server okay and is my data safe?"): green-is-boring collapsed header (one

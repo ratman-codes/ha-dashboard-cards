@@ -5,7 +5,7 @@ NOT byte-identical to the deployed blob from v2.0.2 on — one deliberate saniti
 the deployed card bakes the household's hourly-capable weather entity into
 `DEF_FORECAST`; that id is location-bearing, so the repo copy carries the placeholder
 `weather.home` plus a comment. Set `forecast_entity` in YAML (or `false` to disable).
-Deployed v2.6.1 = 136,158 B, FNV-1a 18b02d20; this repo copy = 136,371 B, FNV-1a bd872a3b.
+Deployed v2.6.2 = 137,321 B, FNV-1a d2e6a7e6; this repo copy = 137,534 B, FNV-1a e94293d3.
 Everything else is identical. Full private design history lives in the project notes.
 
 ## What it is
@@ -25,8 +25,8 @@ thermostat's own thermometer.
   (1 °F dead band) — cooler and under the ceiling → OPEN WINDOWS until the two
   `vent_windows` are both open, then **TURN ON FAN** until `vent_fan` is on; outside
   over the ceiling with any contact open → CLOSE WINDOWS (v2.6.1 — was "warmer than
-  inside", which held on card memory and vanished on reload); a tappable "≤ N°" tag beside
-  the chip opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
+  inside", which held on card memory and vanished on reload); a tappable "≤ N°" tag at the
+  right end of the legend row (v2.6.2; beside the chip before) opens the helper; 1 °F hysteresis; priority RUN AC > CLOSE > OPEN) over a 24h
   six-series temperature overlay with translucent dashed average lines.
   Line grammar (house rule): **solid = measured · dashed = computed · dotted = forecast.**
   Legend tap = spotlight; band-gated scrub with graph-anchored viewport-fixed
@@ -137,9 +137,16 @@ thermostat's own thermometer.
   not load); a `contacts` entry that is a group is read through its members in the
   pop-out (a freshly created group has no history, which left the shading empty).
   The chip still reads the contacts as configured. No new YAML keys.
+- v2.6.2 (2026-09-20): the ceiling tag moves from beside the chip to the right end of
+  the legend row. The chip row sits at y 47-65 px and the graph lines start at y 50 px,
+  so high-running indoor lines cut through the plain-text tag; the legend row is the one
+  band the lines never enter (30 px bottom padding). Same tap / hover / pressed
+  behavior, legend type (11 px regular), margin-left: auto. Measured: legend items end
+  at ~294 px, tag ~36 px — fits with 35 px spare at a 380 px column; on a narrower
+  column the tag is what clips, never a room name. CSS + markup only.
 
 ## Verification
-Headless Chromium harness (2026-09-19, v2.6): 43 assertions (layer count + tint per tab, tooltip rows for 1/2/3 windows, an unavailable blip, the forecast area, a group contact read through its members, failed/empty contact history, and hero / expansion / 7d / 14d identity against v2.5). Headless Chromium harness (2026-09-19, v2.5): 50 assertions on the new policy (vent mode, dead band, over-ceiling, unavailable entities, no-ceiling identity vs v2.3); earlier (v2.4–v2.4.3): 91 assertions — the six chip states,
+Headless Chromium harness (2026-09-20, v2.6.2): 40 assertions (tag in the legend row at 380/400/430/470 px: not clipped, legend items unmoved, below the line band, legend type; tap → helper more-info without spotlighting a room; follows / hides with the helper; hero, expansion and six chip states identical to v2.6.1). Headless Chromium harness (2026-09-19, v2.6): 43 assertions (layer count + tint per tab, tooltip rows for 1/2/3 windows, an unavailable blip, the forecast area, a group contact read through its members, failed/empty contact history, and hero / expansion / 7d / 14d identity against v2.5). Headless Chromium harness (2026-09-19, v2.5): 50 assertions on the new policy (vent mode, dead band, over-ceiling, unavailable entities, no-ceiling identity vs v2.3); earlier (v2.4–v2.4.3): 91 assertions — the six chip states,
 hysteresis crossings on both ceiling comparisons, AC start/stop, heating, helper
 unavailable/absent/changed, tag tap → more-info, and hero + expansion DOM identity
 against v2.3 with no `ceiling` key. jsdom audit harness (2026-09-06): 12 behavioral cases run bug-mode against v2.1.1
