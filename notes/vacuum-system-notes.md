@@ -166,12 +166,17 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   validation failure, 2026-09-04, caused by rebuilding the wrapper from memory).
   Before delivering a data-URL file, diff its prefix against the last accepted
   one (`head -c 52 | cmp`).
-- **Delivered: v2.12, FNV-1a `93a2501d`, 123,267 bytes** — delivered
-  2026-09-11 (`Claude outputs\flat-vacuum-card-v2.12.txt`; built from the repo's
-  v2.11 bytes, verified `1cc21f3f`; decoded = local build = project archive =
-  repo copy), **install pending** (owner installs via Card Manager). No YAML
-  change. NO ACTION NEEDED on the held-by-DND path: untested live, owner will
-  confirm at the next DND-overlapping stall. Previous:
+- **Delivered: v2.13, FNV-1a `838ee0e6`, 124,975 bytes** — delivered
+  2026-10-08 (`Claude outputs\flat-vacuum-card-v2.13.txt`; built from the repo's
+  v2.12 bytes, verified `93a2501d`; decoded on device = local build = project
+  archive = repo copy), **install pending** (owner installs via Card Manager).
+  No YAML change. Previous:
+  **v2.12, FNV-1a `93a2501d`, 123,267 bytes** — delivered 2026-09-11
+  (`Claude outputs\flat-vacuum-card-v2.12.txt`), **live by 2026-10-08** (the
+  owner's screenshot that day shows the v2.12 Battery row between Maintenance
+  and Config; install date not recorded, live blob not re-paged). NO ACTION
+  NEEDED on the held-by-DND path: untested live, owner will confirm at the
+  next DND-overlapping stall. Before that:
   **v2.11, FNV-1a `1cc21f3f`, 120,063 bytes** — delivered
   2026-09-08 (`Claude outputs\flat-vacuum-card-v2.11.txt`, decoded on device =
   local build = project archive = repo copy), **owner-installed 2026-09-08 via
@@ -274,6 +279,24 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
     battery nothing else does either). Both buttons on this line are
     UNTESTED live (`vacuum.start` during DND, `vacuum.stop` on a docked
     robot) — a dud button does nothing; the app remains the fallback.
+    **v2.13 (2026-10-08) OVERDUE WRENCH ON THE TITLE:** a 14px amber
+    `mdi:wrench-outline` (the Maintenance row's icon and amber) sits 6px
+    after the title text whenever at least one maintenance counter reads
+    below zero — "Vacuum [wrench]", or "Vacuum — Cleaning [wrench]" during a
+    run. Same count as the Maintenance summary (absent / unknown /
+    unavailable counter = no claim; exactly 0 is not overdue). Shown in
+    EVERY header state, faults included: faults keep the amber `⚠` prefix
+    token on the status line, the wrench is overdue counters only. Plain
+    inline content, not a control — a tap on it is a header tap. Why the
+    title line (owner picked it from a three-option mock): it costs the
+    status line nothing and never has to hide. Not chosen: a text token on
+    the status line ("⚠ 2 overdue · …", shares the single token slot with
+    faults, so a fault hides it) and a glyph beside play (27px off the
+    status line, hidden behind the Away/Default chips). Measured at the
+    430px column in Roboto: the status-line box is 324px ("… eligible today
+    · auto off" = 282px of it); the widest title, "Vacuum — Cleaning" +
+    wrench, stays whole down to a 322px card (v2.12 without the wrench:
+    302px) — below that the ellipsis takes the wrench first.
   - AUTO-CLEAN: toggle + 7 setting rows + Away profile / Default profile rows
     (summary chips "max+ · high · deep ›"; tap → popup editor with segmented
     Suction / Mop intensity / Mop mode pickers, Save writes the helpers) +
@@ -385,7 +408,16 @@ deliberately EXCLUDE `custom`/`custom_water_flow` (profiles are deterministic) a
   harness at 430px 20/20 — both window shapes, midnight wrap, unknown DND
   times, resume → `vacuum.start` + lock, end run → `vacuum.stop`, progress
   reset clears it, cleaning/idle/paused lines unchanged; no YAML change;
-  delivered, install pending)**.
+  delivered, install pending; live by 2026-10-08)**
+  → **v2.13 838ee0e6 / 124,975 B (2026-10-08: amber wrench on the title
+  line while any maintenance counter is overdue; 4 asserted exact-string
+  edits; Playwright harness at 430px in Roboto, v2.12 and v2.13 side by side
+  over the same states, 390/390 — 21 states × wrench presence / agreement
+  with the Maintenance summary / header, card and status-line geometry
+  unchanged / whole-card DOM identical to v2.12 when nothing is overdue,
+  plus armed chips, starting lock, live reset and re-cross, render gate,
+  tap-through and re-setConfig; no YAML change; delivered, install
+  pending)**.
   A rev7 `48405154` history "sanitizer" (hide sub-5-minute runs) was built and
   REVERTED the same day — the owner rejected display filtering; all runs show as
   recorded. Don't rebuild it.
@@ -852,10 +884,12 @@ State as of 2026-07-27 (probe session), except where dated:
 
 ## Open items
 
-- **v2.12 `93a2501d` delivered 2026-09-11, INSTALL PENDING** (owner installs
-  via Card Manager; no YAML change). Expected on install: Battery row between
-  Maintenance and Config; History top row "Yday · 4:08 PM · backstop · 7h 02m
-  · 106 m²" with a dim `balanced · medium · standard` line. Held-by-DND path:
+- **v2.13 `838ee0e6` delivered 2026-10-08, INSTALL PENDING** (owner installs
+  via Card Manager; no YAML change). Expected on install: an amber wrench
+  after "Vacuum" on the collapsed card while the Maintenance row reads
+  "N overdue"; it goes away once the counters are reset in the Roborock app.
+- **v2.12 `93a2501d` live by 2026-10-08** (its Battery row is in the owner's
+  screenshot from that day; install date not recorded). Held-by-DND path:
   NO ACTION NEEDED, do not check this — owner will confirm after the next
   stall that overlaps DND.
 - **v2.11 `1cc21f3f` owner-installed 2026-09-08 via Card Manager, resume
@@ -931,6 +965,10 @@ app prompt (held, not cancelled; record written on "End run") ✓ · v2.12
 held-by-DND state + Battery row move built, harness 20/20, delivered ✓ ·
 archive + repo (js + README + sanitized notes) synced ✓. Install + live
 proof of the DND buttons: owner, passively.
+**CLOSED 2026-10-08:** overdue maintenance was invisible on the collapsed
+card → three placements mocked, owner picked the title-line wrench ✓ · v2.13
+built, harness 390/390, delivered ✓ · archive + repo (js + README +
+sanitized notes) synced ✓. Install: owner.
 
 **Do NOT re-offer:** folding the old Q Revo's run history into the card, the rev7
 history sanitizer, or a `smart_mode` profile.

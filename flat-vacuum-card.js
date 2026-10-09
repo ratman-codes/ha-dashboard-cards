@@ -1,4 +1,18 @@
-/* flat-vacuum-card v2.12 - custom Lovelace card for the main dashboard.
+/* flat-vacuum-card v2.13 - custom Lovelace card for the main dashboard.
+   v2.13 (2026-10-08): OVERDUE WRENCH ON THE TITLE LINE. Overdue maintenance
+   counters only coloured the Maintenance row inside the body, and the phone
+   notification fires once per below-zero crossing - with the card collapsed
+   nothing said there was work to do. Now a small amber wrench (the
+   Maintenance row's own icon and amber, 14px) sits after the title text
+   whenever at least one counter reads below zero: "Vacuum [wrench]", or
+   "Vacuum - Cleaning [wrench]" during a run. Same count as the Maintenance
+   summary (absent / unknown counters are no claim). It is plain inline
+   content, not a control: a tap on it is a header tap. The title line was
+   chosen over the status line (a text token clipped "eligible today" at the
+   430px column and lost its slot to a fault token) and over a glyph beside
+   play (27px off the status line, hidden behind the chips). Faults keep
+   their own amber prefix token on the status line; the wrench is overdue
+   counters only. No YAML change.
    v2.12 (2026-09-11): HELD-BY-DND STATE + BATTERY ROW MOVE. (1) A mid-run
    recharge stall that overlaps the robot's DND window is not going to
    resume by itself: DND suppresses auto-resume, and the app holds the job
@@ -571,6 +585,8 @@ class FlatVacuumCard extends HTMLElement {
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ht .p .tst { color: ${ACCENT_TEXT}; }
         .ht .p .tsep { color: #777; font-weight: 400; }
+        .ht .p ha-icon.twr { --mdc-icon-size: 14px; width: 14px; height: 14px;
+          display: inline-flex; margin-left: 6px; vertical-align: -2px; color: ${AMBER}; }
         .ht .s { font-size: 12px; color: var(--secondary-text-color); line-height: 1.3;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .hctl { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -1533,7 +1549,7 @@ class FlatVacuumCard extends HTMLElement {
       i_notif: 'Pre-run warning: Loud pings your phone, Quiet is silent, Off skips the wait entirely.',
       i_warn: 'How long the warning lasts before the robot starts.',
       i_pres: 'Who the automation currently thinks is home.',
-      i_maint: "Roborock's recommended service countdowns, in CLEANING RUNTIME hours (the robot runs ~1-1.5h per clean, so 150h is several months). Amber = overdue; a notification fires when an item crosses zero.",
+      i_maint: "Roborock's recommended service countdowns, in CLEANING RUNTIME hours (the robot runs ~1-1.5h per clean, so 150h is several months). Amber = overdue; a notification fires when an item crosses zero, and an amber wrench stays on the card's title line until the counter is reset.",
       i_conf: 'Device settings - changes apply to the robot immediately.',
       i_dnd: "The robot's own quiet hours: suppresses its internal schedules, auto-resume, and dock auto-empty. Commanded starts still run. A mid-run recharge that runs into DND is held - the header shows Held by DND with resume and end-run buttons.",
       i_lock: 'Disables the physical buttons on the robot and dock (cat insurance).',
@@ -1977,7 +1993,16 @@ class FlatVacuumCard extends HTMLElement {
     const subHtml = (warnTok
       ? '<span style="color:' + AMBER + '">\u26a0 ' + warnTok + ' \u00b7 </span>' : '') + esc(sub);
     if (this._subHtml !== subHtml) { this._subHtml = subHtml; el.hsub.innerHTML = subHtml; }
-    const ttlHtml = 'Vacuum' + (titleState ? ' <span class="tsep">\u2014</span> <span class="tst">' + esc(titleState) + '</span>' : '');
+    /* v2.13: amber wrench after the title while any maintenance counter is
+       below zero - the same rule as the Maintenance group's overdue count
+       (absent / unknown / unavailable counter = no claim) */
+    let overdueTtl = 0;
+    c.maint.forEach((m) => {
+      const v = m[3] ? this._num(m[3]) : null;
+      if (v != null && v < 0) overdueTtl++;
+    });
+    const ttlHtml = 'Vacuum' + (titleState ? ' <span class="tsep">\u2014</span> <span class="tst">' + esc(titleState) + '</span>' : '')
+      + (overdueTtl > 0 ? '<ha-icon class="twr" icon="mdi:wrench-outline"></ha-icon>' : '');
     if (this._ttlHtml !== ttlHtml) { this._ttlHtml = ttlHtml; el.httl.innerHTML = ttlHtml; }
 
     /* header state machine */

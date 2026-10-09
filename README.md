@@ -150,7 +150,7 @@ header.)*
   responses can no longer overwrite newer ones. Used as
   `type: custom:flat-sensor-stack-card` (see `notes/flat-sensor-stack-card-notes.md`).
   HA resource id: `c2d6b8f73e474ae084f4052a7b3c133a`.
-- `flat-vacuum-card.js` — v2.12. Roborock control card (Qrevo Edge 2): status
+- `flat-vacuum-card.js` — v2.13. Roborock control card (Qrevo Edge 2): status
   header (state word on the title line while cleaning; mid-run pit-stop, recharge
   stall, held-by-DND, paused-asleep and starting-lock states with elapsed run time), full cleaning profiles (Away/Default popup editors;
   play arms an Away/Default picker that applies the profile for one run and starts),
@@ -170,7 +170,9 @@ header.)*
   stall that overlaps the robot's DND window is held, not resumed (the app asks
   continue / end run); the card now reads stall + DND on + clock inside the DND
   window as "Held by DND · N% done" with resume and end-run buttons; the Battery
-  row moved out of Config to its own row between Maintenance and Config. Used as `type: custom:flat-vacuum-card`
+  row moved out of Config to its own row between Maintenance and Config. v2.13
+  (2026-10-08): an amber wrench sits after the card title whenever a maintenance
+  counter is overdue, so the collapsed card shows there is service to do. Used as `type: custom:flat-vacuum-card`
   (see `notes/vacuum-system-notes.md`). HA resource id: `8dc0c8f4ad6a4d0ea3da4e97c3873f8b`.
 - `flat-cat-card.js` — v1.25. Consolidated cats card (pet-tech litter box + two
   feeders + per-cat rows showing MEASURED weight — the smoothed scale average
